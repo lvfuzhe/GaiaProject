@@ -9,7 +9,12 @@ import torch
 
 from gaiazero.arena import evaluate_against, play_arena_game
 from gaiazero.dashboard import serve_dashboard
-from gaiazero.game import MiniGaiaHeuristicEvaluator, MiniGaiaState
+from gaiazero.game import (
+    GaiaHeuristicEvaluator,
+    GaiaState,
+    MiniGaiaHeuristicEvaluator,
+    MiniGaiaState,
+)
 from gaiazero.mcts import SearchConfig
 from gaiazero.model import (
     NetworkConfig,
@@ -35,9 +40,15 @@ def _search_config(args: argparse.Namespace, seed: int | None = None) -> SearchC
     )
 
 
+def _game_components(ruleset: str):
+    if ruleset == "mini":
+        return MiniGaiaState, MiniGaiaHeuristicEvaluator()
+    return GaiaState, GaiaHeuristicEvaluator()
+
+
 def command_demo(args: argparse.Namespace) -> None:
-    evaluator = MiniGaiaHeuristicEvaluator()
-    initial = MiniGaiaState.initial(args.players, args.seed)
+    state_type, evaluator = _game_components(args.ruleset)
+    initial = state_type.initial(args.players, args.seed)
     result = play_arena_game(initial, [evaluator] * args.players, _search_config(args))
     if args.show_actions:
         state = initial
@@ -54,7 +65,8 @@ def command_train(args: argparse.Namespace) -> None:
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     device = resolve_device(args.device)
-    template = MiniGaiaState.initial(args.players, args.seed)
+    state_type, baseline = _game_components(args.ruleset)
+    template = state_type.initial(args.players, args.seed)
     network_config = NetworkConfig(
         observation_size=template.observation_size,
         action_size=template.action_size,
@@ -74,7 +86,6 @@ def command_train(args: argparse.Namespace) -> None:
         ),
     )
     replay = ReplayBuffer(args.replay_capacity, args.seed)
-    baseline = MiniGaiaHeuristicEvaluator()
     total_games = 0
     telemetry = JsonlTelemetry(args.metrics)
     run_started = perf_counter()
@@ -99,7 +110,7 @@ def command_train(args: argparse.Namespace) -> None:
             iteration_started = perf_counter()
             for game in range(args.games_per_iteration):
                 game_seed = args.seed + total_games
-                initial = MiniGaiaState.initial(args.players, game_seed)
+                initial = state_type.initial(args.players, game_seed)
                 game_started = perf_counter()
                 telemetry.emit(
                     "self_play_started",
@@ -199,7 +210,7 @@ def command_train(args: argparse.Namespace) -> None:
                 telemetry.emit("arena_started", iteration=iteration, games=args.eval_games)
                 arena_started = perf_counter()
                 summary = evaluate_against(
-                    lambda seed: MiniGaiaState.initial(args.players, args.seed + 100_000 + seed),
+                    lambda seed: state_type.initial(args.players, args.seed + 100_000 + seed),
                     evaluator,
                     baseline,
                     num_players=args.players,
@@ -230,7 +241,7 @@ def command_train(args: argparse.Namespace) -> None:
                     "iteration": iteration,
                     "self_play_games": total_games,
                     "replay_positions": len(replay),
-                    "ruleset": "mini-gaia-v1",
+                    "ruleset": template.snapshot()["ruleset"],
                 },
             )
             telemetry.emit(
@@ -273,7 +284,8 @@ def command_dashboard(args: argparse.Namespace) -> None:
 
 def command_evaluate(args: argparse.Namespace) -> None:
     model, metadata = load_checkpoint(args.checkpoint, args.device)
-    state = MiniGaiaState.initial(args.players, args.seed)
+    state_type, baseline = _game_components(args.ruleset)
+    state = state_type.initial(args.players, args.seed)
     config = model.config
     expected = (state.observation_size, state.action_size, state.num_players)
     actual = (config.observation_size, config.action_size, config.num_players)
@@ -281,9 +293,9 @@ def command_evaluate(args: argparse.Namespace) -> None:
         raise ValueError(f"checkpoint dimensions {actual} do not match game {expected}")
     challenger = NetworkEvaluator(model, args.device)
     summary = evaluate_against(
-        lambda seed: MiniGaiaState.initial(args.players, args.seed + seed),
+        lambda seed: state_type.initial(args.players, args.seed + seed),
         challenger,
-        MiniGaiaHeuristicEvaluator(),
+        baseline,
         num_players=args.players,
         games=args.games,
         search_config=_search_config(args),
@@ -303,6 +315,10 @@ def _add_search_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--seed", type=int, default=0)
 
 
+def _add_ruleset_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--ruleset", choices=("standard", "mini"), default="standard")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="gaiazero", description="AlphaZero + PIMCTS for Gaia")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -310,6 +326,7 @@ def build_parser() -> argparse.ArgumentParser:
     demo = subparsers.add_parser("demo", help="play a heuristic PIMCTS demonstration")
     demo.add_argument("--players", type=int, choices=(2, 3, 4), default=2)
     demo.add_argument("--show-actions", action="store_true")
+    _add_ruleset_argument(demo)
     _add_search_arguments(demo)
     demo.set_defaults(handler=command_demo)
 
@@ -327,9 +344,10 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--hidden-size", type=int, default=256)
     train.add_argument("--residual-blocks", type=int, default=4)
     train.add_argument("--device", default="auto")
-    train.add_argument("--output", default="runs/mini-gaia.pt")
+    train.add_argument("--output", default="runs/gaia-standard.pt")
     train.add_argument("--metrics", default="runs/metrics.jsonl")
     train.add_argument("--metrics-move-interval", type=int, default=4)
+    _add_ruleset_argument(train)
     _add_search_arguments(train)
     train.set_defaults(handler=command_train)
 
@@ -338,6 +356,7 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--players", type=int, choices=(2, 3, 4), default=2)
     evaluate.add_argument("--games", type=int, default=10)
     evaluate.add_argument("--device", default="auto")
+    _add_ruleset_argument(evaluate)
     _add_search_arguments(evaluate)
     evaluate.set_defaults(handler=command_evaluate)
 

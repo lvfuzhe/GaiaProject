@@ -12,8 +12,9 @@ GaiaZero 是一个面向《盖亚计划》类确定性多人策略游戏的 Alph
     -> 竞技场评测与检查点
 ```
 
-项目首先使用 `MiniGaia` 规则切片验证算法与工程结构。它不是完整版桌游规则实现；
-当前已实现六轮、收入、建矿、建筑升级、四条研究轨、过轮、轮次得分和终局排名。
+默认的 `standard-v2` 规则引擎已覆盖六轮主流程、完整建筑链、六条科研轨、能量碗、
+盖亚计划、科技选择、联邦、助推板块和计分。它是面向固定动作空间的 AI 规则核心，
+不是对实体桌游所有版块与 14 个种族的逐项复刻。早期 `MiniGaia` 规则仍保留用于快速回归。
 
 ## 快速开始
 
@@ -28,25 +29,29 @@ gaiazero demo --simulations 32 --show-actions
 
 ```powershell
 $env:PYTHONPATH = "src"
-python -m gaiazero demo --simulations 32
+python -m gaiazero demo --ruleset standard --simulations 32
 ```
 
 运行一个小型自博弈训练：
 
 ```powershell
 gaiazero train `
+  --ruleset standard `
   --players 2 `
   --iterations 5 `
   --games-per-iteration 8 `
   --simulations 64 `
-  --output runs/mini-gaia.pt
+  --output runs/gaia-standard.pt
 ```
 
 评测检查点，每局轮换神经网络所在座位：
 
 ```powershell
-gaiazero evaluate runs/mini-gaia.pt --players 2 --games 20 --simulations 128
+gaiazero evaluate runs/gaia-standard.pt --ruleset standard --players 2 --games 20 --simulations 128
 ```
+
+`standard` 是 `demo`、`train` 和 `evaluate` 的默认规则集。需要运行旧版快速模型时使用
+`--ruleset mini`；两个规则集的观察维度和动作维度不同，检查点不能混用。
 
 ## 训练监控台
 
@@ -106,7 +111,8 @@ V(s) = [v0, v1, ..., vn]
 
 ```text
 src/gaiazero/core.py            通用游戏和评估器协议
-src/gaiazero/game/mini_gaia.py  可运行的 Gaia 规则切片
+src/gaiazero/game/gaia_state.py standard-v2 AI 规则核心
+src/gaiazero/game/mini_gaia.py  旧版轻量规则切片
 src/gaiazero/mcts.py            多玩家 PUCT/PIMCTS
 src/gaiazero/model.py           PyTorch 策略/价值网络与检查点
 src/gaiazero/selfplay.py        自博弈数据生成
@@ -125,16 +131,21 @@ tests/                          规则、搜索和训练回归测试
 | 模块 | 状态 |
 |---|---|
 | 2-4 人、六轮与行动顺序 | 已实现 |
-| 资源收入和上限 | 已实现的简化版本 |
-| 星球距离、航行和地形改造成本 | 已实现的简化版本 |
-| 矿场、贸易站、研究所 | 已实现 |
-| 四条研究轨 | 已实现的算法验证版本 |
-| 轮次计分和终局排名 | 已实现的简化版本 |
-| 能量碗、燃烧能量、被动充能 | 待实现 |
-| 盖亚化与盖亚塑形者 | 待实现 |
-| 科技板块、联盟和卫星路径 | 待实现 |
-| 14 个种族及其能力 | 待实现 |
-| 完整随机地图和计分设置 | 待实现 |
+| 资源、收入与信用点/矿石/知识上限 | 已实现 |
+| 七种母星地形、盖亚/跨维星球、航行与改造成本 | 已实现 |
+| 8 矿场、4 贸易站、3 研究所、1 行星研究院、2 学院 | 已实现 |
+| 改造、航行、人工智能、盖亚、经济、科学六条科研轨 | 已实现 |
+| 三个能量碗、充能/消耗/弃置和公共能量行动 | 已实现 |
+| 盖亚塑形者、盖亚区能量、盖亚阶段和占领 | 已实现 |
+| 基础科技选择及科研前进 | 已实现的固定动作版本 |
+| 联邦强度、最少卫星连接、联邦令牌与科研钥匙 | 已实现的规范化版本 |
+| 助推板块、过轮顺序、轮次计分和两项终局排名 | 已实现 |
+| Terrans、Xenos、Taklons、Geodens | 已实现核心差异 |
+
+为控制 AlphaZero 的分支数，当前规则存在明确的建模约束：地图固定为 19 个星球；
+被动充能采用“可承受时自动接受”；资源支付和联邦连接只生成一个规范方案；基础科技按科研轨抽象。
+尚未实现官方模块地图、其余 10 个种族、高级科技、完整 QIC/特殊行动、失落星球，以及完整的
+助推/轮次/终局板块池。训练结果应视为 `standard-v2` 环境内的策略，不应直接作为官方比赛裁决器。
 
 完整版规则的模块边界与实施顺序见 [docs/full-rules-roadmap.md](docs/full-rules-roadmap.md)。
 

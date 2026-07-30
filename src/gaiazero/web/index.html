@@ -147,19 +147,24 @@
           <div class="panel-heading">
             <div>
               <p class="eyebrow">Current state</p>
-              <h3>MiniGaia 星图</h3>
+              <h3>Gaia 星图</h3>
             </div>
             <span id="board-round" class="compact-value">第 -- 轮</span>
           </div>
           <div class="board-frame">
-            <canvas id="board-canvas" aria-label="MiniGaia 当前棋盘"></canvas>
+            <canvas id="board-canvas" aria-label="GaiaZero 当前棋盘"></canvas>
             <div id="board-empty" class="canvas-empty">等待棋盘快照</div>
           </div>
           <div class="terrain-legend" aria-label="星球图例">
-            <span><i class="terrain t0"></i>赤地</span>
-            <span><i class="terrain t1"></i>沙地</span>
-            <span><i class="terrain t2"></i>沼地</span>
-            <span><i class="terrain t3"></i>冰地</span>
+            <span><i class="terrain t0"></i>地球型</span>
+            <span><i class="terrain t1"></i>沙漠</span>
+            <span><i class="terrain t2"></i>沼泽</span>
+            <span><i class="terrain t3"></i>火山</span>
+            <span><i class="terrain t4"></i>氧化</span>
+            <span><i class="terrain t5"></i>钛金</span>
+            <span><i class="terrain t6"></i>冰冻</span>
+            <span><i class="terrain t7"></i>跨维</span>
+            <span><i class="terrain t8"></i>盖亚</span>
           </div>
         </section>
 
@@ -192,8 +197,8 @@
         </div>
         <div class="table-scroll">
           <table>
-            <thead><tr><th>玩家</th><th>分数</th><th>信用点</th><th>矿石</th><th>知识</th><th>研究轨</th><th>状态</th></tr></thead>
-            <tbody id="players-table"><tr><td colspan="7" class="empty-cell">暂无玩家状态</td></tr></tbody>
+            <thead><tr><th>玩家</th><th>分数</th><th>信用点</th><th>矿石</th><th>知识</th><th>QIC</th><th>能量 I/II/III</th><th>研究轨</th><th>联盟</th><th>状态</th></tr></thead>
+            <tbody id="players-table"><tr><td colspan="10" class="empty-cell">暂无玩家状态</td></tr></tbody>
           </table>
         </div>
       </section>

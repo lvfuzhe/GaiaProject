@@ -560,10 +560,15 @@ tbody tr:hover {
   border-radius: 2px;
 }
 
-.terrain.t0 { background: #d86b57; }
+.terrain.t0 { background: #4d78b8; }
 .terrain.t1 { background: #d7a93e; }
 .terrain.t2 { background: #56a48e; }
-.terrain.t3 { background: #6b8fc4; }
+.terrain.t3 { background: #d86b57; }
+.terrain.t4 { background: #ba6f47; }
+.terrain.t5 { background: #8b8f96; }
+.terrain.t6 { background: #b7d8e7; }
+.terrain.t7 { background: #7356a8; }
+.terrain.t8 { background: #5bbf79; }
 
 .player-chip,
 .health-badge {

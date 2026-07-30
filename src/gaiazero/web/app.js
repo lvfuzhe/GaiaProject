@@ -2,7 +2,10 @@
 
 const POLL_INTERVAL_MS = 1400;
 const PLAYER_COLORS = ["#18705a", "#c14c39", "#2d68a7", "#ad751c"];
-const TERRAIN_COLORS = ["#d86b57", "#d7a93e", "#56a48e", "#6b8fc4"];
+const TERRAIN_COLORS = [
+  "#4d78b8", "#d7a93e", "#56a48e", "#d86b57", "#ba6f47",
+  "#8b8f96", "#b7d8e7", "#7356a8", "#5bbf79"
+];
 const PHASE_LABELS = {
   run_started: "初始化完成",
   self_play_started: "正在生成自博弈",
@@ -350,6 +353,27 @@ function renderBoard(snapshot) {
       context.stroke();
       drawBuilding(context, x, y, planet.building, PLAYER_COLORS[planet.owner]);
     }
+    if (planet.gaiaformer >= 0 && planet.owner < 0) {
+      context.strokeStyle = PLAYER_COLORS[planet.gaiaformer] || "#17211d";
+      context.lineWidth = 3;
+      context.setLineDash([4, 3]);
+      context.beginPath();
+      context.arc(x, y, size + 4, 0, Math.PI * 2);
+      context.stroke();
+      context.setLineDash([]);
+      context.fillStyle = PLAYER_COLORS[planet.gaiaformer] || "#17211d";
+      context.font = "700 11px Segoe UI";
+      context.fillText("G", x, y + 4);
+    }
+    if (planet.federated && planet.owner >= 0) {
+      context.strokeStyle = "rgba(23,33,29,0.7)";
+      context.lineWidth = 1;
+      context.setLineDash([2, 3]);
+      context.beginPath();
+      context.arc(x, y, size + 9, 0, Math.PI * 2);
+      context.stroke();
+      context.setLineDash([]);
+    }
   }
 }
 
@@ -389,6 +413,20 @@ function drawBuilding(context, x, y, building, color) {
     context.closePath();
     context.fill();
     context.stroke();
+  } else if (building === "planetary_institute") {
+    context.beginPath();
+    context.moveTo(x, y - 10);
+    context.lineTo(x + 10, y);
+    context.lineTo(x, y + 10);
+    context.lineTo(x - 10, y);
+    context.closePath();
+    context.fill();
+    context.stroke();
+  } else if (building === "academy") {
+    context.fillRect(x - 9, y - 6, 18, 12);
+    context.fillRect(x - 5, y - 10, 10, 20);
+    context.strokeRect(x - 9, y - 6, 18, 12);
+    context.strokeRect(x - 5, y - 10, 10, 20);
   }
 }
 
@@ -400,15 +438,18 @@ function renderPlayers(snapshot) {
     : `当前行动 P${snapshot.current_player}`;
   byId("players-table").innerHTML = players.length
     ? players.map((player) => `<tr class="${player.id === snapshot.current_player ? "active-row" : ""}">
-        <td><span class="player-label"><i class="player-color p${player.id}"></i>P${player.id}</span></td>
+        <td><span class="player-label"><i class="player-color p${player.id}"></i>P${player.id}${player.faction ? ` · ${escapeHtml(player.faction)}` : ""}</span></td>
         <td>${formatNumber(scores[player.id], 1)}</td>
         <td>${formatNumber(player.credits)}</td>
         <td>${formatNumber(player.ore)}</td>
         <td>${formatNumber(player.knowledge)}</td>
+        <td>${formatNumber(player.qic)}</td>
+        <td class="mono">${player.power ? player.power.join(" / ") : "--"}</td>
         <td class="mono">${player.tracks.map((value) => formatNumber(value)).join(" · ")}</td>
+        <td>${formatNumber(player.federations)}</td>
         <td>${player.passed ? "已过轮" : "行动中"}</td>
       </tr>`).join("")
-    : '<tr><td colspan="7" class="empty-cell">暂无玩家状态</td></tr>';
+    : '<tr><td colspan="10" class="empty-cell">暂无玩家状态</td></tr>';
 }
 
 function renderLatestAction() {
