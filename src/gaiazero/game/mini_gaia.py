@@ -441,6 +441,40 @@ class MiniGaiaState:
             lines.append(f"Final scores: {self.final_scores()}")
         return "\n".join(lines)
 
+    def snapshot(self) -> dict[str, object]:
+        return {
+            "ruleset": "mini-gaia-v1",
+            "round": min(self.round_number, MAX_ROUNDS),
+            "max_rounds": MAX_ROUNDS,
+            "current_player": None if self.is_terminal else self.player_to_move,
+            "first_player": self.first_player,
+            "terminal": self.is_terminal,
+            "scores": list(self.final_scores()),
+            "players": [
+                {
+                    "id": player,
+                    "credits": info.credits,
+                    "ore": info.ore,
+                    "knowledge": info.knowledge,
+                    "vp": info.vp,
+                    "tracks": list(info.tracks),
+                    "passed": info.passed,
+                }
+                for player, info in enumerate(self.players)
+            ],
+            "planets": [
+                {
+                    "id": index,
+                    "q": planet.q,
+                    "r": planet.r,
+                    "terrain": planet.terrain,
+                    "owner": self.owners[index],
+                    "building": Building(self.buildings[index]).name.lower(),
+                }
+                for index, planet in enumerate(PLANETS)
+            ],
+        }
+
 
 class MiniGaiaHeuristicEvaluator:
     """Fast non-learning baseline for PIMCTS and regression tests."""

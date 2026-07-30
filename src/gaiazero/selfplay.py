@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 
 import numpy as np
 
 from gaiazero.core import GameState, PolicyValueEvaluator
-from gaiazero.mcts import PUCTSearch, SearchConfig
+from gaiazero.mcts import PUCTSearch, SearchConfig, SearchResult
 from gaiazero.replay import TrainingExample
 
 
@@ -25,11 +26,15 @@ class SelfPlayResult:
     actions: tuple[int, ...]
 
 
+SelfPlayObserver = Callable[[int, GameState, int, GameState, SearchResult], None]
+
+
 def play_self_game(
     initial_state: GameState,
     evaluator: PolicyValueEvaluator,
     search_config: SearchConfig,
     config: SelfPlayConfig | None = None,
+    observer: SelfPlayObserver | None = None,
 ) -> SelfPlayResult:
     settings = config or SelfPlayConfig()
     rng = np.random.default_rng(settings.seed)
@@ -50,7 +55,10 @@ def play_self_game(
         pending.append((state.observation(), state.legal_action_mask(), result.policy))
         action = int(rng.choice(state.action_size, p=result.policy))
         actions.append(action)
-        state = state.apply(action)
+        next_state = state.apply(action)
+        if observer is not None:
+            observer(len(actions), state, action, next_state, result)
+        state = next_state
 
     outcome = state.returns()
     examples = [
@@ -63,4 +71,3 @@ def play_self_game(
         for observation, legal_mask, policy in pending
     ]
     return SelfPlayResult(examples=examples, final_state=state, actions=tuple(actions))
-

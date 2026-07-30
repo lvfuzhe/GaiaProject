@@ -8,3 +8,4 @@ dist/
 runs/
 checkpoints/
 tests/.artifacts/*.pt
+tests/.artifacts/*.jsonl

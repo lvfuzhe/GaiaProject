@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from time import perf_counter
 
 import numpy as np
 import torch
 
 from gaiazero.arena import evaluate_against, play_arena_game
+from gaiazero.dashboard import serve_dashboard
 from gaiazero.game import MiniGaiaHeuristicEvaluator, MiniGaiaState
 from gaiazero.mcts import SearchConfig
 from gaiazero.model import (
@@ -19,6 +21,7 @@ from gaiazero.model import (
 )
 from gaiazero.replay import ReplayBuffer
 from gaiazero.selfplay import SelfPlayConfig, play_self_game
+from gaiazero.telemetry import JsonlTelemetry
 from gaiazero.training import AlphaZeroTrainer, TrainerConfig
 
 
@@ -46,6 +49,8 @@ def command_demo(args: argparse.Namespace) -> None:
 
 
 def command_train(args: argparse.Namespace) -> None:
+    if args.metrics_move_interval < 1:
+        raise ValueError("metrics-move-interval must be positive")
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     device = resolve_device(args.device)
@@ -71,57 +76,199 @@ def command_train(args: argparse.Namespace) -> None:
     replay = ReplayBuffer(args.replay_capacity, args.seed)
     baseline = MiniGaiaHeuristicEvaluator()
     total_games = 0
+    telemetry = JsonlTelemetry(args.metrics)
+    run_started = perf_counter()
+    configuration = {
+        key: value
+        for key, value in vars(args).items()
+        if key not in {"handler", "command"}
+    }
+    telemetry.emit(
+        "run_started",
+        config=configuration,
+        device=str(device),
+        model_parameters=sum(parameter.numel() for parameter in model.parameters()),
+        observation_size=template.observation_size,
+        action_size=template.action_size,
+        state=template.snapshot(),
+    )
 
-    for iteration in range(1, args.iterations + 1):
-        positions = 0
-        for game in range(args.games_per_iteration):
-            game_seed = args.seed + total_games
-            result = play_self_game(
-                MiniGaiaState.initial(args.players, game_seed),
-                evaluator,
-                _search_config(args, game_seed),
-                SelfPlayConfig(
-                    temperature_moves=args.temperature_moves,
-                    seed=game_seed,
-                ),
+    try:
+        for iteration in range(1, args.iterations + 1):
+            positions = 0
+            iteration_started = perf_counter()
+            for game in range(args.games_per_iteration):
+                game_seed = args.seed + total_games
+                initial = MiniGaiaState.initial(args.players, game_seed)
+                game_started = perf_counter()
+                telemetry.emit(
+                    "self_play_started",
+                    iteration=iteration,
+                    game_in_iteration=game + 1,
+                    games_per_iteration=args.games_per_iteration,
+                    total_games=total_games,
+                    state=initial.snapshot(),
+                )
+
+                def observe_move(move: int, before, action: int, after, search_result) -> None:
+                    if move != 1 and move % args.metrics_move_interval != 0:
+                        return
+                    top_actions = np.argsort(search_result.policy)[-3:][::-1]
+                    telemetry.emit(
+                        "self_play_step",
+                        iteration=iteration,
+                        game_in_iteration=game + 1,
+                        move=move,
+                        player=before.current_player,
+                        action=action,
+                        action_label=before.describe_action(action),
+                        root_value=search_result.root_value,
+                        candidates=[
+                            {
+                                "action": int(candidate),
+                                "label": before.describe_action(int(candidate)),
+                                "probability": float(search_result.policy[candidate]),
+                                "visits": int(search_result.visits[candidate]),
+                            }
+                            for candidate in top_actions
+                            if search_result.policy[candidate] > 0
+                        ],
+                        state=after.snapshot(),
+                    )
+
+                result = play_self_game(
+                    initial,
+                    evaluator,
+                    _search_config(args, game_seed),
+                    SelfPlayConfig(
+                        temperature_moves=args.temperature_moves,
+                        seed=game_seed,
+                    ),
+                    observer=observe_move,
+                )
+                replay.extend(result.examples)
+                positions += len(result.examples)
+                total_games += 1
+                telemetry.emit(
+                    "self_play_completed",
+                    iteration=iteration,
+                    game_in_iteration=game + 1,
+                    games_per_iteration=args.games_per_iteration,
+                    total_games=total_games,
+                    moves=len(result.actions),
+                    positions=len(result.examples),
+                    replay_positions=len(replay),
+                    duration_seconds=perf_counter() - game_started,
+                    scores=result.final_state.final_scores(),
+                    returns=result.final_state.returns(),
+                    state=result.final_state.snapshot(),
+                )
+
+            telemetry.emit(
+                "training_started",
+                iteration=iteration,
+                updates=args.updates_per_iteration,
+                replay_positions=len(replay),
             )
-            replay.extend(result.examples)
-            positions += len(result.examples)
-            total_games += 1
-        metrics = trainer.train_updates(replay, args.updates_per_iteration)
-        print(
-            f"iteration={iteration} games={total_games} new_positions={positions} "
-            f"replay={len(replay)} loss={metrics.loss:.4f} "
-            f"policy={metrics.policy_loss:.4f} value={metrics.value_loss:.4f}"
-        )
 
-        if args.eval_games > 0:
-            summary = evaluate_against(
-                lambda seed: MiniGaiaState.initial(args.players, args.seed + 100_000 + seed),
-                evaluator,
-                baseline,
-                num_players=args.players,
-                games=args.eval_games,
-                search_config=_search_config(args, args.seed + iteration),
+            def observe_update(update: int, update_metrics) -> None:
+                telemetry.emit(
+                    "training_update",
+                    iteration=iteration,
+                    update=update,
+                    updates=args.updates_per_iteration,
+                    replay_positions=len(replay),
+                    loss=update_metrics.loss,
+                    policy_loss=update_metrics.policy_loss,
+                    value_loss=update_metrics.value_loss,
+                    policy_entropy=update_metrics.policy_entropy,
+                )
+
+            metrics = trainer.train_updates(
+                replay,
+                args.updates_per_iteration,
+                observer=observe_update,
             )
             print(
-                f"arena_games={summary.games} mean_value={summary.mean_value:.3f} "
-                f"first={summary.first_places} draws={summary.draws} "
-                f"mean_score={summary.mean_score:.2f}"
+                f"iteration={iteration} games={total_games} new_positions={positions} "
+                f"replay={len(replay)} loss={metrics.loss:.4f} "
+                f"policy={metrics.policy_loss:.4f} value={metrics.value_loss:.4f}"
             )
 
-        save_checkpoint(
-            args.output,
-            model,
-            optimizer=trainer.optimizer,
-            metadata={
-                "iteration": iteration,
-                "self_play_games": total_games,
-                "replay_positions": len(replay),
-                "ruleset": "mini-gaia-v1",
-            },
+            if args.eval_games > 0:
+                telemetry.emit("arena_started", iteration=iteration, games=args.eval_games)
+                arena_started = perf_counter()
+                summary = evaluate_against(
+                    lambda seed: MiniGaiaState.initial(args.players, args.seed + 100_000 + seed),
+                    evaluator,
+                    baseline,
+                    num_players=args.players,
+                    games=args.eval_games,
+                    search_config=_search_config(args, args.seed + iteration),
+                )
+                telemetry.emit(
+                    "arena_completed",
+                    iteration=iteration,
+                    games=summary.games,
+                    mean_value=summary.mean_value,
+                    first_places=summary.first_places,
+                    draws=summary.draws,
+                    mean_score=summary.mean_score,
+                    duration_seconds=perf_counter() - arena_started,
+                )
+                print(
+                    f"arena_games={summary.games} mean_value={summary.mean_value:.3f} "
+                    f"first={summary.first_places} draws={summary.draws} "
+                    f"mean_score={summary.mean_score:.2f}"
+                )
+
+            save_checkpoint(
+                args.output,
+                model,
+                optimizer=trainer.optimizer,
+                metadata={
+                    "iteration": iteration,
+                    "self_play_games": total_games,
+                    "replay_positions": len(replay),
+                    "ruleset": "mini-gaia-v1",
+                },
+            )
+            telemetry.emit(
+                "iteration_completed",
+                iteration=iteration,
+                iterations=args.iterations,
+                total_games=total_games,
+                replay_positions=len(replay),
+                new_positions=positions,
+                loss=metrics.loss,
+                policy_loss=metrics.policy_loss,
+                value_loss=metrics.value_loss,
+                policy_entropy=metrics.policy_entropy,
+                duration_seconds=perf_counter() - iteration_started,
+                checkpoint=str(Path(args.output).resolve()),
+            )
+        telemetry.emit(
+            "run_completed",
+            iterations=args.iterations,
+            total_games=total_games,
+            replay_positions=len(replay),
+            duration_seconds=perf_counter() - run_started,
+            checkpoint=str(Path(args.output).resolve()),
         )
+    except Exception as error:
+        telemetry.emit(
+            "run_failed",
+            error_type=type(error).__name__,
+            message=str(error),
+            duration_seconds=perf_counter() - run_started,
+        )
+        raise
     print(f"checkpoint={Path(args.output).resolve()}")
+    print(f"metrics={Path(args.metrics).resolve()}")
+
+
+def command_dashboard(args: argparse.Namespace) -> None:
+    serve_dashboard(args.metrics, args.host, args.port)
 
 
 def command_evaluate(args: argparse.Namespace) -> None:
@@ -181,6 +328,8 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--residual-blocks", type=int, default=4)
     train.add_argument("--device", default="auto")
     train.add_argument("--output", default="runs/mini-gaia.pt")
+    train.add_argument("--metrics", default="runs/metrics.jsonl")
+    train.add_argument("--metrics-move-interval", type=int, default=4)
     _add_search_arguments(train)
     train.set_defaults(handler=command_train)
 
@@ -191,10 +340,15 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--device", default="auto")
     _add_search_arguments(evaluate)
     evaluate.set_defaults(handler=command_evaluate)
+
+    dashboard = subparsers.add_parser("dashboard", help="serve the live training dashboard")
+    dashboard.add_argument("--metrics", default="runs/metrics.jsonl")
+    dashboard.add_argument("--host", default="127.0.0.1")
+    dashboard.add_argument("--port", type=int, default=8765)
+    dashboard.set_defaults(handler=command_dashboard)
     return parser
 
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     args.handler(args)
-

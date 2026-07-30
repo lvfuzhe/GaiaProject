@@ -48,6 +48,27 @@ gaiazero train `
 gaiazero evaluate runs/mini-gaia.pt --players 2 --games 20 --simulations 128
 ```
 
+## 训练监控台
+
+训练命令默认把结构化事件写入 `runs/metrics.jsonl`。在另一个终端启动只读仪表盘：
+
+```powershell
+gaiazero dashboard --metrics runs/metrics.jsonl --port 8765
+```
+
+浏览器访问 `http://127.0.0.1:8765`。监控台包含概览、自博弈和诊断三个视图，展示损失曲线、
+流水线进度、回放池、吞吐量、六角棋盘、玩家资源、搜索候选、运行参数和原始事件。
+
+训练过程中每隔四步记录一次棋盘与搜索快照；可按运行规模调整：
+
+```powershell
+gaiazero train --metrics runs/experiment-a.jsonl --metrics-move-interval 8
+gaiazero dashboard --metrics runs/experiment-a.jsonl --port 8765
+```
+
+Dashboard 与训练进程相互独立，只读取 JSONL 文件，不加载模型或占用 GPU 显存。文件保留后，
+训练结束或异常退出时仍可查看最后状态。
+
 CPU 冒烟训练可以显著缩小参数：
 
 ```powershell
@@ -92,6 +113,9 @@ src/gaiazero/selfplay.py        自博弈数据生成
 src/gaiazero/replay.py          有界经验回放
 src/gaiazero/training.py        AlphaZero 联合损失训练器
 src/gaiazero/arena.py           座位轮换评测
+src/gaiazero/telemetry.py       结构化 JSONL 训练事件
+src/gaiazero/dashboard.py       只读监控 HTTP 服务
+src/gaiazero/web/               响应式监控页面
 src/gaiazero/cli.py             命令行入口
 tests/                          规则、搜索和训练回归测试
 ```
@@ -122,4 +146,3 @@ tests/                          规则、搜索和训练回归测试
 $env:PYTHONPATH = "src"
 python -m unittest discover -s tests -v
 ```
-

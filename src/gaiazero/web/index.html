@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>GaiaZero Monitor</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand-block">
+      <div class="brand-mark" aria-hidden="true">GZ</div>
+      <div>
+        <h1>GaiaZero</h1>
+        <p>训练监控台</p>
+      </div>
+    </div>
+    <div class="connection-block">
+      <span id="connection-dot" class="status-dot waiting" aria-hidden="true"></span>
+      <div>
+        <strong id="run-status">等待数据</strong>
+        <span id="phase-label">尚未发现训练事件</span>
+      </div>
+      <label class="live-toggle">
+        <input id="live-toggle" type="checkbox" checked>
+        <span>实时</span>
+      </label>
+      <button id="refresh-button" class="icon-button" type="button" title="立即刷新" aria-label="立即刷新">↻</button>
+    </div>
+  </header>
+
+  <nav class="tabs" aria-label="监控视图">
+    <button class="tab active" type="button" data-view="overview" aria-selected="true">概览</button>
+    <button class="tab" type="button" data-view="selfplay" aria-selected="false">自博弈</button>
+    <button class="tab" type="button" data-view="diagnostics" aria-selected="false">诊断</button>
+  </nav>
+
+  <main>
+    <section id="overview" class="view active" aria-labelledby="overview-title">
+      <h2 id="overview-title" class="sr-only">训练概览</h2>
+      <div class="metric-strip">
+        <article class="metric-card">
+          <span>迭代</span>
+          <strong id="metric-iteration">0 / 0</strong>
+          <small id="metric-iteration-note">未开始</small>
+        </article>
+        <article class="metric-card">
+          <span>自博弈</span>
+          <strong id="metric-games">0</strong>
+          <small id="metric-games-note">0 个训练局面</small>
+        </article>
+        <article class="metric-card">
+          <span>回放池</span>
+          <strong id="metric-replay">0</strong>
+          <small id="metric-replay-note">容量 0%</small>
+        </article>
+        <article class="metric-card accent">
+          <span>总损失</span>
+          <strong id="metric-loss">--</strong>
+          <small id="metric-loss-note">等待反向传播</small>
+        </article>
+        <article class="metric-card">
+          <span>吞吐量</span>
+          <strong id="metric-throughput">--</strong>
+          <small>局面 / 秒</small>
+        </article>
+        <article class="metric-card">
+          <span>已运行</span>
+          <strong id="metric-elapsed">00:00</strong>
+          <small id="metric-device">设备 --</small>
+        </article>
+      </div>
+
+      <div class="overview-grid content-band">
+        <section class="panel chart-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Optimization</p>
+              <h3>损失趋势</h3>
+            </div>
+            <div class="legend" aria-label="图例">
+              <span><i class="legend-total"></i>总损失</span>
+              <span><i class="legend-policy"></i>策略</span>
+              <span><i class="legend-value"></i>价值</span>
+            </div>
+          </div>
+          <div class="canvas-frame">
+            <canvas id="loss-chart" aria-label="训练损失折线图"></canvas>
+            <div id="loss-empty" class="canvas-empty">等待训练更新</div>
+          </div>
+        </section>
+
+        <section class="panel progress-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Pipeline</p>
+              <h3>运行进度</h3>
+            </div>
+            <span id="progress-percent" class="compact-value">0%</span>
+          </div>
+          <div class="progress-track" aria-hidden="true">
+            <progress id="progress-fill" class="progress-fill" max="100" value="0"></progress>
+          </div>
+          <ol class="phase-list">
+            <li id="phase-selfplay">
+              <span class="phase-index">01</span>
+              <div><strong>生成自博弈</strong><small id="phase-selfplay-note">等待</small></div>
+            </li>
+            <li id="phase-training">
+              <span class="phase-index">02</span>
+              <div><strong>更新网络</strong><small id="phase-training-note">等待</small></div>
+            </li>
+            <li id="phase-arena">
+              <span class="phase-index">03</span>
+              <div><strong>竞技场评测</strong><small id="phase-arena-note">等待</small></div>
+            </li>
+            <li id="phase-checkpoint">
+              <span class="phase-index">04</span>
+              <div><strong>保存检查点</strong><small id="phase-checkpoint-note">等待</small></div>
+            </li>
+          </ol>
+        </section>
+      </div>
+
+      <section class="panel content-band iteration-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Iterations</p>
+            <h3>迭代摘要</h3>
+          </div>
+          <span id="iteration-count" class="muted">0 条记录</span>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>迭代</th><th>新增局面</th><th>回放池</th><th>总损失</th><th>策略 / 价值</th><th>耗时</th></tr></thead>
+            <tbody id="iteration-table"><tr><td colspan="6" class="empty-cell">暂无迭代结果</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <section id="selfplay" class="view" aria-labelledby="selfplay-title" hidden>
+      <h2 id="selfplay-title" class="sr-only">自博弈监控</h2>
+      <div class="selfplay-grid content-band">
+        <section class="panel board-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Current state</p>
+              <h3>MiniGaia 星图</h3>
+            </div>
+            <span id="board-round" class="compact-value">第 -- 轮</span>
+          </div>
+          <div class="board-frame">
+            <canvas id="board-canvas" aria-label="MiniGaia 当前棋盘"></canvas>
+            <div id="board-empty" class="canvas-empty">等待棋盘快照</div>
+          </div>
+          <div class="terrain-legend" aria-label="星球图例">
+            <span><i class="terrain t0"></i>赤地</span>
+            <span><i class="terrain t1"></i>沙地</span>
+            <span><i class="terrain t2"></i>沼地</span>
+            <span><i class="terrain t3"></i>冰地</span>
+          </div>
+        </section>
+
+        <section class="panel action-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Search decision</p>
+              <h3>最近决策</h3>
+            </div>
+            <span id="action-player" class="player-chip">P--</span>
+          </div>
+          <p id="action-label" class="action-label">等待搜索结果</p>
+          <div id="candidate-list" class="candidate-list">
+            <div class="candidate-empty">暂无候选动作</div>
+          </div>
+          <div class="value-vector">
+            <span>根价值</span>
+            <div id="root-values">--</div>
+          </div>
+        </section>
+      </div>
+
+      <section class="panel content-band players-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Players</p>
+            <h3>玩家状态</h3>
+          </div>
+          <span id="active-player-note" class="muted">当前行动 --</span>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>玩家</th><th>分数</th><th>信用点</th><th>矿石</th><th>知识</th><th>研究轨</th><th>状态</th></tr></thead>
+            <tbody id="players-table"><tr><td colspan="7" class="empty-cell">暂无玩家状态</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel content-band games-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Completed games</p>
+            <h3>最近对局</h3>
+          </div>
+          <span id="games-count" class="muted">0 局</span>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>迭代</th><th>对局</th><th>步数</th><th>局面</th><th>得分</th><th>耗时</th></tr></thead>
+            <tbody id="games-table"><tr><td colspan="6" class="empty-cell">暂无完成对局</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <section id="diagnostics" class="view" aria-labelledby="diagnostics-title" hidden>
+      <h2 id="diagnostics-title" class="sr-only">运行诊断</h2>
+      <div class="diagnostics-grid content-band">
+        <section class="panel config-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Configuration</p>
+              <h3>运行参数</h3>
+            </div>
+            <span id="run-id" class="mono muted">run --</span>
+          </div>
+          <dl id="config-list" class="config-list">
+            <div><dt>状态</dt><dd>等待训练数据</dd></div>
+          </dl>
+        </section>
+
+        <section class="panel health-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Telemetry</p>
+              <h3>数据源</h3>
+            </div>
+            <span id="health-badge" class="health-badge waiting">等待</span>
+          </div>
+          <dl class="health-list">
+            <div><dt>事件文件</dt><dd id="health-source" class="mono">--</dd></div>
+            <div><dt>最后事件</dt><dd id="health-updated">--</dd></div>
+            <div><dt>事件数量</dt><dd id="health-events">0</dd></div>
+            <div><dt>模型参数</dt><dd id="health-parameters">--</dd></div>
+            <div><dt>观察 / 动作</dt><dd id="health-shapes">--</dd></div>
+          </dl>
+        </section>
+      </div>
+
+      <section class="panel content-band event-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Event stream</p>
+            <h3>运行事件</h3>
+          </div>
+          <span id="event-count" class="muted">0 条</span>
+        </div>
+        <div id="event-list" class="event-list">
+          <div class="event-empty">暂无事件</div>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <footer>
+    <span id="footer-source">metrics: --</span>
+    <span id="footer-clock">--:--:--</span>
+  </footer>
+  <script src="/app.js"></script>
+</body>
+</html>

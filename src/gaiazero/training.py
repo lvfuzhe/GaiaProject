@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 
 import torch
 from torch import nn
@@ -26,6 +27,9 @@ class TrainMetrics:
     policy_entropy: float
 
 
+TrainingObserver = Callable[[int, TrainMetrics], None]
+
+
 class AlphaZeroTrainer:
     def __init__(self, model: PolicyValueNetwork, config: TrainerConfig | None = None) -> None:
         self.config = config or TrainerConfig()
@@ -37,12 +41,17 @@ class AlphaZeroTrainer:
             weight_decay=self.config.weight_decay,
         )
 
-    def train_updates(self, replay: ReplayBuffer, updates: int) -> TrainMetrics:
+    def train_updates(
+        self,
+        replay: ReplayBuffer,
+        updates: int,
+        observer: TrainingObserver | None = None,
+    ) -> TrainMetrics:
         if updates < 1:
             raise ValueError("updates must be positive")
         totals = {"loss": 0.0, "policy": 0.0, "value": 0.0, "entropy": 0.0}
         self.model.train()
-        for _ in range(updates):
+        for update_index in range(updates):
             batch = replay.sample(self.config.batch_size)
             observations = torch.from_numpy(batch.observations).to(self.device)
             masks = torch.from_numpy(batch.legal_masks).to(self.device)
@@ -67,6 +76,16 @@ class AlphaZeroTrainer:
             totals["policy"] += float(policy_loss.detach())
             totals["value"] += float(value_loss.detach())
             totals["entropy"] += float(entropy.detach())
+            if observer is not None:
+                observer(
+                    update_index + 1,
+                    TrainMetrics(
+                        loss=float(loss.detach()),
+                        policy_loss=float(policy_loss.detach()),
+                        value_loss=float(value_loss.detach()),
+                        policy_entropy=float(entropy.detach()),
+                    ),
+                )
 
         return TrainMetrics(
             loss=totals["loss"] / updates,
@@ -74,4 +93,3 @@ class AlphaZeroTrainer:
             value_loss=totals["value"] / updates,
             policy_entropy=totals["entropy"] / updates,
         )
-
