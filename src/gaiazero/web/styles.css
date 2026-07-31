@@ -35,7 +35,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -305,6 +306,7 @@ main {
 
 .overview-grid,
 .selfplay-grid,
+.history-grid,
 .diagnostics-grid {
   display: grid;
   gap: 18px;
@@ -316,6 +318,10 @@ main {
 
 .selfplay-grid {
   grid-template-columns: minmax(0, 1.55fr) minmax(310px, 0.75fr);
+}
+
+.history-grid {
+  grid-template-columns: minmax(0, 1.45fr) minmax(330px, 0.65fr);
 }
 
 .diagnostics-grid {
@@ -333,10 +339,209 @@ main {
 .progress-panel,
 .board-panel,
 .action-panel,
+.history-audit-panel,
 .config-panel,
 .health-panel {
   min-height: 360px;
   padding: 20px;
+}
+
+.history-toolbar {
+  min-height: 92px;
+  padding: 16px 20px;
+  display: grid;
+  grid-template-columns: minmax(150px, 0.45fr) minmax(520px, 1.5fr) minmax(160px, 0.45fr);
+  align-items: end;
+  gap: 22px;
+}
+
+.history-selectors {
+  display: grid;
+  grid-template-columns: minmax(170px, 1.3fr) minmax(120px, 0.7fr) minmax(120px, 0.7fr);
+  gap: 10px;
+}
+
+.history-selectors label,
+.history-result {
+  min-width: 0;
+}
+
+.history-selectors span,
+.history-result span {
+  margin-bottom: 5px;
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.history-selectors select {
+  width: 100%;
+  height: 36px;
+  padding: 0 30px 0 10px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.history-selectors select:focus-visible {
+  border-color: var(--green);
+  outline: 2px solid var(--green-soft);
+}
+
+.history-result {
+  text-align: right;
+}
+
+.history-result strong {
+  display: block;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+}
+
+.history-empty {
+  min-height: 260px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.history-playback,
+.history-log-panel {
+  padding: 18px 20px;
+}
+
+.history-playback h3 {
+  max-width: min(760px, 70vw);
+  overflow-wrap: anywhere;
+}
+
+.playback-row {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: auto minmax(140px, 1fr) 72px;
+  align-items: center;
+  gap: 14px;
+}
+
+.playback-buttons {
+  display: flex;
+  gap: 6px;
+}
+
+.playback-buttons .icon-button {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+#history-step-slider {
+  width: 100%;
+  accent-color: var(--green);
+}
+
+#history-step-label {
+  text-align: right;
+  font-size: 11px;
+}
+
+.history-delta {
+  min-height: 34px;
+  margin-top: 13px;
+  padding-top: 11px;
+  color: var(--muted);
+  border-top: 1px solid #edf0ed;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+
+.history-stats {
+  margin: 16px 0 0;
+}
+
+.history-stats div {
+  min-height: 38px;
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  border-top: 1px solid #edf0ed;
+}
+
+.history-stats dt {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.history-stats dd {
+  margin: 0;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.check-list {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--line);
+}
+
+.check-list li {
+  min-height: 52px;
+  padding: 9px 0 9px 18px;
+  position: relative;
+  border-bottom: 1px solid #edf0ed;
+}
+
+.check-list li::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  position: absolute;
+  top: 14px;
+  left: 0;
+  border-radius: 50%;
+  background: var(--line-strong);
+}
+
+.check-list li.pass::before { background: var(--green); }
+.check-list li.warn::before { background: var(--amber); }
+.check-list li.fail::before { background: var(--red); }
+
+.check-list span,
+.check-list small {
+  display: block;
+}
+
+.check-list span {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.check-list small {
+  margin-top: 3px;
+  color: var(--muted);
+  line-height: 1.35;
+  font-size: 9px;
+}
+
+.history-log-scroll {
+  max-height: 440px;
+  overflow-y: auto;
+}
+
+#history-action-table tr[data-step] {
+  cursor: pointer;
+}
+
+#history-action-table tr.current-step {
+  background: var(--green-soft);
+  box-shadow: inset 3px 0 0 var(--green);
 }
 
 .panel-heading {
@@ -740,6 +945,11 @@ tbody tr:hover {
   background: #f7e5e1;
 }
 
+.health-badge.warning {
+  color: var(--amber);
+  background: #f6ecd8;
+}
+
 .mono {
   font-family: Consolas, "SFMono-Regular", monospace;
 }
@@ -814,14 +1024,25 @@ footer {
 
   .overview-grid,
   .selfplay-grid,
+  .history-grid,
   .diagnostics-grid {
     grid-template-columns: 1fr;
   }
 
   .progress-panel,
   .action-panel,
+  .history-audit-panel,
   .health-panel {
     min-height: auto;
+  }
+
+  .history-toolbar {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .history-result {
+    text-align: left;
   }
 }
 
@@ -862,10 +1083,30 @@ footer {
   .chart-panel,
   .progress-panel,
   .board-panel,
-  .action-panel,
-  .config-panel,
+    .action-panel,
+    .history-audit-panel,
+    .config-panel,
   .health-panel {
     padding: 16px;
+  }
+
+  .history-toolbar,
+  .history-playback,
+  .history-log-panel {
+    padding: 16px;
+  }
+
+  .history-selectors {
+    grid-template-columns: 1fr;
+  }
+
+  .playback-row {
+    grid-template-columns: auto minmax(90px, 1fr);
+  }
+
+  #history-step-label {
+    grid-column: 1 / -1;
+    text-align: left;
   }
 
   .legend {

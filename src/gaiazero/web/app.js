@@ -27,7 +27,18 @@ const state = {
   source: "--",
   connected: false,
   live: true,
-  polling: false
+  polling: false,
+  history: {
+    index: null,
+    runId: null,
+    iteration: null,
+    game: null,
+    trace: null,
+    step: 0,
+    loading: false,
+    playing: false,
+    timer: null
+  }
 };
 
 const byId = (id) => document.getElementById(id);
@@ -76,6 +87,7 @@ async function pollEvents(force = false) {
     const data = await response.json();
     state.source = data.source || state.source;
     state.connected = true;
+    let historyChanged = !state.history.index;
     for (const event of data.events || []) {
       if (event.type === "run_started" && state.runId && event.run_id !== state.runId) {
         state.events = [];
@@ -83,8 +95,12 @@ async function pollEvents(force = false) {
       if (event.type === "run_started") state.runId = event.run_id;
       if (!state.runId || event.run_id === state.runId) state.events.push(event);
       state.lastSequence = Math.max(state.lastSequence, Number(event.sequence) || 0);
+      if (["run_started", "self_play_completed", "iteration_completed", "run_completed", "run_failed"].includes(event.type)) {
+        historyChanged = true;
+      }
     }
     if (!state.runId && state.events.length) state.runId = state.events.at(-1).run_id;
+    if (historyChanged) await refreshHistoryIndex();
   } catch (error) {
     state.connected = false;
   } finally {
@@ -100,6 +116,7 @@ function render() {
   renderLossChart();
   renderIterations();
   renderSelfPlay();
+  renderHistory();
   renderDiagnostics();
   byId("footer-source").textContent = `metrics: ${state.source}`;
   byId("footer-clock").textContent = formatTime(new Date().toISOString());
@@ -302,6 +319,262 @@ function renderIterations() {
     : '<tr><td colspan="6" class="empty-cell">暂无迭代结果</td></tr>';
 }
 
+function historyRuns() {
+  return state.history.index?.runs || [];
+}
+
+function historyRun() {
+  return historyRuns().find((run) => run.run_id === state.history.runId) || null;
+}
+
+function historyIteration() {
+  return historyRun()?.iterations?.find((item) => item.iteration === state.history.iteration) || null;
+}
+
+function historyGame() {
+  return historyIteration()?.games?.find((item) => item.game === state.history.game) || null;
+}
+
+async function refreshHistoryIndex() {
+  try {
+    const response = await fetch("/api/history", { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const index = await response.json();
+    state.history.index = index;
+    const runs = historyRuns();
+    if (!runs.length) {
+      state.history.runId = null;
+      state.history.iteration = null;
+      state.history.game = null;
+      state.history.trace = null;
+      renderHistory();
+      return;
+    }
+    const preferredRun = runs.find((run) => run.run_id === state.history.runId)
+      || runs.find((run) => run.run_id === state.runId)
+      || runs.at(-1);
+    state.history.runId = preferredRun.run_id;
+    const iterations = preferredRun.iterations || [];
+    const preferredIteration = iterations.find((item) => item.iteration === state.history.iteration)
+      || iterations.at(-1);
+    state.history.iteration = preferredIteration?.iteration ?? null;
+    const games = preferredIteration?.games || [];
+    const preferredGame = games.find((item) => item.game === state.history.game) || games.at(-1);
+    state.history.game = preferredGame?.game ?? null;
+    renderHistorySelectors();
+    if (state.history.runId && state.history.iteration !== null && state.history.game !== null) {
+      const current = state.history.trace;
+      const sameGame = current
+        && current.run_id === state.history.runId
+        && current.iteration === state.history.iteration
+        && current.game === state.history.game;
+      await loadHistoryGame(!sameGame);
+    } else {
+      state.history.trace = null;
+      renderHistory();
+    }
+  } catch (error) {
+    state.history.index = state.history.index || { runs: [] };
+    renderHistory();
+  }
+}
+
+async function loadHistoryGame(goToEnd = true) {
+  const { runId, iteration, game } = state.history;
+  if (!runId || iteration === null || game === null) {
+    state.history.trace = null;
+    renderHistory();
+    return;
+  }
+  state.history.loading = true;
+  renderHistory();
+  try {
+    const params = new URLSearchParams({ run_id: runId, iteration: String(iteration), game: String(game) });
+    const response = await fetch(`/api/game?${params.toString()}`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const trace = await response.json();
+    if (trace.run_id === state.history.runId
+      && trace.iteration === state.history.iteration
+      && trace.game === state.history.game) {
+      state.history.trace = trace;
+      state.history.step = goToEnd ? Math.max(0, trace.steps.length - 1) : Math.min(state.history.step, trace.steps.length - 1);
+    }
+  } catch (error) {
+    state.history.trace = null;
+  } finally {
+    state.history.loading = false;
+    renderHistory();
+  }
+}
+
+function renderHistorySelectors() {
+  const runSelect = byId("history-run-select");
+  const iterationSelect = byId("history-iteration-select");
+  const gameSelect = byId("history-game-select");
+  if (!runSelect || !iterationSelect || !gameSelect) return;
+  const runs = historyRuns();
+  runSelect.innerHTML = runs.length
+    ? runs.map((run) => `<option value="${escapeHtml(run.run_id)}">${escapeHtml(run.ruleset || "unknown")} · ${escapeHtml(run.run_id)} · ${escapeHtml(run.status)}</option>`).join("")
+    : '<option value="">暂无运行</option>';
+  runSelect.value = state.history.runId || "";
+  const iterations = historyRun()?.iterations || [];
+  iterationSelect.innerHTML = iterations.length
+    ? iterations.map((item) => `<option value="${item.iteration}">第 ${item.iteration} 轮 · ${item.games.length} 局</option>`).join("")
+    : '<option value="">暂无迭代</option>';
+  iterationSelect.value = state.history.iteration === null ? "" : String(state.history.iteration);
+  const games = historyIteration()?.games || [];
+  gameSelect.innerHTML = games.length
+    ? games.map((item) => {
+      const score = item.scores ? ` · ${(item.scores || []).map((value) => formatNumber(value, 1)).join("/")}` : "";
+      const coverage = item.moves === null ? "" : ` · ${item.captured_moves}/${item.moves} 步`;
+      return `<option value="${item.game}">第 ${item.game} 局${score}${coverage}</option>`;
+    }).join("")
+    : '<option value="">暂无对局</option>';
+  gameSelect.value = state.history.game === null ? "" : String(state.history.game);
+  runSelect.disabled = !runs.length;
+  iterationSelect.disabled = !iterations.length;
+  gameSelect.disabled = !games.length;
+}
+
+function auditHistoryTrace(trace) {
+  if (!trace) return [];
+  const steps = trace.steps || [];
+  const summary = trace.summary || {};
+  const expected = Number(summary.moves);
+  const moves = steps.filter((step) => step.move > 0);
+  const states = steps.map((step) => step.state).filter(Boolean);
+  const checks = [];
+  const complete = Number.isFinite(expected) && trace.trace_complete
+    && moves.length === expected;
+  checks.push({
+    status: complete ? "pass" : "warn",
+    title: complete ? "每一步规则状态均已记录" : "规则状态记录不完整",
+    detail: Number.isFinite(expected) ? `${trace.captured_moves} / ${expected} 步` : "对局尚未结束或旧日志未记录步数"
+  });
+  const rounds = states.map((snapshot) => Number(snapshot.round)).filter(Number.isFinite);
+  const roundsValid = rounds.every((round, index) => round >= 1 && round <= 6 && (index === 0 || round >= rounds[index - 1]));
+  checks.push({
+    status: roundsValid && rounds.length ? "pass" : "fail",
+    title: roundsValid && rounds.length ? "轮次顺序连续" : "轮次顺序异常",
+    detail: rounds.length ? `观测到 ${new Set(rounds).size} 个轮次` : "没有可验证的状态"
+  });
+  const resourcesValid = states.every((snapshot) => (snapshot.players || []).every((player) => (
+    Number(player.credits) >= 0 && Number(player.credits) <= 30
+    && Number(player.ore) >= 0 && Number(player.ore) <= 15
+    && Number(player.knowledge) >= 0 && Number(player.knowledge) <= 15
+    && Number(player.qic) >= 0
+    && (!player.power || player.power.every((value) => Number(value) >= 0))
+  )));
+  checks.push({
+    status: resourcesValid ? "pass" : "fail",
+    title: resourcesValid ? "资源和能量均在规则上限内" : "资源或能量超出边界",
+    detail: resourcesValid ? "信用点 0-30、矿石/知识 0-15" : "请定位到对应行动步"
+  });
+  const ownersValid = states.every((snapshot) => {
+    const count = (snapshot.players || []).length;
+    return (snapshot.planets || []).every((planet) => Number(planet.owner) >= -1 && Number(planet.owner) < count);
+  });
+  checks.push({
+    status: ownersValid ? "pass" : "fail",
+    title: ownersValid ? "星球所有权状态有效" : "星球所有权状态异常",
+    detail: ownersValid ? "每个星球最多归属一个玩家" : "发现未知玩家编号"
+  });
+  const lastSnapshot = states.at(-1);
+  const terminal = Boolean(lastSnapshot?.terminal) && Boolean(summary.moves !== undefined);
+  checks.push({
+    status: terminal ? "pass" : "warn",
+    title: terminal ? "整局已进入终局状态" : "整局尚未完成",
+    detail: terminal ? `最终分数 ${(summary.scores || lastSnapshot.scores || []).map((value) => formatNumber(value, 1)).join(" / ")}` : "训练中的对局会随新事件更新"
+  });
+  const actionMetadata = moves.every((step) => step.action !== null && step.legal_actions !== null);
+  checks.push({
+    status: actionMetadata ? "pass" : "warn",
+    title: actionMetadata ? "动作由规则引擎合法转移" : "旧日志缺少动作元数据",
+    detail: actionMetadata ? "每个动作在 apply 前均经过合法动作集合校验" : "重新训练可获得完整动作审计信息"
+  });
+  return checks;
+}
+
+function historyDelta(previous, current, step) {
+  if (!current) return "等待状态变化";
+  if (!previous) return "初始状态 · 没有前置动作";
+  const changes = [];
+  const labels = [["credits", "信用点"], ["ore", "矿石"], ["knowledge", "知识"], ["qic", "QIC"], ["vp", "VP"]];
+  const player = Number(step.player);
+  const before = previous.players?.[player];
+  const after = current.players?.[player];
+  if (before && after) {
+    for (const [key, label] of labels) {
+      const delta = Number(after[key]) - Number(before[key]);
+      if (delta) changes.push(`${label} ${delta > 0 ? "+" : ""}${delta}`);
+    }
+    if (before.power && after.power && before.power.join() !== after.power.join()) {
+      changes.push(`能量 ${before.power.join("/")} → ${after.power.join("/")}`);
+    }
+    if (before.tracks && after.tracks && before.tracks.join() !== after.tracks.join()) {
+      changes.push(`科研 ${after.tracks.join("·")}`);
+    }
+  }
+  if (Number(previous.round) !== Number(current.round)) changes.push(`进入第 ${current.round} 轮`);
+  return changes.length ? changes.join(" · ") : "状态已转移，资源数值无变化";
+}
+
+function renderHistory() {
+  const content = byId("history-content");
+  const empty = byId("history-empty");
+  if (!content || !empty) return;
+  renderHistorySelectors();
+  const trace = state.history.trace;
+  const hasTrace = Boolean(trace?.steps?.length);
+  empty.hidden = hasTrace || state.history.loading;
+  content.hidden = !hasTrace;
+  if (!hasTrace) {
+    if (state.history.loading) empty.textContent = "正在读取历史快照";
+    return;
+  }
+  const steps = trace.steps;
+  state.history.step = Math.max(0, Math.min(state.history.step, steps.length - 1));
+  const step = steps[state.history.step];
+  const snapshot = step.state;
+  drawBoard(byId("history-board-canvas"), snapshot);
+  byId("history-board-empty").hidden = Boolean(snapshot);
+  byId("history-board-round").textContent = snapshot ? `第 ${snapshot.round} / ${snapshot.max_rounds} 轮` : "第 -- 轮";
+  const summary = trace.summary || {};
+  byId("history-final-scores").textContent = (summary.scores || snapshot?.scores || []).map((value) => formatNumber(value, 1)).join(" / ") || "--";
+  byId("history-trace-coverage").textContent = summary.moves === undefined ? `${trace.captured_moves} 步` : `${trace.captured_moves} / ${summary.moves} 步`;
+  byId("history-duration").textContent = summary.duration_seconds === undefined ? "--" : formatDuration(Number(summary.duration_seconds));
+  byId("history-ruleset").textContent = snapshot?.ruleset || "--";
+  byId("history-action-code").textContent = step.action === null || step.action === undefined ? "--" : String(step.action);
+  byId("history-action-label").textContent = step.action_label || "状态快照";
+  byId("history-action-player").textContent = step.player === null || step.player === undefined ? "P--" : `P${step.player}`;
+  byId("history-step-slider").max = String(Math.max(0, steps.length - 1));
+  byId("history-step-slider").value = String(state.history.step);
+  byId("history-step-label").textContent = `${step.move} / ${Math.max(0, steps.length - 1)}`;
+  const previous = steps[state.history.step - 1]?.state;
+  byId("history-delta").textContent = historyDelta(previous, snapshot, step);
+  renderPlayerRows("history-players-table", snapshot, "history-active-player");
+  const checks = auditHistoryTrace(trace);
+  const failed = checks.some((check) => check.status === "fail");
+  const warned = checks.some((check) => check.status === "warn");
+  const badge = byId("history-audit-badge");
+  badge.className = `health-badge ${failed ? "failed" : warned ? "warning" : "connected"}`;
+  badge.textContent = failed ? "发现异常" : warned ? "需补录" : "通过";
+  byId("history-check-list").innerHTML = checks.map((check) => `<li class="${check.status}"><span>${escapeHtml(check.title)}</span><small>${escapeHtml(check.detail)}</small></li>`).join("");
+  byId("history-move-count").textContent = `${Math.max(0, steps.length - 1)} 步`;
+  byId("history-action-table").innerHTML = steps.map((item, index) => {
+    const itemState = item.state || {};
+    const scores = (itemState.scores || []).map((value) => formatNumber(value, 1)).join(" / ");
+    return `<tr data-step="${index}" class="${index === state.history.step ? "current-step" : ""}">
+      <td>${formatNumber(item.move)}</td>
+      <td>${formatNumber(itemState.round)}</td>
+      <td>${item.player === null || item.player === undefined ? "--" : `P${item.player}`}</td>
+      <td>${escapeHtml(item.action_label || "状态快照")}</td>
+      <td class="mono">${item.action === null || item.action === undefined ? "--" : item.action}</td>
+      <td class="mono">${scores || "--"}</td>
+    </tr>`;
+  }).join("");
+}
+
 function latestState() {
   const event = [...state.events].reverse().find((item) => payload(item).state);
   return payload(event).state || null;
@@ -316,11 +589,15 @@ function renderSelfPlay() {
 }
 
 function renderBoard(snapshot) {
-  const canvas = byId("board-canvas");
-  const { context, width, height } = setupCanvas(canvas);
-  context.clearRect(0, 0, width, height);
   byId("board-empty").hidden = Boolean(snapshot);
   byId("board-round").textContent = snapshot ? `第 ${snapshot.round} / ${snapshot.max_rounds} 轮` : "第 -- 轮";
+  drawBoard(byId("board-canvas"), snapshot);
+}
+
+function drawBoard(canvas, snapshot) {
+  if (!canvas) return;
+  const { context, width, height } = setupCanvas(canvas);
+  context.clearRect(0, 0, width, height);
   if (!snapshot || !snapshot.planets?.length) return;
 
   const points = snapshot.planets.map((planet) => ({
@@ -431,12 +708,21 @@ function drawBuilding(context, x, y, building, color) {
 }
 
 function renderPlayers(snapshot) {
-  const players = snapshot?.players || [];
-  const scores = snapshot?.scores || [];
   byId("active-player-note").textContent = snapshot?.current_player === null || snapshot?.current_player === undefined
     ? "对局已结束"
     : `当前行动 P${snapshot.current_player}`;
-  byId("players-table").innerHTML = players.length
+  renderPlayerRows("players-table", snapshot);
+}
+
+function renderPlayerRows(tableId, snapshot, noteId = null) {
+  const players = snapshot?.players || [];
+  const scores = snapshot?.scores || [];
+  if (noteId) {
+    byId(noteId).textContent = snapshot?.current_player === null || snapshot?.current_player === undefined
+      ? "对局已结束"
+      : `当前行动 P${snapshot.current_player}`;
+  }
+  byId(tableId).innerHTML = players.length
     ? players.map((player) => `<tr class="${player.id === snapshot.current_player ? "active-row" : ""}">
         <td><span class="player-label"><i class="player-color p${player.id}"></i>P${player.id}${player.faction ? ` · ${escapeHtml(player.faction)}` : ""}</span></td>
         <td>${formatNumber(scores[player.id], 1)}</td>
@@ -445,7 +731,7 @@ function renderPlayers(snapshot) {
         <td>${formatNumber(player.knowledge)}</td>
         <td>${formatNumber(player.qic)}</td>
         <td class="mono">${player.power ? player.power.join(" / ") : "--"}</td>
-        <td class="mono">${player.tracks.map((value) => formatNumber(value)).join(" · ")}</td>
+        <td class="mono">${(player.tracks || []).map((value) => formatNumber(value)).join(" · ") || "--"}</td>
         <td>${formatNumber(player.federations)}</td>
         <td>${player.passed ? "已过轮" : "行动中"}</td>
       </tr>`).join("")
@@ -542,8 +828,47 @@ function eventSummary(event) {
   return PHASE_LABELS[event.type] || "";
 }
 
+function setHistoryStep(step) {
+  const trace = state.history.trace;
+  if (!trace?.steps?.length) return;
+  state.history.step = Math.max(0, Math.min(Number(step), trace.steps.length - 1));
+  renderHistory();
+}
+
+function stopHistoryPlayback() {
+  if (state.history.timer) window.clearInterval(state.history.timer);
+  state.history.timer = null;
+  state.history.playing = false;
+  byId("history-play").textContent = "▶";
+  byId("history-play").title = "播放";
+  byId("history-play").setAttribute("aria-label", "播放");
+}
+
+function toggleHistoryPlayback() {
+  if (state.history.playing) {
+    stopHistoryPlayback();
+    return;
+  }
+  const trace = state.history.trace;
+  if (!trace?.steps?.length) return;
+  if (state.history.step >= trace.steps.length - 1) state.history.step = 0;
+  state.history.playing = true;
+  byId("history-play").textContent = "Ⅱ";
+  byId("history-play").title = "暂停";
+  byId("history-play").setAttribute("aria-label", "暂停");
+  state.history.timer = window.setInterval(() => {
+    if (state.history.step >= trace.steps.length - 1) {
+      stopHistoryPlayback();
+      return;
+    }
+    state.history.step += 1;
+    renderHistory();
+  }, 650);
+  renderHistory();
+}
+
 function selectView(name) {
-  const selected = ["overview", "selfplay", "diagnostics"].includes(name) ? name : "overview";
+  const selected = ["overview", "selfplay", "history", "diagnostics"].includes(name) ? name : "overview";
   document.querySelectorAll(".view").forEach((view) => {
     const active = view.id === selected;
     view.classList.toggle("active", active);
@@ -558,6 +883,7 @@ function selectView(name) {
   requestAnimationFrame(() => {
     renderLossChart();
     renderBoard(latestState());
+    renderHistory();
   });
 }
 
@@ -569,9 +895,44 @@ byId("live-toggle").addEventListener("change", (event) => {
   if (state.live) pollEvents(true);
 });
 byId("refresh-button").addEventListener("click", () => pollEvents(true));
+byId("history-run-select").addEventListener("change", async (event) => {
+  stopHistoryPlayback();
+  state.history.runId = event.target.value || null;
+  const iterations = historyRun()?.iterations || [];
+  state.history.iteration = iterations.at(-1)?.iteration ?? null;
+  state.history.game = iterations.at(-1)?.games?.at(-1)?.game ?? null;
+  state.history.trace = null;
+  await loadHistoryGame(true);
+});
+byId("history-iteration-select").addEventListener("change", async (event) => {
+  stopHistoryPlayback();
+  state.history.iteration = Number(event.target.value);
+  const games = historyIteration()?.games || [];
+  state.history.game = games.at(-1)?.game ?? null;
+  state.history.trace = null;
+  await loadHistoryGame(true);
+});
+byId("history-game-select").addEventListener("change", async (event) => {
+  stopHistoryPlayback();
+  state.history.game = Number(event.target.value);
+  state.history.trace = null;
+  await loadHistoryGame(true);
+});
+byId("history-step-slider").addEventListener("input", (event) => setHistoryStep(event.target.value));
+byId("history-previous").addEventListener("click", () => setHistoryStep(state.history.step - 1));
+byId("history-next").addEventListener("click", () => setHistoryStep(state.history.step + 1));
+byId("history-play").addEventListener("click", toggleHistoryPlayback);
+byId("history-action-table").addEventListener("click", (event) => {
+  const row = event.target.closest("tr[data-step]");
+  if (row) {
+    stopHistoryPlayback();
+    setHistoryStep(row.dataset.step);
+  }
+});
 window.addEventListener("resize", () => {
   renderLossChart();
   renderBoard(latestState());
+  renderHistory();
 });
 
 selectView(window.location.hash.replace("#", "") || "overview");

@@ -122,9 +122,8 @@ def command_train(args: argparse.Namespace) -> None:
                 )
 
                 def observe_move(move: int, before, action: int, after, search_result) -> None:
-                    if move != 1 and move % args.metrics_move_interval != 0:
-                        return
-                    top_actions = np.argsort(search_result.policy)[-3:][::-1]
+                    search_sampled = move == 1 or move % args.metrics_move_interval == 0
+                    top_actions = np.argsort(search_result.policy)[-3:][::-1] if search_sampled else ()
                     telemetry.emit(
                         "self_play_step",
                         iteration=iteration,
@@ -133,7 +132,9 @@ def command_train(args: argparse.Namespace) -> None:
                         player=before.current_player,
                         action=action,
                         action_label=before.describe_action(action),
-                        root_value=search_result.root_value,
+                        legal_actions=len(before.legal_actions()),
+                        search_sampled=search_sampled,
+                        root_value=search_result.root_value if search_sampled else None,
                         candidates=[
                             {
                                 "action": int(candidate),
@@ -142,7 +143,7 @@ def command_train(args: argparse.Namespace) -> None:
                                 "visits": int(search_result.visits[candidate]),
                             }
                             for candidate in top_actions
-                            if search_result.policy[candidate] > 0
+                            if search_sampled and search_result.policy[candidate] > 0
                         ],
                         state=after.snapshot(),
                     )
@@ -346,7 +347,12 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--device", default="auto")
     train.add_argument("--output", default="runs/gaia-standard.pt")
     train.add_argument("--metrics", default="runs/metrics.jsonl")
-    train.add_argument("--metrics-move-interval", type=int, default=4)
+    train.add_argument(
+        "--metrics-move-interval",
+        type=int,
+        default=4,
+        help="sample search candidates every N moves; rule states are recorded every move",
+    )
     _add_ruleset_argument(train)
     _add_search_arguments(train)
     train.set_defaults(handler=command_train)

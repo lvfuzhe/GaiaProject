@@ -33,6 +33,7 @@
   <nav class="tabs" aria-label="监控视图">
     <button class="tab active" type="button" data-view="overview" aria-selected="true">概览</button>
     <button class="tab" type="button" data-view="selfplay" aria-selected="false">自博弈</button>
+    <button class="tab" type="button" data-view="history" aria-selected="false">历史回放</button>
     <button class="tab" type="button" data-view="diagnostics" aria-selected="false">诊断</button>
   </nav>
 
@@ -218,6 +219,127 @@
           </table>
         </div>
       </section>
+    </section>
+
+    <section id="history" class="view" aria-labelledby="history-title" hidden>
+      <h2 id="history-title" class="sr-only">历史对局回放</h2>
+      <section class="panel history-toolbar">
+        <div>
+          <p class="eyebrow">Archive</p>
+          <h3>迭代与对局</h3>
+        </div>
+        <div class="history-selectors">
+          <label><span>训练运行</span><select id="history-run-select" aria-label="训练运行"></select></label>
+          <label><span>迭代</span><select id="history-iteration-select" aria-label="迭代"></select></label>
+          <label><span>对局</span><select id="history-game-select" aria-label="对局"></select></label>
+        </div>
+        <div class="history-result">
+          <span>终局分数</span>
+          <strong id="history-final-scores" class="mono">--</strong>
+        </div>
+      </section>
+
+      <div id="history-empty" class="history-empty panel content-band">暂无可回放的自博弈对局</div>
+
+      <div id="history-content" hidden>
+        <div class="history-grid content-band">
+          <section class="panel board-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Recorded state</p>
+                <h3>规则状态</h3>
+              </div>
+              <span id="history-board-round" class="compact-value">第 -- 轮</span>
+            </div>
+            <div class="board-frame">
+              <canvas id="history-board-canvas" aria-label="历史规则状态棋盘"></canvas>
+              <div id="history-board-empty" class="canvas-empty">等待历史快照</div>
+            </div>
+            <div class="terrain-legend" aria-label="星球图例">
+              <span><i class="terrain t0"></i>地球型</span>
+              <span><i class="terrain t1"></i>沙漠</span>
+              <span><i class="terrain t2"></i>沼泽</span>
+              <span><i class="terrain t3"></i>火山</span>
+              <span><i class="terrain t4"></i>氧化</span>
+              <span><i class="terrain t5"></i>钛金</span>
+              <span><i class="terrain t6"></i>冰冻</span>
+              <span><i class="terrain t7"></i>跨维</span>
+              <span><i class="terrain t8"></i>盖亚</span>
+            </div>
+          </section>
+
+          <section class="panel history-audit-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Rule audit</p>
+                <h3>整局检查</h3>
+              </div>
+              <span id="history-audit-badge" class="health-badge waiting">等待</span>
+            </div>
+            <dl class="history-stats">
+              <div><dt>轨迹覆盖</dt><dd id="history-trace-coverage">--</dd></div>
+              <div><dt>对局耗时</dt><dd id="history-duration">--</dd></div>
+              <div><dt>规则版本</dt><dd id="history-ruleset" class="mono">--</dd></div>
+              <div><dt>当前动作</dt><dd id="history-action-code" class="mono">--</dd></div>
+            </dl>
+            <ul id="history-check-list" class="check-list">
+              <li class="waiting"><span>等待轨迹</span><small>--</small></li>
+            </ul>
+          </section>
+        </div>
+
+        <section class="panel history-playback content-band">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Timeline</p>
+              <h3 id="history-action-label">初始状态</h3>
+            </div>
+            <span id="history-action-player" class="player-chip">P--</span>
+          </div>
+          <div class="playback-row">
+            <div class="playback-buttons">
+              <button id="history-previous" class="icon-button" type="button" title="上一步" aria-label="上一步">‹</button>
+              <button id="history-play" class="icon-button" type="button" title="播放" aria-label="播放">▶</button>
+              <button id="history-next" class="icon-button" type="button" title="下一步" aria-label="下一步">›</button>
+            </div>
+            <input id="history-step-slider" type="range" min="0" max="0" value="0" aria-label="行动进度">
+            <strong id="history-step-label" class="mono">0 / 0</strong>
+          </div>
+          <div id="history-delta" class="history-delta">等待状态变化</div>
+        </section>
+
+        <section class="panel content-band players-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Players at step</p>
+              <h3>玩家状态</h3>
+            </div>
+            <span id="history-active-player" class="muted">当前行动 --</span>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>玩家</th><th>分数</th><th>信用点</th><th>矿石</th><th>知识</th><th>QIC</th><th>能量 I/II/III</th><th>研究轨</th><th>联盟</th><th>状态</th></tr></thead>
+              <tbody id="history-players-table"><tr><td colspan="10" class="empty-cell">暂无玩家状态</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel content-band history-log-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Action ledger</p>
+              <h3>整局动作</h3>
+            </div>
+            <span id="history-move-count" class="muted">0 步</span>
+          </div>
+          <div class="table-scroll history-log-scroll">
+            <table>
+              <thead><tr><th>步</th><th>轮次</th><th>玩家</th><th>动作</th><th>动作编号</th><th>局面分数</th></tr></thead>
+              <tbody id="history-action-table"><tr><td colspan="6" class="empty-cell">暂无动作记录</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
     </section>
 
     <section id="diagnostics" class="view" aria-labelledby="diagnostics-title" hidden>

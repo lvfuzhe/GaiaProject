@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from gaiazero.telemetry import read_events
+from gaiazero.telemetry import build_history_index, read_events, read_game_trace
 
 WEB_ROOT = Path(__file__).with_name("web")
 ASSETS = {
@@ -44,6 +44,12 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             return
         if request.path == "/api/health":
             self._serve_health()
+            return
+        if request.path == "/api/history":
+            self._serve_history()
+            return
+        if request.path == "/api/game":
+            self._serve_game(parse_qs(request.query))
             return
         asset = ASSETS.get(request.path)
         if asset is None:
@@ -85,6 +91,34 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 "modified": stat.st_mtime if stat else None,
             }
         )
+
+    def _serve_history(self) -> None:
+        self._send_json({**build_history_index(self.server.metrics_path), "source": str(self.server.metrics_path)})
+
+    def _serve_game(self, query: dict[str, list[str]]) -> None:
+        run_id = query.get("run_id", [""])[0]
+        try:
+            iteration = int(query.get("iteration", [""])[0])
+            game = int(query.get("game", [""])[0])
+        except ValueError:
+            self._send_json(
+                {"error": "iteration and game must be integers"},
+                HTTPStatus.BAD_REQUEST,
+            )
+            return
+        if not run_id:
+            self._send_json({"error": "run_id is required"}, HTTPStatus.BAD_REQUEST)
+            return
+        trace = read_game_trace(
+            self.server.metrics_path,
+            run_id=run_id,
+            iteration=iteration,
+            game=game,
+        )
+        if trace is None:
+            self._send_json({"error": "game not found"}, HTTPStatus.NOT_FOUND)
+            return
+        self._send_json(trace)
 
     def _send_json(self, payload: dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -138,4 +172,3 @@ def serve_dashboard(
         pass
     finally:
         server.server_close()
-

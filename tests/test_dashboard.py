@@ -6,7 +6,7 @@ from urllib.request import urlopen
 
 from gaiazero.dashboard import create_dashboard_server
 from gaiazero.game import MiniGaiaState
-from gaiazero.telemetry import JsonlTelemetry, read_events
+from gaiazero.telemetry import JsonlTelemetry, build_history_index, read_events, read_game_trace
 
 
 class DashboardTests(unittest.TestCase):
@@ -30,7 +30,15 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(read_events(self.metrics, after=first["sequence"]), [second])
 
     def test_http_api_and_static_dashboard(self) -> None:
-        JsonlTelemetry(self.metrics, run_id="http-test").emit("run_started", config={})
+        telemetry = JsonlTelemetry(self.metrics, run_id="http-test")
+        state = MiniGaiaState.initial(2)
+        telemetry.emit("run_started", config={}, state=state.snapshot())
+        telemetry.emit(
+            "self_play_started",
+            iteration=1,
+            game_in_iteration=1,
+            state=state.snapshot(),
+        )
         server = create_dashboard_server(self.metrics, port=0, quiet=True)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -40,13 +48,79 @@ class DashboardTests(unittest.TestCase):
                 data = json.loads(response.read())
             with urlopen(base, timeout=5) as response:
                 page = response.read().decode("utf-8")
+            with urlopen(f"{base}/api/history", timeout=5) as response:
+                history = json.loads(response.read())
+            with urlopen(
+                f"{base}/api/game?run_id=http-test&iteration=1&game=1",
+                timeout=5,
+            ) as response:
+                game = json.loads(response.read())
             self.assertEqual(data["events"][0]["type"], "run_started")
+            self.assertEqual(history["runs"][0]["iterations"][0]["iteration"], 1)
+            self.assertEqual(game["steps"][0]["move"], 0)
             self.assertIn("GaiaZero", page)
             self.assertIn("loss-chart", page)
         finally:
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
+
+    def test_history_index_and_complete_game_trace(self) -> None:
+        telemetry = JsonlTelemetry(self.metrics, run_id="history-test")
+        state = MiniGaiaState.initial(2)
+        telemetry.emit("run_started", config={"iterations": 1}, state=state.snapshot())
+        telemetry.emit(
+            "self_play_started",
+            iteration=1,
+            game_in_iteration=1,
+            state=state.snapshot(),
+        )
+        actions = []
+        for move in range(1, 3):
+            action = state.legal_actions()[0]
+            next_state = state.apply(action)
+            actions.append(action)
+            telemetry.emit(
+                "self_play_step",
+                iteration=1,
+                game_in_iteration=1,
+                move=move,
+                player=state.current_player,
+                action=action,
+                action_label=state.describe_action(action),
+                legal_actions=len(state.legal_actions()),
+                search_sampled=move == 1,
+                state=next_state.snapshot(),
+            )
+            state = next_state
+        telemetry.emit(
+            "self_play_completed",
+            iteration=1,
+            game_in_iteration=1,
+            moves=2,
+            positions=2,
+            scores=state.final_scores(),
+            returns=[0.0, 0.0],
+            duration_seconds=0.5,
+            state=state.snapshot(),
+        )
+        telemetry.emit("iteration_completed", iteration=1, loss=1.0)
+
+        index = build_history_index(self.metrics)
+        game = index["runs"][0]["iterations"][0]["games"][0]
+        self.assertTrue(game["trace_complete"])
+        self.assertEqual(game["captured_moves"], 2)
+
+        trace = read_game_trace(
+            self.metrics,
+            run_id="history-test",
+            iteration=1,
+            game=1,
+        )
+        self.assertIsNotNone(trace)
+        self.assertTrue(trace["trace_complete"])
+        self.assertEqual([step["move"] for step in trace["steps"]], [0, 1, 2])
+        self.assertEqual([step["action"] for step in trace["steps"][1:]], actions)
 
 
 if __name__ == "__main__":
