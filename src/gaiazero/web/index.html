@@ -32,6 +32,7 @@
 
   <nav class="tabs" aria-label="监控视图">
     <button class="tab active" type="button" data-view="overview" aria-selected="true">概览</button>
+    <button class="tab" type="button" data-view="setup" aria-selected="false">初始设置</button>
     <button class="tab" type="button" data-view="selfplay" aria-selected="false">自博弈</button>
     <button class="tab" type="button" data-view="history" aria-selected="false">历史回放</button>
     <button class="tab" type="button" data-view="diagnostics" aria-selected="false">诊断</button>
@@ -139,6 +140,86 @@
           </table>
         </div>
       </section>
+    </section>
+
+    <section id="setup" class="view" aria-labelledby="setup-title" hidden>
+      <h2 id="setup-title" class="sr-only">初始设置</h2>
+      <div id="setup-empty" class="history-empty panel">当前规则快照没有初始设置数据</div>
+      <div id="setup-content" hidden>
+        <header class="setup-summary">
+          <div>
+            <p class="eyebrow">Game configuration</p>
+            <h2>初始设置</h2>
+          </div>
+          <dl class="setup-summary-values">
+            <div><dt>随机种子</dt><dd id="setup-seed" class="mono">--</dd></div>
+            <div><dt>地图</dt><dd id="setup-map-summary">--</dd></div>
+            <div><dt>首位玩家</dt><dd id="setup-first-player">--</dd></div>
+            <div><dt>规则版本</dt><dd id="setup-ruleset" class="mono">--</dd></div>
+          </dl>
+        </header>
+
+        <div class="setup-map-layout content-band">
+          <section class="setup-section map-assembly">
+            <div class="section-heading">
+              <div><p class="eyebrow">Variable map</p><h3>随机星区地图</h3></div>
+              <span id="setup-map-method" class="muted">--</span>
+            </div>
+            <div class="setup-map-frame">
+              <canvas id="setup-map-canvas" aria-label="随机拼接星区地图"></canvas>
+            </div>
+          </section>
+          <section class="setup-section sector-ledger">
+            <div class="section-heading">
+              <div><p class="eyebrow">Sector assembly</p><h3>板块拼接</h3></div>
+              <span id="setup-sector-count" class="muted">0 块</span>
+            </div>
+            <div class="table-scroll sector-table-scroll">
+              <table>
+                <thead><tr><th>位置</th><th>板块</th><th>旋转</th><th>中心坐标</th></tr></thead>
+                <tbody id="setup-sector-table"><tr><td colspan="4" class="empty-cell">暂无板块</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <section class="setup-section content-band">
+          <div class="section-heading">
+            <div><p class="eyebrow">Faction assignment</p><h3>随机种族</h3></div>
+            <span id="setup-faction-count" class="muted">0 个座位</span>
+          </div>
+          <div id="setup-faction-grid" class="setup-faction-grid"></div>
+        </section>
+
+        <section class="setup-section content-band">
+          <div class="section-heading">
+            <div><p class="eyebrow">Scoring board</p><h3>计分板块</h3></div>
+            <span class="muted">6 回合 · 2 终局</span>
+          </div>
+          <div id="setup-round-track" class="round-tile-track"></div>
+          <div id="setup-final-grid" class="final-tile-grid"></div>
+        </section>
+
+        <section class="setup-section content-band">
+          <div class="section-heading">
+            <div><p class="eyebrow">Research board</p><h3>科研与科技</h3></div>
+            <span id="setup-federation-tile" class="federation-tile">改造轨顶 --</span>
+          </div>
+          <div id="setup-research-grid" class="research-setup-grid"></div>
+          <div>
+            <p class="subsection-label">通用基础科技</p>
+            <div id="setup-free-tech" class="free-tech-grid"></div>
+          </div>
+        </section>
+
+        <section class="setup-section content-band">
+          <div class="section-heading">
+            <div><p class="eyebrow">Round boosters</p><h3>随机助推板块</h3></div>
+            <span id="setup-booster-count" class="muted">0 块</span>
+          </div>
+          <div id="setup-booster-grid" class="booster-setup-grid"></div>
+        </section>
+      </div>
     </section>
 
     <section id="selfplay" class="view" aria-labelledby="selfplay-title" hidden>

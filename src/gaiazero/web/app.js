@@ -6,6 +6,60 @@ const TERRAIN_COLORS = [
   "#4d78b8", "#d7a93e", "#56a48e", "#d86b57", "#ba6f47",
   "#8b8f96", "#b7d8e7", "#7356a8", "#5bbf79"
 ];
+const SECTOR_FILLS = ["#eef4f1", "#f4f0e8", "#eef2f7", "#f5eeee", "#eff3ea"];
+const TERRAIN_LABELS = ["地球型", "沙漠", "沼泽", "火山", "氧化", "钛金", "冰冻", "跨维", "盖亚"];
+const TRACK_LABELS = {
+  terraforming: "地形改造",
+  navigation: "航行",
+  artificial_intelligence: "人工智能",
+  gaia_project: "盖亚计划",
+  economy: "经济",
+  science: "科学"
+};
+const BOOSTER_NAMES = [
+  "矿石与矿场计分", "知识与贸易站计分", "信用点与能量", "信用点",
+  "矿石与能量", "知识与能量", "信用点与能量", "航行行动", "改造行动", "盖亚行动"
+];
+const ADVANCED_TECH_NAMES = [
+  "联邦得分", "科研推进得分", "矿场得分", "贸易站得分", "行星研究院得分",
+  "学院得分", "盖亚星球得分", "星球类型得分", "星区得分", "卫星得分",
+  "能量行动", "知识行动", "矿石行动", "信用点行动", "Q.I.C. 行动"
+];
+const FEDERATION_NAMES = [
+  "6 VP + 2 知识", "7 VP + 2 矿石", "8 VP + 1 Q.I.C.",
+  "7 VP + 能量", "信用点 + VP", "12 VP"
+];
+const SETUP_LABELS = {
+  "mine-2a": "建造矿场", "mine-2b": "建造矿场",
+  "trading-3a": "建造贸易站", "trading-3b": "建造贸易站",
+  "terraform-2a": "地形改造步数", "terraform-2b": "地形改造步数",
+  "gaia-3a": "殖民盖亚星球", "gaia-3b": "殖民盖亚星球",
+  "research-2": "推进科研", "big-5": "建造行星研究院或学院",
+  "federation-structures": "联邦内建筑", structures: "建筑总数",
+  "planet-types": "殖民星球类型", "gaia-planets": "殖民盖亚星球",
+  sectors: "殖民星区", satellites: "放置卫星",
+  "ore-income": "矿石收入", "knowledge-income": "知识收入",
+  "credits-income": "信用点收入", "gaia-vp": "盖亚星球得分",
+  "power-income": "能量收入", qic: "立即获得 Q.I.C.",
+  "mine-vp": "矿场得分", "federation-vp": "联邦得分",
+  "planet-type-vp": "星球类型得分"
+};
+const FACTION_ABILITIES = {
+  Terrans: "盖亚区能量回到能量碗 II",
+  Lantids: "可在对手已殖民星球共存",
+  Xenos: "额外起始矿场，联邦强度需求为 6",
+  Gleens: "殖民盖亚星球时以矿石替代 Q.I.C.",
+  Taklons: "脑石强化能量循环",
+  Ambas: "行星研究院可与矿场交换",
+  "Hadsch Hallas": "信用点可执行扩展自由行动",
+  Ivits: "以行星研究院作为起始建筑",
+  Geodens: "殖民新星球类型时获得知识",
+  "Bal T'aks": "盖亚塑形者可转换为 Q.I.C.",
+  Firaks: "可降级研究所并推进科研",
+  Bescods: "最低等级科研轨可同步推进",
+  Nevlas: "能量碗 III 的能量可双倍计算",
+  Itars: "盖亚区能量可用于获得科技"
+};
 const PHASE_LABELS = {
   run_started: "初始化完成",
   self_play_started: "正在生成自博弈",
@@ -115,6 +169,7 @@ function render() {
   renderProgress();
   renderLossChart();
   renderIterations();
+  renderSetup(latestState());
   renderSelfPlay();
   renderHistory();
   renderDiagnostics();
@@ -317,6 +372,84 @@ function renderIterations() {
       </tr>`;
     }).join("")
     : '<tr><td colspan="6" class="empty-cell">暂无迭代结果</td></tr>';
+}
+
+function setupLabel(tile) {
+  return SETUP_LABELS[tile?.key] || tile?.label || "--";
+}
+
+function renderSetup(snapshot) {
+  const content = byId("setup-content");
+  const empty = byId("setup-empty");
+  if (!content || !empty) return;
+  const setup = snapshot?.setup;
+  const available = Boolean(setup?.map?.sectors?.length);
+  empty.hidden = available;
+  content.hidden = !available;
+  if (!available) return;
+
+  const map = setup.map;
+  byId("setup-seed").textContent = setup.seed;
+  byId("setup-map-summary").textContent = `${map.sector_count} 个板块 · ${snapshot.planets.length} 个星球`;
+  byId("setup-first-player").textContent = `P${snapshot.first_player}`;
+  byId("setup-ruleset").textContent = snapshot.ruleset || "--";
+  byId("setup-map-method").textContent = "进阶随机拼接 · 同色星球不相邻";
+  byId("setup-sector-count").textContent = `${map.sector_count} 块`;
+  drawBoard(byId("setup-map-canvas"), snapshot, { showSectors: true });
+  byId("setup-sector-table").innerHTML = map.sectors.map((sector) => `<tr>
+    <td>${sector.position + 1}</td>
+    <td class="mono">S${String(sector.tile).padStart(2, "0")}</td>
+    <td>${sector.rotation}°</td>
+    <td class="mono">${sector.q}, ${sector.r}</td>
+  </tr>`).join("");
+
+  byId("setup-faction-count").textContent = `${setup.factions.length} 个座位`;
+  byId("setup-faction-grid").innerHTML = setup.factions.map((faction) => `<article class="faction-setup-item">
+    <div class="faction-setup-head">
+      <div><span class="faction-seat">P${faction.player}${faction.player === snapshot.first_player ? " · 首位" : ""}</span><strong>${escapeHtml(faction.name)}</strong></div>
+      <i class="home-swatch terrain-${faction.home_terrain}"></i>
+    </div>
+    <div class="faction-setup-meta">
+      <span class="setup-tag">双面板 ${faction.board}</span>
+      <span class="setup-tag">${TERRAIN_LABELS[faction.home_terrain]}</span>
+      <span class="setup-tag">${TRACK_LABELS[faction.start_track] || faction.start_track} +1</span>
+      <span class="setup-tag">起始 ${faction.starting_planets.map((planet) => `#${planet}`).join(" · ")}</span>
+    </div>
+    <small>${escapeHtml(FACTION_ABILITIES[faction.name] || faction.ability)}</small>
+  </article>`).join("");
+
+  byId("setup-round-track").innerHTML = setup.round_scoring.map((tile) => `<article class="round-score-tile ${snapshot.round === tile.round && !snapshot.terminal ? "current" : ""}">
+    <span>第 ${tile.round} 回合</span>
+    <strong>${escapeHtml(setupLabel(tile))}</strong>
+    <small>+${tile.points} VP</small>
+  </article>`).join("");
+  byId("setup-final-grid").innerHTML = setup.final_scoring.map((tile, index) => `<article class="final-score-tile">
+    <div><span>终局目标 ${index + 1}</span><strong>${escapeHtml(setupLabel(tile))}</strong></div>
+    <span>18 · 12 · 6 VP</span>
+  </article>`).join("");
+
+  const standardByTrack = new Map(setup.standard_tech.filter((tile) => tile.track).map((tile) => [tile.track, tile]));
+  const advancedByTrack = new Map(setup.advanced_tech.map((tile) => [tile.track, tile]));
+  byId("setup-research-grid").innerHTML = Object.entries(TRACK_LABELS).map(([track, label]) => {
+    const standard = standardByTrack.get(track);
+    const advanced = advancedByTrack.get(track);
+    return `<article class="research-setup-column">
+      <strong>${label}</strong>
+      <div class="tech-setup-tile advanced"><span>高级科技 #${Number(advanced?.id) + 1}</span><strong>${escapeHtml(ADVANCED_TECH_NAMES[advanced?.id] || advanced?.label || "--")}</strong></div>
+      <div class="tech-setup-tile standard"><span>基础科技 #${Number(standard?.id) + 1}</span><strong>${escapeHtml(setupLabel(standard))}</strong></div>
+    </article>`;
+  }).join("");
+  byId("setup-free-tech").innerHTML = setup.standard_tech.filter((tile) => !tile.track).map((tile) => `<article class="tech-setup-tile standard">
+    <span>通用槽位 ${tile.space - 5}</span><strong>${escapeHtml(setupLabel(tile))}</strong>
+  </article>`).join("");
+  const federation = setup.terraforming_federation;
+  byId("setup-federation-tile").textContent = `改造轨顶 · ${FEDERATION_NAMES[federation.id] || federation.label}`;
+
+  byId("setup-booster-count").textContent = `${setup.boosters.length} 块`;
+  byId("setup-booster-grid").innerHTML = setup.boosters.map((booster) => `<article class="booster-setup-tile ${booster.owner >= 0 ? "assigned" : ""}">
+    <span>助推 ${booster.id + 1} · ${booster.owner >= 0 ? `P${booster.owner}` : "公共"}</span>
+    <strong>${escapeHtml(BOOSTER_NAMES[booster.id] || booster.label)}</strong>
+  </article>`).join("");
 }
 
 function historyRuns() {
@@ -594,11 +727,12 @@ function renderBoard(snapshot) {
   drawBoard(byId("board-canvas"), snapshot);
 }
 
-function drawBoard(canvas, snapshot) {
+function drawBoard(canvas, snapshot, options = {}) {
   if (!canvas) return;
   const { context, width, height } = setupCanvas(canvas);
   context.clearRect(0, 0, width, height);
   if (!snapshot || !snapshot.planets?.length) return;
+  const showSectors = options.showSectors ?? Boolean(snapshot.setup?.map?.sectors?.length);
 
   const points = snapshot.planets.map((planet) => ({
     ...planet,
@@ -609,26 +743,51 @@ function drawBoard(canvas, snapshot) {
   const maxX = Math.max(...points.map((point) => point.rawX));
   const minY = Math.min(...points.map((point) => point.rawY));
   const maxY = Math.max(...points.map((point) => point.rawY));
-  const scale = Math.min((width - 70) / Math.max(1, maxX - minX), (height - 70) / Math.max(1, maxY - minY));
-  const size = Math.max(17, Math.min(31, scale * 0.47));
+  const compactMap = showSectors && width < 500;
+  const padding = compactMap ? 70 : (showSectors ? 145 : 70);
+  const scale = Math.min((width - padding) / Math.max(1, maxX - minX), (height - padding) / Math.max(1, maxY - minY));
+  const size = Math.max(compactMap ? 9 : 17, Math.min(31, scale * 0.47));
   const offsetX = (width - (maxX - minX) * scale) / 2 - minX * scale;
   const offsetY = (height - (maxY - minY) * scale) / 2 - minY * scale;
+
+  if (showSectors) {
+    const sectors = snapshot.setup?.map?.sectors || [];
+    const sectorSize = Math.max(size * 3.65, scale * 1.9);
+    for (const sector of sectors) {
+      const rawX = Math.sqrt(3) * (sector.q + sector.r / 2);
+      const rawY = 1.5 * sector.r;
+      const x = offsetX + rawX * scale;
+      const y = offsetY + rawY * scale;
+      drawSectorHex(context, x, y, sectorSize, SECTOR_FILLS[sector.position % SECTOR_FILLS.length]);
+      context.fillStyle = "#7a847e";
+      context.font = `700 ${compactMap ? 7 : 9}px Segoe UI`;
+      context.textAlign = "center";
+      context.fillText(`S${String(sector.tile).padStart(2, "0")} · ${sector.rotation}°`, x, y - sectorSize * 0.68);
+    }
+  }
 
   for (const planet of points) {
     const x = offsetX + planet.rawX * scale;
     const y = offsetY + planet.rawY * scale;
     drawHex(context, x, y, size, TERRAIN_COLORS[planet.terrain] || "#c7cec8");
     context.fillStyle = "rgba(255,255,255,0.86)";
-    context.font = "700 9px Segoe UI";
+    context.font = `700 ${Math.max(7, Math.min(9, size * 0.55))}px Segoe UI`;
     context.textAlign = "center";
     context.fillText(String(planet.id), x, y + 3);
     if (planet.owner >= 0) {
       context.strokeStyle = PLAYER_COLORS[planet.owner] || "#17211d";
-      context.lineWidth = 4;
+      context.lineWidth = compactMap ? 2.5 : 4;
       context.beginPath();
-      context.arc(x, y, size + 4, 0, Math.PI * 2);
+      context.arc(x, y, size + (compactMap ? 2 : 4), 0, Math.PI * 2);
       context.stroke();
-      drawBuilding(context, x, y, planet.building, PLAYER_COLORS[planet.owner]);
+      drawBuilding(
+        context,
+        x,
+        y,
+        planet.building,
+        PLAYER_COLORS[planet.owner],
+        compactMap ? 0.68 : 1,
+      );
     }
     if (planet.gaiaformer >= 0 && planet.owner < 0) {
       context.strokeStyle = PLAYER_COLORS[planet.gaiaformer] || "#17211d";
@@ -654,6 +813,24 @@ function drawBoard(canvas, snapshot) {
   }
 }
 
+function drawSectorHex(context, x, y, size, fill) {
+  context.beginPath();
+  for (let side = 0; side < 6; side += 1) {
+    const angle = Math.PI / 180 * (60 * side - 30);
+    const px = x + size * Math.cos(angle);
+    const py = y + size * Math.sin(angle);
+    if (side === 0) context.moveTo(px, py); else context.lineTo(px, py);
+  }
+  context.closePath();
+  context.fillStyle = fill;
+  context.fill();
+  context.strokeStyle = "#c5cec7";
+  context.lineWidth = 1.2;
+  context.setLineDash([5, 4]);
+  context.stroke();
+  context.setLineDash([]);
+}
+
 function drawHex(context, x, y, size, fill) {
   context.beginPath();
   for (let side = 0; side < 6; side += 1) {
@@ -670,40 +847,40 @@ function drawHex(context, x, y, size, fill) {
   context.stroke();
 }
 
-function drawBuilding(context, x, y, building, color) {
+function drawBuilding(context, x, y, building, color, scale = 1) {
   context.fillStyle = color;
   context.strokeStyle = "#ffffff";
-  context.lineWidth = 1.5;
+  context.lineWidth = Math.max(1, 1.5 * scale);
   if (building === "mine") {
     context.beginPath();
-    context.arc(x, y, 6, 0, Math.PI * 2);
+    context.arc(x, y, 6 * scale, 0, Math.PI * 2);
     context.fill();
     context.stroke();
   } else if (building === "trading_station") {
-    context.fillRect(x - 7, y - 7, 14, 14);
-    context.strokeRect(x - 7, y - 7, 14, 14);
+    context.fillRect(x - 7 * scale, y - 7 * scale, 14 * scale, 14 * scale);
+    context.strokeRect(x - 7 * scale, y - 7 * scale, 14 * scale, 14 * scale);
   } else if (building === "research_lab") {
     context.beginPath();
-    context.moveTo(x, y - 9);
-    context.lineTo(x + 8, y + 7);
-    context.lineTo(x - 8, y + 7);
+    context.moveTo(x, y - 9 * scale);
+    context.lineTo(x + 8 * scale, y + 7 * scale);
+    context.lineTo(x - 8 * scale, y + 7 * scale);
     context.closePath();
     context.fill();
     context.stroke();
   } else if (building === "planetary_institute") {
     context.beginPath();
-    context.moveTo(x, y - 10);
-    context.lineTo(x + 10, y);
-    context.lineTo(x, y + 10);
-    context.lineTo(x - 10, y);
+    context.moveTo(x, y - 10 * scale);
+    context.lineTo(x + 10 * scale, y);
+    context.lineTo(x, y + 10 * scale);
+    context.lineTo(x - 10 * scale, y);
     context.closePath();
     context.fill();
     context.stroke();
   } else if (building === "academy") {
-    context.fillRect(x - 9, y - 6, 18, 12);
-    context.fillRect(x - 5, y - 10, 10, 20);
-    context.strokeRect(x - 9, y - 6, 18, 12);
-    context.strokeRect(x - 5, y - 10, 10, 20);
+    context.fillRect(x - 9 * scale, y - 6 * scale, 18 * scale, 12 * scale);
+    context.fillRect(x - 5 * scale, y - 10 * scale, 10 * scale, 20 * scale);
+    context.strokeRect(x - 9 * scale, y - 6 * scale, 18 * scale, 12 * scale);
+    context.strokeRect(x - 5 * scale, y - 10 * scale, 10 * scale, 20 * scale);
   }
 }
 
@@ -868,7 +1045,7 @@ function toggleHistoryPlayback() {
 }
 
 function selectView(name) {
-  const selected = ["overview", "selfplay", "history", "diagnostics"].includes(name) ? name : "overview";
+  const selected = ["overview", "setup", "selfplay", "history", "diagnostics"].includes(name) ? name : "overview";
   document.querySelectorAll(".view").forEach((view) => {
     const active = view.id === selected;
     view.classList.toggle("active", active);
@@ -882,6 +1059,7 @@ function selectView(name) {
   window.location.hash = selected;
   requestAnimationFrame(() => {
     renderLossChart();
+    renderSetup(latestState());
     renderBoard(latestState());
     renderHistory();
   });
@@ -931,6 +1109,7 @@ byId("history-action-table").addEventListener("click", (event) => {
 });
 window.addEventListener("resize", () => {
   renderLossChart();
+  renderSetup(latestState());
   renderBoard(latestState());
   renderHistory();
 });
