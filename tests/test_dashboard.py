@@ -48,6 +48,11 @@ class DashboardTests(unittest.TestCase):
                 data = json.loads(response.read())
             with urlopen(base, timeout=5) as response:
                 page = response.read().decode("utf-8")
+            with urlopen(f"{base}/assets/sectors/sector-01-solid.gif", timeout=5) as response:
+                sector_image = response.read()
+                sector_content_type = response.headers.get_content_type()
+            with urlopen(f"{base}/assets/sectors/sector-05-outlined.gif", timeout=5) as response:
+                outlined_sector_image = response.read()
             with urlopen(f"{base}/api/history", timeout=5) as response:
                 history = json.loads(response.read())
             with urlopen(
@@ -60,6 +65,9 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(game["steps"][0]["move"], 0)
             self.assertIn("GaiaZero", page)
             self.assertIn("loss-chart", page)
+            self.assertEqual(sector_content_type, "image/gif")
+            self.assertTrue(sector_image.startswith(b"GIF"))
+            self.assertTrue(outlined_sector_image.startswith(b"GIF"))
         finally:
             server.shutdown()
             server.server_close()

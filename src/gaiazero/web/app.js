@@ -73,6 +73,8 @@ const PHASE_LABELS = {
   run_completed: "训练已完成",
   run_failed: "训练失败"
 };
+const sectorArtworkCache = new Map();
+let sectorArtworkRenderQueued = false;
 
 const state = {
   events: [],
@@ -305,6 +307,40 @@ function setupCanvas(canvas) {
   return { context, width, height };
 }
 
+function sectorArtworkPath(tile, side) {
+  const number = String(tile).padStart(2, "0");
+  return `/assets/sectors/sector-${number}-${side}.gif`;
+}
+
+function queueSectorArtworkRender() {
+  if (sectorArtworkRenderQueued) return;
+  sectorArtworkRenderQueued = true;
+  requestAnimationFrame(() => {
+    sectorArtworkRenderQueued = false;
+    renderSetup(latestState());
+  });
+}
+
+function getSectorArtwork(tile, side) {
+  const key = `${tile}-${side}`;
+  if (!sectorArtworkCache.has(key)) {
+    const image = new Image();
+    const entry = { image, loaded: false, failed: false };
+    sectorArtworkCache.set(key, entry);
+    image.addEventListener("load", () => {
+      entry.loaded = true;
+      queueSectorArtworkRender();
+    }, { once: true });
+    image.addEventListener("error", () => {
+      entry.failed = true;
+      queueSectorArtworkRender();
+    }, { once: true });
+    image.src = sectorArtworkPath(tile, side);
+  }
+  const entry = sectorArtworkCache.get(key);
+  return entry.loaded && !entry.failed ? entry.image : null;
+}
+
 function renderLossChart() {
   const canvas = byId("loss-chart");
   const { context, width, height } = setupCanvas(canvas);
@@ -395,7 +431,7 @@ function renderSetup(snapshot) {
   byId("setup-ruleset").textContent = snapshot.ruleset || "--";
   byId("setup-map-method").textContent = "进阶随机拼接 · 同色星球不相邻";
   byId("setup-sector-count").textContent = `${map.sector_count} 块`;
-  drawBoard(byId("setup-map-canvas"), snapshot, { showSectors: true });
+  drawBoard(byId("setup-map-canvas"), snapshot, { showSectors: true, sectorArtwork: true });
   byId("setup-sector-table").innerHTML = map.sectors.map((sector) => `<tr>
     <td>${sector.position + 1}</td>
     <td class="mono">S${String(sector.tile).padStart(2, "0")}</td>
@@ -733,6 +769,10 @@ function drawBoard(canvas, snapshot, options = {}) {
   context.clearRect(0, 0, width, height);
   if (!snapshot || !snapshot.planets?.length) return;
   const showSectors = options.showSectors ?? Boolean(snapshot.setup?.map?.sectors?.length);
+  if (options.sectorArtwork && snapshot.setup?.map?.sectors?.length) {
+    drawSectorArtworkMap(context, width, height, snapshot);
+    return;
+  }
 
   const points = snapshot.planets.map((planet) => ({
     ...planet,
@@ -810,6 +850,62 @@ function drawBoard(canvas, snapshot, options = {}) {
       context.stroke();
       context.setLineDash([]);
     }
+  }
+}
+
+function drawSectorArtworkMap(context, width, height, snapshot) {
+  const sectors = snapshot.setup.map.sectors;
+  const centers = sectors.map((sector) => ({
+    sector,
+    rawX: Math.sqrt(3) * (sector.q + sector.r / 2),
+    rawY: 1.5 * sector.r,
+  }));
+  const tileWidthUnits = 5 * Math.sqrt(3);
+  const tileHeightUnits = 8;
+  const minX = Math.min(...centers.map((item) => item.rawX - tileWidthUnits / 2));
+  const maxX = Math.max(...centers.map((item) => item.rawX + tileWidthUnits / 2));
+  const minY = Math.min(...centers.map((item) => item.rawY - tileHeightUnits / 2));
+  const maxY = Math.max(...centers.map((item) => item.rawY + tileHeightUnits / 2));
+  const padding = width < 500 ? 14 : 26;
+  const scale = Math.min(
+    (width - padding * 2) / Math.max(1, maxX - minX),
+    (height - padding * 2) / Math.max(1, maxY - minY),
+  );
+  const offsetX = (width - (maxX - minX) * scale) / 2 - minX * scale;
+  const offsetY = (height - (maxY - minY) * scale) / 2 - minY * scale;
+  const artworkScale = 0.992;
+  const imageWidth = tileWidthUnits * scale * artworkScale;
+  const imageHeight = tileHeightUnits * scale * artworkScale;
+
+  for (const item of centers) {
+    const sector = item.sector;
+    const side = sector.side || (
+      snapshot.setup.factions?.length === 2 && [5, 6, 7].includes(sector.tile)
+        ? "outlined"
+        : "solid"
+    );
+    const artwork = getSectorArtwork(sector.tile, side);
+    const x = offsetX + item.rawX * scale;
+    const y = offsetY + item.rawY * scale;
+    if (!artwork) {
+      drawSectorHex(context, x, y, 4 * scale, "#111a2d");
+      context.fillStyle = "#dce6f3";
+      context.font = `700 ${Math.max(8, scale * 0.45)}px Segoe UI`;
+      context.textAlign = "center";
+      context.fillText(`S${String(sector.tile).padStart(2, "0")}`, x, y + 3);
+      continue;
+    }
+    context.save();
+    context.translate(x, y);
+    context.rotate(sector.rotation * Math.PI / 180);
+    context.drawImage(
+      artwork,
+      -imageWidth / 2,
+      -imageHeight / 2,
+      imageWidth,
+      imageHeight,
+    );
+    context.restore();
   }
 }
 

@@ -20,4 +20,10 @@ gaiazero = "gaiazero.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-gaiazero = ["web/*.html", "web/*.css", "web/*.js"]
+gaiazero = [
+    "web/*.html",
+    "web/*.css",
+    "web/*.js",
+    "web/assets/sectors/*.gif",
+    "web/assets/sectors/*.md",
+]

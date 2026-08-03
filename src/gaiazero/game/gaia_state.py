@@ -1270,6 +1270,11 @@ class GaiaState:
                         {
                             "position": position,
                             "tile": tile + 1,
+                            "side": (
+                                "outlined"
+                                if self.num_players == 2 and tile + 1 in (5, 6, 7)
+                                else "solid"
+                            ),
                             "rotation": self.sector_rotations[position] * 60,
                             "q": self.sector_centers[position][0],
                             "r": self.sector_centers[position][1],

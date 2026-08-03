@@ -68,6 +68,13 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(len(setup["standard_tech"]), 9)
         self.assertEqual(len(setup["advanced_tech"]), 6)
         self.assertIn("terraforming_federation", setup)
+        self.assertTrue(all(sector["side"] == "solid" for sector in setup["map"]["sectors"]))
+
+        two_player_sectors = GaiaState.initial(2, seed=41).snapshot()["setup"]["map"]["sectors"]
+        self.assertTrue(all(
+            sector["side"] == ("outlined" if sector["tile"] in (5, 6, 7) else "solid")
+            for sector in two_player_sectors
+        ))
 
     def test_observation_encodes_public_booster_pool(self) -> None:
         state = GaiaState.initial(2, seed=17)
@@ -101,6 +108,24 @@ class StandardGaiaRulesTests(unittest.TestCase):
                 for right in active[offset + 1 :]:
                     if state.terrains[left] == state.terrains[right] and state.terrains[left] < 7:
                         self.assertNotEqual(state._distance(left, right), 1)
+
+    def test_sector_artwork_footprints_do_not_overlap(self) -> None:
+        local_spaces = {
+            (q, r)
+            for q in range(-2, 3)
+            for r in range(-2, 3)
+            if max(abs(q), abs(r), abs(q + r)) <= 2
+        }
+        self.assertEqual(len(local_spaces), 19)
+        for players in (2, 3, 4):
+            occupied: set[tuple[int, int]] = set()
+            for center_q, center_r in GaiaState.initial(players, seed=9).sector_centers:
+                footprint = {
+                    (center_q + q, center_r + r)
+                    for q, r in local_spaces
+                }
+                self.assertTrue(occupied.isdisjoint(footprint))
+                occupied.update(footprint)
 
     def test_power_charges_bowl_one_before_bowl_two(self) -> None:
         info = PlayerState(faction=0, bowl_one=1, bowl_two=2, bowl_three=0)

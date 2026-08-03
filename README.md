@@ -66,6 +66,9 @@ gaiazero dashboard --metrics runs/metrics.jsonl --port 8765
 五个视图，展示随机拼接地图、种族座位、计分/科技/助推板块、损失曲线、六角棋盘、
 玩家资源、搜索候选、运行参数和原始事件。
 
+初始设置地图使用本地化的实体星区扫描图；图片来源与版权说明见
+[`src/gaiazero/web/assets/sectors/ATTRIBUTION.md`](src/gaiazero/web/assets/sectors/ATTRIBUTION.md)。
+
 历史回放按训练运行、迭代和对局建立索引。每局可使用滑杆或播放控制逐步检查棋盘、资源、
 科研轨与动作账本；页面同时检查轨迹连续性、轮次顺序、资源上限、星球所有权、终局状态和
 规则引擎动作转移。新训练会记录每一步规则状态，旧日志缺少的步骤会标记为“需补录”。

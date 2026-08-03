@@ -16,6 +16,12 @@ ASSETS = {
     "/styles.css": ("styles.css", "text/css; charset=utf-8"),
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
 }
+for number in range(1, 11):
+    name = f"sector-{number:02d}-solid.gif"
+    ASSETS[f"/assets/sectors/{name}"] = (f"assets/sectors/{name}", "image/gif")
+for number in range(5, 8):
+    name = f"sector-{number:02d}-outlined.gif"
+    ASSETS[f"/assets/sectors/{name}"] = (f"assets/sectors/{name}", "image/gif")
 
 
 class DashboardServer(ThreadingHTTPServer):
