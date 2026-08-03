@@ -14,6 +14,7 @@ from gaiazero.game.gaia_state import (
     Terrain,
     Track,
 )
+from gaiazero.game.gaia_setup import hex_distance
 from gaiazero.mcts import PUCTSearch, SearchConfig
 
 
@@ -118,14 +119,30 @@ class StandardGaiaRulesTests(unittest.TestCase):
         }
         self.assertEqual(len(local_spaces), 19)
         for players in (2, 3, 4):
+            state = GaiaState.initial(players, seed=9)
             occupied: set[tuple[int, int]] = set()
-            for center_q, center_r in GaiaState.initial(players, seed=9).sector_centers:
+            footprints: list[set[tuple[int, int]]] = []
+            for center_q, center_r in state.sector_centers:
                 footprint = {
                     (center_q + q, center_r + r)
                     for q, r in local_spaces
                 }
                 self.assertTrue(occupied.isdisjoint(footprint))
                 occupied.update(footprint)
+                footprints.append(footprint)
+
+            seams = 0
+            for left_index, left in enumerate(footprints):
+                for right in footprints[left_index + 1:]:
+                    contacts = sum(
+                        hex_distance(left_q, left_r, right_q, right_r) == 1
+                        for left_q, left_r in left
+                        for right_q, right_r in right
+                    )
+                    if contacts:
+                        self.assertGreaterEqual(contacts, 3)
+                        seams += 1
+            self.assertEqual(seams, 12 if players == 2 else 19)
 
     def test_power_charges_bowl_one_before_bowl_two(self) -> None:
         info = PlayerState(faction=0, bowl_one=1, bowl_two=2, bowl_three=0)
