@@ -1235,6 +1235,8 @@ class GaiaState:
                     "gaia_power": info.gaia_power,
                     "gaiaformers": info.gaiaformers,
                     "tracks": list(info.tracks),
+                    "satellites": info.satellites,
+                    "colonized_types": info.colonized_types,
                     "tech_tiles": [
                         tile
                         for tile in range(STANDARD_TECH_COUNT)

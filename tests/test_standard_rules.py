@@ -70,6 +70,8 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(len(setup["advanced_tech"]), 6)
         self.assertIn("terraforming_federation", setup)
         self.assertTrue(all(sector["side"] == "solid" for sector in setup["map"]["sectors"]))
+        self.assertTrue(all(isinstance(player["satellites"], int) for player in snapshot["players"]))
+        self.assertTrue(all(isinstance(player["colonized_types"], int) for player in snapshot["players"]))
 
         two_player_sectors = GaiaState.initial(2, seed=41).snapshot()["setup"]["map"]["sectors"]
         self.assertTrue(all(

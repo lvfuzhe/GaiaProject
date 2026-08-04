@@ -414,6 +414,41 @@ function setupLabel(tile) {
   return SETUP_LABELS[tile?.key] || tile?.label || "--";
 }
 
+function finalMetric(snapshot, key, playerId) {
+  const player = snapshot.players?.[playerId] || {};
+  const planets = (snapshot.planets || []).filter((planet) => planet.owner === playerId);
+  if (key === "federation-structures") return planets.filter((planet) => planet.federated).length;
+  if (key === "structures") return planets.length;
+  if (key === "planet-types") {
+    const encodedTypes = player.colonized_types;
+    if (encodedTypes !== null && encodedTypes !== undefined && Number.isFinite(Number(encodedTypes))) {
+      return Number(encodedTypes).toString(2).replaceAll("0", "").length;
+    }
+    return new Set(planets.map((planet) => planet.terrain).filter((terrain) => terrain < 7)).size;
+  }
+  if (key === "gaia-planets") return planets.filter((planet) => planet.terrain === 8).length;
+  if (key === "sectors") return new Set(planets.map((planet) => planet.sector)).size;
+  if (key === "satellites") return Number(player.satellites || 0);
+  return 0;
+}
+
+function finalRanking(snapshot, tile) {
+  const values = (snapshot.players || []).map((player) => ({
+    player,
+    value: finalMetric(snapshot, tile.key, player.id),
+  }));
+  return values
+    .sort((left, right) => right.value - left.value || left.player.id - right.player.id)
+    .map((entry, _index, sorted) => ({
+      ...entry,
+      rank: 1 + sorted.filter((candidate) => candidate.value > entry.value).length,
+    }))
+    .map((entry) => ({
+      ...entry,
+      points: [18, 12, 6, 0][Math.min(entry.rank - 1, 3)],
+    }));
+}
+
 function renderSetup(snapshot) {
   const content = byId("setup-content");
   const empty = byId("setup-empty");
@@ -454,27 +489,41 @@ function renderSetup(snapshot) {
     <small>${escapeHtml(FACTION_ABILITIES[faction.name] || faction.ability)}</small>
   </article>`).join("");
 
-  byId("setup-round-track").innerHTML = setup.round_scoring.map((tile) => `<article class="round-score-tile ${snapshot.round === tile.round && !snapshot.terminal ? "current" : ""}">
-    <span>第 ${tile.round} 回合</span>
-    <strong>${escapeHtml(setupLabel(tile))}</strong>
-    <small>+${tile.points} VP</small>
-  </article>`).join("");
-  byId("setup-final-grid").innerHTML = setup.final_scoring.map((tile, index) => `<article class="final-score-tile">
-    <div><span>终局目标 ${index + 1}</span><strong>${escapeHtml(setupLabel(tile))}</strong></div>
-    <span>18 · 12 · 6 VP</span>
-  </article>`).join("");
+  byId("setup-round-track").innerHTML = setup.round_scoring.map((tile) => {
+    const current = snapshot.round === tile.round && !snapshot.terminal;
+    const past = snapshot.terminal || snapshot.round > tile.round;
+    return `<article class="round-score-tile ${current ? "current" : ""} ${past ? "past" : ""}">
+      <div class="round-score-head"><span class="round-index">${String(tile.round).padStart(2, "0")}</span><span>${current ? "进行中" : (past ? "已完成" : "待开始")}</span></div>
+      <strong>${escapeHtml(setupLabel(tile))}</strong>
+      <small>+${tile.points} VP</small>
+    </article>`;
+  }).join("");
+  byId("setup-final-grid").innerHTML = setup.final_scoring.map((tile, index) => {
+    const ranking = finalRanking(snapshot, tile);
+    return `<article class="final-score-tile">
+      <div class="final-score-heading"><span>终局目标 ${index + 1}</span><strong>${escapeHtml(setupLabel(tile))}</strong></div>
+      <div class="final-score-scale"><span>第 1 名 <b>18</b></span><span>第 2 名 <b>12</b></span><span>第 3 名 <b>6</b></span></div>
+      <div class="final-ranking-list">${ranking.map((entry) => `<div class="final-ranking-row">
+        <span class="player-mini p${entry.player.id}">P${entry.player.id}</span><strong>${formatNumber(entry.value)}</strong><span class="final-rank">#${entry.rank} · ${entry.points} VP</span>
+      </div>`).join("")}</div>
+    </article>`;
+  }).join("");
 
   const standardByTrack = new Map(setup.standard_tech.filter((tile) => tile.track).map((tile) => [tile.track, tile]));
   const advancedByTrack = new Map(setup.advanced_tech.map((tile) => [tile.track, tile]));
-  byId("setup-research-grid").innerHTML = Object.entries(TRACK_LABELS).map(([track, label]) => {
+  byId("setup-research-grid").innerHTML = Object.entries(TRACK_LABELS).map(([track, label], trackIndex) => {
     const standard = standardByTrack.get(track);
     const advanced = advancedByTrack.get(track);
     return `<article class="research-setup-column">
-      <strong>${label}</strong>
-      <div class="tech-setup-tile advanced"><span>高级科技 #${Number(advanced?.id) + 1}</span><strong>${escapeHtml(ADVANCED_TECH_NAMES[advanced?.id] || advanced?.label || "--")}</strong></div>
-      <div class="tech-setup-tile standard"><span>基础科技 #${Number(standard?.id) + 1}</span><strong>${escapeHtml(setupLabel(standard))}</strong></div>
+      <div class="research-track-heading"><span class="track-index">${String(trackIndex + 1).padStart(2, "0")}</span><strong>${label}</strong></div>
+      <div class="research-levels">${Array.from({ length: 6 }, (_, level) => `<div class="research-level-cell ${level === 5 ? "max-level" : ""}">
+        <span class="research-level-number">${level}</span><div class="research-markers">${(snapshot.players || []).filter((player) => Number(player.tracks?.[trackIndex] || 0) === level).map((player) => `<span class="research-marker p${player.id}" title="P${player.id} ${escapeHtml(player.faction || "")}">P${player.id}</span>`).join("")}</div>
+      </div>`).join("")}</div>
+      <div class="tech-track-tile advanced"><span>高级科技 #${Number(advanced?.id) + 1}</span><strong>${escapeHtml(ADVANCED_TECH_NAMES[advanced?.id] || advanced?.label || "--")}</strong></div>
+      <div class="tech-track-tile standard"><span>基础科技 #${Number(standard?.id) + 1}</span><strong>${escapeHtml(setupLabel(standard))}</strong></div>
     </article>`;
   }).join("");
+  byId("setup-research-player-legend").innerHTML = (snapshot.players || []).map((player) => `<span><i class="player-mini p${player.id}"></i>P${player.id} ${escapeHtml(player.faction || "")}</span>`).join("");
   byId("setup-free-tech").innerHTML = setup.standard_tech.filter((tile) => !tile.track).map((tile) => `<article class="tech-setup-tile standard">
     <span>通用槽位 ${tile.space - 5}</span><strong>${escapeHtml(setupLabel(tile))}</strong>
   </article>`).join("");
