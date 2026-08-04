@@ -26,4 +26,7 @@ gaiazero = [
     "web/*.js",
     "web/assets/sectors/*.gif",
     "web/assets/sectors/*.md",
+    "web/assets/tiles/*.jpg",
+    "web/assets/tiles/*.gif",
+    "web/assets/tiles/*.md",
 ]

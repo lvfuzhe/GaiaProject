@@ -22,6 +22,21 @@ for number in range(1, 11):
 for number in range(5, 8):
     name = f"sector-{number:02d}-outlined.gif"
     ASSETS[f"/assets/sectors/{name}"] = (f"assets/sectors/{name}", "image/gif")
+for number in range(1, 10):
+    name = f"tech-standard-{number:02d}.jpg"
+    ASSETS[f"/assets/tiles/{name}"] = (f"assets/tiles/{name}", "image/jpeg")
+for number in range(1, 16):
+    name = f"tech-advanced-{number:02d}.jpg"
+    ASSETS[f"/assets/tiles/{name}"] = (f"assets/tiles/{name}", "image/jpeg")
+for number in range(1, 11):
+    name = f"round-scoring-{number:02d}.gif"
+    ASSETS[f"/assets/tiles/{name}"] = (f"assets/tiles/{name}", "image/gif")
+for number in range(1, 7):
+    name = f"final-scoring-{number:02d}.jpg"
+    ASSETS[f"/assets/tiles/{name}"] = (f"assets/tiles/{name}", "image/jpeg")
+for number in range(1, 11):
+    name = f"booster-{number:02d}.jpg"
+    ASSETS[f"/assets/tiles/{name}"] = (f"assets/tiles/{name}", "image/jpeg")
 
 
 class DashboardServer(ThreadingHTTPServer):

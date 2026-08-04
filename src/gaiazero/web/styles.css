@@ -895,6 +895,115 @@ main {
   font-size: 9px;
 }
 
+.setup-tile-art {
+  display: block;
+  max-width: 100%;
+  object-fit: contain;
+  border: 1px solid #aeb8b1;
+  border-radius: 2px;
+  background: #111815;
+}
+
+.round-score-tile {
+  min-height: 268px;
+}
+
+.round-tile-art {
+  width: min(100%, 104px);
+  aspect-ratio: 128 / 147;
+  margin: 0 auto 10px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.round-score-head {
+  margin-top: 2px;
+}
+
+.final-score-tile {
+  display: grid;
+  grid-template-columns: minmax(130px, 180px) minmax(0, 1fr);
+  grid-template-areas:
+    "art heading"
+    "art scale"
+    "art ranking";
+  column-gap: 16px;
+  align-items: start;
+}
+
+.final-tile-art {
+  grid-area: art;
+  width: 100%;
+  aspect-ratio: 141 / 87;
+  align-self: center;
+  border-color: transparent;
+  background: transparent;
+}
+
+.final-score-heading {
+  grid-area: heading;
+}
+
+.final-score-scale {
+  grid-area: scale;
+}
+
+.final-ranking-list {
+  grid-area: ranking;
+}
+
+.tech-track-tile {
+  min-height: 94px;
+  display: grid;
+  grid-template-columns: minmax(56px, 72px) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.tech-track-tile .tech-tile-art {
+  width: 100%;
+  aspect-ratio: 130 / 97;
+}
+
+.tech-track-tile.advanced .tech-tile-art {
+  aspect-ratio: 104 / 80;
+}
+
+.tech-setup-tile {
+  min-height: 112px;
+  display: grid;
+  grid-template-columns: minmax(80px, 116px) minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.tech-setup-tile .tech-tile-art {
+  width: 100%;
+  aspect-ratio: 130 / 97;
+  grid-row: 1 / span 2;
+}
+
+.tech-setup-tile strong {
+  margin-top: 0;
+}
+
+.booster-setup-tile {
+  min-height: 286px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.booster-tile-art {
+  width: min(100%, 78px);
+  aspect-ratio: 78 / 249;
+  margin: 0 auto 10px;
+}
+
+.booster-setup-tile strong {
+  margin-top: 6px;
+}
+
 .overview-grid,
 .selfplay-grid,
 .history-grid,
@@ -1727,8 +1836,27 @@ footer {
     text-align: left;
   }
 
+  .final-score-tile {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "art"
+      "heading"
+      "scale"
+      "ranking";
+    row-gap: 10px;
+  }
+
+  .final-tile-art {
+    width: min(100%, 240px);
+  }
+
   .final-score-scale {
+    margin-top: 0;
     font-size: 7px;
+  }
+
+  .final-ranking-list {
+    margin-top: 0;
   }
 
   .booster-setup-grid {

@@ -44,6 +44,39 @@ const SETUP_LABELS = {
   "mine-vp": "矿场得分", "federation-vp": "联邦得分",
   "planet-type-vp": "星球类型得分"
 };
+const TILE_ART_IDS = {
+  standard: {
+    "ore-income": 4,
+    "knowledge-income": 2,
+    "credits-income": 1,
+    "gaia-vp": 6,
+    "power-income": 9,
+    qic: 7,
+    "mine-vp": 5,
+    "federation-vp": 8,
+    "planet-type-vp": 3,
+  },
+  round: {
+    "mine-2a": 2,
+    "mine-2b": 2,
+    "trading-3a": 9,
+    "trading-3b": 9,
+    "terraform-2a": 10,
+    "terraform-2b": 10,
+    "gaia-3a": 4,
+    "gaia-3b": 4,
+    "research-2": 6,
+    "big-5": 1,
+  },
+  final: {
+    "gaia-planets": 1,
+    satellites: 2,
+    "planet-types": 3,
+    sectors: 4,
+    "federation-structures": 5,
+    structures: 6,
+  },
+};
 const FACTION_ABILITIES = {
   Terrans: "盖亚区能量回到能量碗 II",
   Lantids: "可在对手已殖民星球共存",
@@ -414,6 +447,21 @@ function setupLabel(tile) {
   return SETUP_LABELS[tile?.key] || tile?.label || "--";
 }
 
+function tileAsset(kind, id, key = "") {
+  const mapped = TILE_ART_IDS[kind]?.[key];
+  const number = mapped || Number(id) + 1;
+  if (!Number.isInteger(number) || number < 1) return "";
+  const assets = {
+    standard: ["tech-standard", "jpg"],
+    advanced: ["tech-advanced", "jpg"],
+    round: ["round-scoring", "gif"],
+    final: ["final-scoring", "jpg"],
+    booster: ["booster", "jpg"],
+  };
+  const [prefix, extension] = assets[kind] || [];
+  return prefix ? `/assets/tiles/${prefix}-${String(number).padStart(2, "0")}.${extension}` : "";
+}
+
 function finalMetric(snapshot, key, playerId) {
   const player = snapshot.players?.[playerId] || {};
   const planets = (snapshot.planets || []).filter((planet) => planet.owner === playerId);
@@ -492,7 +540,9 @@ function renderSetup(snapshot) {
   byId("setup-round-track").innerHTML = setup.round_scoring.map((tile) => {
     const current = snapshot.round === tile.round && !snapshot.terminal;
     const past = snapshot.terminal || snapshot.round > tile.round;
+    const image = tileAsset("round", tile.id, tile.key);
     return `<article class="round-score-tile ${current ? "current" : ""} ${past ? "past" : ""}">
+      <img class="setup-tile-art round-tile-art" src="${image}" alt="${escapeHtml(setupLabel(tile))}">
       <div class="round-score-head"><span class="round-index">${String(tile.round).padStart(2, "0")}</span><span>${current ? "进行中" : (past ? "已完成" : "待开始")}</span></div>
       <strong>${escapeHtml(setupLabel(tile))}</strong>
       <small>+${tile.points} VP</small>
@@ -500,7 +550,9 @@ function renderSetup(snapshot) {
   }).join("");
   byId("setup-final-grid").innerHTML = setup.final_scoring.map((tile, index) => {
     const ranking = finalRanking(snapshot, tile);
+    const image = tileAsset("final", tile.id, tile.key);
     return `<article class="final-score-tile">
+      <img class="setup-tile-art final-tile-art" src="${image}" alt="${escapeHtml(setupLabel(tile))}">
       <div class="final-score-heading"><span>终局目标 ${index + 1}</span><strong>${escapeHtml(setupLabel(tile))}</strong></div>
       <div class="final-score-scale"><span>第 1 名 <b>18</b></span><span>第 2 名 <b>12</b></span><span>第 3 名 <b>6</b></span></div>
       <div class="final-ranking-list">${ranking.map((entry) => `<div class="final-ranking-row">
@@ -514,17 +566,20 @@ function renderSetup(snapshot) {
   byId("setup-research-grid").innerHTML = Object.entries(TRACK_LABELS).map(([track, label], trackIndex) => {
     const standard = standardByTrack.get(track);
     const advanced = advancedByTrack.get(track);
+    const standardImage = tileAsset("standard", standard?.id, standard?.key);
+    const advancedImage = tileAsset("advanced", advanced?.id, advanced?.key);
     return `<article class="research-setup-column">
       <div class="research-track-heading"><span class="track-index">${String(trackIndex + 1).padStart(2, "0")}</span><strong>${label}</strong></div>
       <div class="research-levels">${Array.from({ length: 6 }, (_, level) => `<div class="research-level-cell ${level === 5 ? "max-level" : ""}">
         <span class="research-level-number">${level}</span><div class="research-markers">${(snapshot.players || []).filter((player) => Number(player.tracks?.[trackIndex] || 0) === level).map((player) => `<span class="research-marker p${player.id}" title="P${player.id} ${escapeHtml(player.faction || "")}">P${player.id}</span>`).join("")}</div>
       </div>`).join("")}</div>
-      <div class="tech-track-tile advanced"><span>高级科技 #${Number(advanced?.id) + 1}</span><strong>${escapeHtml(ADVANCED_TECH_NAMES[advanced?.id] || advanced?.label || "--")}</strong></div>
-      <div class="tech-track-tile standard"><span>基础科技 #${Number(standard?.id) + 1}</span><strong>${escapeHtml(setupLabel(standard))}</strong></div>
+      <div class="tech-track-tile advanced"><img class="setup-tile-art tech-tile-art" src="${advancedImage}" alt="${escapeHtml(advanced?.label || "Advanced technology")}"><div><span>高级科技 #${Number(advanced?.id) + 1}</span><strong>${escapeHtml(ADVANCED_TECH_NAMES[advanced?.id] || advanced?.label || "--")}</strong></div></div>
+      <div class="tech-track-tile standard"><img class="setup-tile-art tech-tile-art" src="${standardImage}" alt="${escapeHtml(setupLabel(standard))}"><div><span>基础科技 #${Number(standard?.id) + 1}</span><strong>${escapeHtml(setupLabel(standard))}</strong></div></div>
     </article>`;
   }).join("");
   byId("setup-research-player-legend").innerHTML = (snapshot.players || []).map((player) => `<span><i class="player-mini p${player.id}"></i>P${player.id} ${escapeHtml(player.faction || "")}</span>`).join("");
   byId("setup-free-tech").innerHTML = setup.standard_tech.filter((tile) => !tile.track).map((tile) => `<article class="tech-setup-tile standard">
+    <img class="setup-tile-art tech-tile-art" src="${tileAsset("standard", tile.id, tile.key)}" alt="${escapeHtml(setupLabel(tile))}">
     <span>通用槽位 ${tile.space - 5}</span><strong>${escapeHtml(setupLabel(tile))}</strong>
   </article>`).join("");
   const federation = setup.terraforming_federation;
@@ -532,6 +587,7 @@ function renderSetup(snapshot) {
 
   byId("setup-booster-count").textContent = `${setup.boosters.length} 块`;
   byId("setup-booster-grid").innerHTML = setup.boosters.map((booster) => `<article class="booster-setup-tile ${booster.owner >= 0 ? "assigned" : ""}">
+    <img class="setup-tile-art booster-tile-art" src="${tileAsset("booster", booster.id)}" alt="${escapeHtml(BOOSTER_NAMES[booster.id] || booster.label)}">
     <span>助推 ${booster.id + 1} · ${booster.owner >= 0 ? `P${booster.owner}` : "公共"}</span>
     <strong>${escapeHtml(BOOSTER_NAMES[booster.id] || booster.label)}</strong>
   </article>`).join("");

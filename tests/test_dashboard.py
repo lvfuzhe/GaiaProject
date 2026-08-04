@@ -53,6 +53,16 @@ class DashboardTests(unittest.TestCase):
                 sector_content_type = response.headers.get_content_type()
             with urlopen(f"{base}/assets/sectors/sector-05-outlined.gif", timeout=5) as response:
                 outlined_sector_image = response.read()
+            tile_assets = {}
+            for path in (
+                "tech-standard-01.jpg",
+                "tech-advanced-01.jpg",
+                "round-scoring-01.gif",
+                "final-scoring-01.jpg",
+                "booster-01.jpg",
+            ):
+                with urlopen(f"{base}/assets/tiles/{path}", timeout=5) as response:
+                    tile_assets[path] = (response.headers.get_content_type(), response.read())
             with urlopen(f"{base}/api/history", timeout=5) as response:
                 history = json.loads(response.read())
             with urlopen(
@@ -68,6 +78,10 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(sector_content_type, "image/gif")
             self.assertTrue(sector_image.startswith(b"GIF"))
             self.assertTrue(outlined_sector_image.startswith(b"GIF"))
+            for name, (content_type, content) in tile_assets.items():
+                expected_type = "image/gif" if name.endswith(".gif") else "image/jpeg"
+                self.assertEqual(content_type, expected_type)
+                self.assertTrue(content.startswith(b"GIF" if expected_type == "image/gif" else b"\xff\xd8"))
         finally:
             server.shutdown()
             server.server_close()
