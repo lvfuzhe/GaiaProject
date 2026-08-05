@@ -37,6 +37,10 @@ for number in range(1, 7):
 for number in range(1, 11):
     name = f"booster-{number:02d}.jpg"
     ASSETS[f"/assets/tiles/{name}"] = (f"assets/tiles/{name}", "image/jpeg")
+ASSETS["/assets/boards/research-board.png"] = (
+    "assets/boards/research-board.png",
+    "image/png",
+)
 
 
 class DashboardServer(ThreadingHTTPServer):

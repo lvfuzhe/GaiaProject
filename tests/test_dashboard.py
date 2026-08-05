@@ -53,6 +53,9 @@ class DashboardTests(unittest.TestCase):
                 sector_content_type = response.headers.get_content_type()
             with urlopen(f"{base}/assets/sectors/sector-05-outlined.gif", timeout=5) as response:
                 outlined_sector_image = response.read()
+            with urlopen(f"{base}/assets/boards/research-board.png", timeout=5) as response:
+                research_board_image = response.read()
+                research_board_content_type = response.headers.get_content_type()
             tile_assets = {}
             for path in (
                 "tech-standard-01.jpg",
@@ -78,6 +81,8 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(sector_content_type, "image/gif")
             self.assertTrue(sector_image.startswith(b"GIF"))
             self.assertTrue(outlined_sector_image.startswith(b"GIF"))
+            self.assertEqual(research_board_content_type, "image/png")
+            self.assertTrue(research_board_image.startswith(b"\x89PNG\r\n\x1a\n"))
             for name, (content_type, content) in tile_assets.items():
                 expected_type = "image/gif" if name.endswith(".gif") else "image/jpeg"
                 self.assertEqual(content_type, expected_type)

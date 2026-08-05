@@ -563,16 +563,25 @@ function renderSetup(snapshot) {
 
   const standardByTrack = new Map(setup.standard_tech.filter((tile) => tile.track).map((tile) => [tile.track, tile]));
   const advancedByTrack = new Map(setup.advanced_tech.map((tile) => [tile.track, tile]));
+  const researchPlayers = snapshot.players || [];
+  byId("setup-research-markers").innerHTML = Object.entries(TRACK_LABELS).flatMap(([track, label], trackIndex) =>
+    Array.from({ length: 6 }, (_, level) => {
+      const players = researchPlayers.filter((player) => Number(player.tracks?.[trackIndex] || 0) === level);
+      if (!players.length) return "";
+      const names = players.map((player) => `P${player.id} ${player.faction || ""}`).join("、");
+      return `<div class="research-board-position track-${trackIndex} level-${level}" aria-label="${escapeHtml(label)}等级 ${level}：${escapeHtml(names)}">
+        ${players.map((player) => `<span class="research-marker p${player.id}" title="P${player.id} ${escapeHtml(player.faction || "")}">P${player.id}</span>`).join("")}
+      </div>`;
+    })
+  ).join("");
   byId("setup-research-grid").innerHTML = Object.entries(TRACK_LABELS).map(([track, label], trackIndex) => {
     const standard = standardByTrack.get(track);
     const advanced = advancedByTrack.get(track);
     const standardImage = tileAsset("standard", standard?.id, standard?.key);
     const advancedImage = tileAsset("advanced", advanced?.id, advanced?.key);
+    const highestLevel = Math.max(0, ...researchPlayers.map((player) => Number(player.tracks?.[trackIndex] || 0)));
     return `<article class="research-setup-column">
-      <div class="research-track-heading"><span class="track-index">${String(trackIndex + 1).padStart(2, "0")}</span><strong>${label}</strong></div>
-      <div class="research-levels">${Array.from({ length: 6 }, (_, level) => `<div class="research-level-cell ${level === 5 ? "max-level" : ""}">
-        <span class="research-level-number">${level}</span><div class="research-markers">${(snapshot.players || []).filter((player) => Number(player.tracks?.[trackIndex] || 0) === level).map((player) => `<span class="research-marker p${player.id}" title="P${player.id} ${escapeHtml(player.faction || "")}">P${player.id}</span>`).join("")}</div>
-      </div>`).join("")}</div>
+      <div class="research-track-heading"><span class="track-index">${String(trackIndex + 1).padStart(2, "0")}</span><strong>${label}</strong><span class="research-track-level">最高 L${highestLevel}</span></div>
       <div class="tech-track-tile advanced"><img class="setup-tile-art tech-tile-art" src="${advancedImage}" alt="${escapeHtml(advanced?.label || "Advanced technology")}"><div><span>高级科技 #${Number(advanced?.id) + 1}</span><strong>${escapeHtml(ADVANCED_TECH_NAMES[advanced?.id] || advanced?.label || "--")}</strong></div></div>
       <div class="tech-track-tile standard"><img class="setup-tile-art tech-tile-art" src="${standardImage}" alt="${escapeHtml(setupLabel(standard))}"><div><span>基础科技 #${Number(standard?.id) + 1}</span><strong>${escapeHtml(setupLabel(standard))}</strong></div></div>
     </article>`;

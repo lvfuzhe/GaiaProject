@@ -29,4 +29,6 @@ gaiazero = [
     "web/assets/tiles/*.jpg",
     "web/assets/tiles/*.gif",
     "web/assets/tiles/*.md",
+    "web/assets/boards/*.png",
+    "web/assets/boards/*.md",
 ]

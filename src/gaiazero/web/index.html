@@ -205,9 +205,22 @@
             <div><p class="eyebrow">Research board</p><h3>科研与科技</h3></div>
             <span id="setup-federation-tile" class="federation-tile">改造轨顶 --</span>
           </div>
-          <div id="setup-research-grid" class="research-track-board" aria-label="六条科研轨道"></div>
-          <div id="setup-research-player-legend" class="research-player-legend"></div>
-          <div>
+          <div class="research-workspace">
+            <div class="research-board-column">
+              <div class="research-board-scroll" role="region" aria-label="科研背景板与玩家等级" tabindex="0">
+                <div class="research-board-stage">
+                  <img class="research-board-art" src="/assets/boards/research-board.png" alt="盖亚计划原版科研背景板">
+                  <div id="setup-research-markers" class="research-board-markers"></div>
+                </div>
+              </div>
+              <div id="setup-research-player-legend" class="research-player-legend"></div>
+            </div>
+            <div class="research-tech-column">
+              <p class="subsection-label">轨道科技配置</p>
+              <div id="setup-research-grid" class="research-track-board" aria-label="六条科研轨道的科技配置"></div>
+            </div>
+          </div>
+          <div class="research-free-tech">
             <p class="subsection-label">通用基础科技</p>
             <div id="setup-free-tech" class="free-tech-grid"></div>
           </div>
