@@ -91,17 +91,36 @@ def generate_setup(
     faction_boards: tuple[tuple[int, int], ...],
     faction_homes: tuple[int, ...],
     faction_starting_structures: tuple[int, ...],
+    faction_indices: tuple[int, ...] | None = None,
+    first_player: int | None = None,
 ) -> GaiaSetup:
+    if not 2 <= num_players <= 4:
+        raise ValueError("num_players must be between two and four")
     rng = np.random.default_rng(seed)
     centers = SECTOR_CENTERS_2P if num_players == 2 else SECTOR_CENTERS_34P
     tile_pool = np.arange(7 if num_players == 2 else MAX_SECTORS)
     map_data = _random_map(rng, tile_pool, centers)
 
-    board_choices = rng.choice(len(faction_boards), size=num_players, replace=False)
-    faction_indices = tuple(
-        int(faction_boards[int(board)][int(rng.integers(0, 2))])
-        for board in board_choices
-    )
+    if faction_indices is None:
+        board_choices = rng.choice(len(faction_boards), size=num_players, replace=False)
+        selected_factions = tuple(
+            int(faction_boards[int(board)][int(rng.integers(0, 2))])
+            for board in board_choices
+        )
+    else:
+        selected_factions = tuple(int(faction) for faction in faction_indices)
+        if len(selected_factions) != num_players:
+            raise ValueError("one faction is required for each player")
+        faction_to_board = {
+            faction: board
+            for board, factions in enumerate(faction_boards)
+            for faction in factions
+        }
+        if any(faction not in faction_to_board for faction in selected_factions):
+            raise ValueError("faction index is out of range")
+        selected_boards = [faction_to_board[faction] for faction in selected_factions]
+        if len(set(selected_boards)) != len(selected_boards):
+            raise ValueError("selected factions must use different double-sided boards")
     starting_planets = tuple(
         _choose_starting_planets(
             rng,
@@ -112,10 +131,12 @@ def generate_setup(
             faction_homes[faction],
             faction_starting_structures[faction],
         )
-        for faction in faction_indices
+        for faction in selected_factions
     )
 
-    first_player = seed % num_players
+    selected_first_player = seed % num_players if first_player is None else int(first_player)
+    if not 0 <= selected_first_player < num_players:
+        raise ValueError("first_player is out of range")
     selected_boosters = [
         int(value)
         for value in rng.choice(BOOSTER_COUNT, size=num_players + 3, replace=False)
@@ -123,7 +144,10 @@ def generate_setup(
     booster_owner = [-2] * BOOSTER_COUNT
     for booster in selected_boosters:
         booster_owner[booster] = -1
-    turn_order = [(first_player + offset) % num_players for offset in range(num_players)]
+    turn_order = [
+        (selected_first_player + offset) % num_players
+        for offset in range(num_players)
+    ]
     for player, booster in zip(
         reversed(turn_order),
         selected_boosters[:num_players],
@@ -133,8 +157,8 @@ def generate_setup(
 
     return GaiaSetup(
         seed=seed,
-        first_player=first_player,
-        faction_indices=faction_indices,
+        first_player=selected_first_player,
+        faction_indices=selected_factions,
         starting_planets=starting_planets,
         active_planets=map_data[0],
         planet_q=map_data[1],

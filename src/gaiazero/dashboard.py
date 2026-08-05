@@ -1,13 +1,25 @@
 from __future__ import annotations
 
 import json
+import threading
+import uuid
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from gaiazero.telemetry import build_history_index, read_events, read_game_trace
+import numpy as np
+
+from gaiazero.game import GaiaHeuristicEvaluator, GaiaState
+from gaiazero.mcts import PUCTSearch, SearchConfig
+from gaiazero.telemetry import (
+    JsonlTelemetry,
+    build_history_index,
+    read_events,
+    read_game_trace,
+)
 
 WEB_ROOT = Path(__file__).with_name("web")
 ASSETS = {
@@ -59,6 +71,8 @@ class DashboardServer(ThreadingHTTPServer):
     ) -> None:
         self.metrics_path = Path(metrics_path).resolve()
         self.quiet = quiet
+        self.simulation_lock = threading.Lock()
+        self.simulation: dict[str, Any] = {"status": "idle"}
         super().__init__(address, DashboardRequestHandler)
 
 
@@ -79,6 +93,9 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         if request.path == "/api/game":
             self._serve_game(parse_qs(request.query))
             return
+        if request.path == "/api/simulation":
+            self._send_json(self._simulation_status())
+            return
         asset = ASSETS.get(request.path)
         if asset is None:
             self.send_error(HTTPStatus.NOT_FOUND)
@@ -89,6 +106,51 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         self._send(path.read_bytes(), content_type)
+
+    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        request = urlparse(self.path)
+        if request.path not in ("/api/setup/preview", "/api/simulation"):
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        try:
+            payload = self._read_json_body()
+            config = _normalize_manual_config(payload)
+            initial = GaiaState.initial(
+                config["players"],
+                config["seed"],
+                faction_indices=tuple(config["factions"]),
+                first_player=config["first_player"],
+            )
+        except (json.JSONDecodeError, TypeError, ValueError) as error:
+            self._send_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+            return
+
+        if request.path == "/api/setup/preview":
+            self._send_json({"config": config, "state": initial.snapshot()})
+            return
+
+        with self.server.simulation_lock:
+            if self.server.simulation.get("status") == "running":
+                self._send_json(
+                    {"error": "a manual simulation is already running"},
+                    HTTPStatus.CONFLICT,
+                )
+                return
+            run_id = f"manual-{uuid.uuid4().hex[:10]}"
+            self.server.simulation = {
+                "status": "running",
+                "run_id": run_id,
+                "move": 0,
+                "config": config,
+            }
+        worker = threading.Thread(
+            target=_run_single_simulation,
+            args=(self.server, initial, config, run_id),
+            daemon=True,
+            name=f"gaiazero-{run_id}",
+        )
+        worker.start()
+        self._send_json(self._simulation_status(), HTTPStatus.ACCEPTED)
 
     def _serve_events(self, query: dict[str, list[str]]) -> None:
         try:
@@ -148,6 +210,23 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             return
         self._send_json(trace)
 
+    def _read_json_body(self) -> dict[str, Any]:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as error:
+            raise ValueError("invalid Content-Length") from error
+        if length < 1 or length > 16_384:
+            raise ValueError("request body must contain at most 16384 bytes")
+        body = self.rfile.read(length).decode("utf-8")
+        payload = json.loads(body)
+        if not isinstance(payload, dict):
+            raise TypeError("request body must be a JSON object")
+        return payload
+
+    def _simulation_status(self) -> dict[str, Any]:
+        with self.server.simulation_lock:
+            return dict(self.server.simulation)
+
     def _send_json(self, payload: dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         self._send(body, "application/json; charset=utf-8", status)
@@ -184,6 +263,171 @@ def create_dashboard_server(
     quiet: bool = False,
 ) -> DashboardServer:
     return DashboardServer((host, port), metrics_path, quiet=quiet)
+
+
+def _normalize_manual_config(payload: dict[str, Any]) -> dict[str, Any]:
+    players = int(payload.get("players", 2))
+    seed = int(payload.get("seed", 0))
+    first_player = int(payload.get("first_player", 0))
+    simulations = int(payload.get("simulations", 8))
+    factions_value = payload.get("factions")
+    if not 2 <= players <= 4:
+        raise ValueError("players must be between two and four")
+    if not 0 <= seed <= 2_147_483_647:
+        raise ValueError("seed must be between 0 and 2147483647")
+    if not 0 <= first_player < players:
+        raise ValueError("first_player is out of range")
+    if not 1 <= simulations <= 128:
+        raise ValueError("simulations must be between 1 and 128")
+    if not isinstance(factions_value, list):
+        raise TypeError("factions must be an array")
+    factions = [int(faction) for faction in factions_value]
+    if len(factions) != players:
+        raise ValueError("one faction is required for each player")
+    return {
+        "players": players,
+        "seed": seed,
+        "first_player": first_player,
+        "factions": factions,
+        "simulations": simulations,
+    }
+
+
+def _run_single_simulation(
+    server: DashboardServer,
+    initial: GaiaState,
+    config: dict[str, Any],
+    run_id: str,
+) -> None:
+    telemetry = JsonlTelemetry(server.metrics_path, run_id=run_id)
+    started = perf_counter()
+    state = initial
+    moves = 0
+    telemetry.emit(
+        "run_started",
+        config={"mode": "single-simulation", **config, "iterations": 1},
+        device="heuristic-pimcts",
+        observation_size=initial.observation_size,
+        action_size=initial.action_size,
+        state=initial.snapshot(),
+    )
+    telemetry.emit(
+        "self_play_started",
+        iteration=1,
+        game_in_iteration=1,
+        games_per_iteration=1,
+        total_games=0,
+        state=initial.snapshot(),
+    )
+    try:
+        evaluator = GaiaHeuristicEvaluator()
+        searches = [
+            PUCTSearch(
+                evaluator,
+                SearchConfig(
+                    simulations=config["simulations"],
+                    c_puct=1.5,
+                    root_noise_fraction=0.0,
+                    seed=config["seed"] + player,
+                ),
+            )
+            for player in range(config["players"])
+        ]
+        while not state.is_terminal:
+            if moves >= 512:
+                raise RuntimeError("single simulation exceeded 512 moves")
+            before = state
+            result = searches[before.current_player].run(
+                before,
+                add_root_noise=False,
+                temperature=0.0,
+            )
+            action = int(np.argmax(result.policy))
+            state = before.apply(action)
+            moves += 1
+            top_actions = np.argsort(result.policy)[-3:][::-1]
+            telemetry.emit(
+                "self_play_step",
+                iteration=1,
+                game_in_iteration=1,
+                move=moves,
+                player=before.current_player,
+                action=action,
+                action_label=before.describe_action(action),
+                legal_actions=len(before.legal_actions()),
+                search_sampled=True,
+                root_value=result.root_value,
+                candidates=[
+                    {
+                        "action": int(candidate),
+                        "label": before.describe_action(int(candidate)),
+                        "probability": float(result.policy[candidate]),
+                        "visits": int(result.visits[candidate]),
+                    }
+                    for candidate in top_actions
+                    if result.policy[candidate] > 0
+                ],
+                state=state.snapshot(),
+            )
+            with server.simulation_lock:
+                server.simulation.update(
+                    move=moves,
+                    current_player=None if state.is_terminal else state.current_player,
+                    last_action=before.describe_action(action),
+                )
+        duration = perf_counter() - started
+        scores = state.final_scores()
+        telemetry.emit(
+            "self_play_completed",
+            iteration=1,
+            game_in_iteration=1,
+            games_per_iteration=1,
+            total_games=1,
+            moves=moves,
+            positions=moves,
+            replay_positions=0,
+            duration_seconds=duration,
+            scores=scores,
+            returns=state.returns(),
+            state=state.snapshot(),
+        )
+        telemetry.emit(
+            "iteration_completed",
+            iteration=1,
+            new_positions=moves,
+            replay_positions=0,
+            duration_seconds=duration,
+        )
+        telemetry.emit(
+            "run_completed",
+            iterations=1,
+            total_games=1,
+            replay_positions=0,
+            duration_seconds=duration,
+        )
+        with server.simulation_lock:
+            server.simulation.update(
+                status="complete",
+                move=moves,
+                scores=list(scores),
+                duration_seconds=duration,
+            )
+    except Exception as error:
+        duration = perf_counter() - started
+        telemetry.emit(
+            "run_failed",
+            error_type=type(error).__name__,
+            message=str(error),
+            duration_seconds=duration,
+            state=state.snapshot(),
+        )
+        with server.simulation_lock:
+            server.simulation.update(
+                status="failed",
+                move=moves,
+                error=f"{type(error).__name__}: {error}",
+                duration_seconds=duration,
+            )
 
 
 def serve_dashboard(

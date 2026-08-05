@@ -317,7 +317,14 @@ class GaiaState:
     pending_tech_player: int = -1
 
     @classmethod
-    def initial(cls, num_players: int = 2, seed: int = 0) -> GaiaState:
+    def initial(
+        cls,
+        num_players: int = 2,
+        seed: int = 0,
+        *,
+        faction_indices: tuple[int, ...] | None = None,
+        first_player: int | None = None,
+    ) -> GaiaState:
         if not 2 <= num_players <= 4:
             raise ValueError("GaiaState supports two to four players")
         setup = generate_setup(
@@ -328,6 +335,8 @@ class GaiaState:
             faction_starting_structures=tuple(
                 faction.starting_structures for faction in FACTIONS
             ),
+            faction_indices=faction_indices,
+            first_player=first_player,
         )
         owners = [-1] * N
         buildings = [Building.EMPTY] * N

@@ -144,6 +144,14 @@ const state = {
   connected: false,
   live: true,
   polling: false,
+  manualSetup: {
+    initialized: false,
+    preview: null,
+    busy: false,
+    runId: null,
+    simulation: { status: "idle" },
+    message: "就绪",
+  },
   history: {
     index: null,
     runId: null,
@@ -208,7 +216,10 @@ async function pollEvents(force = false) {
       if (event.type === "run_started" && state.runId && event.run_id !== state.runId) {
         state.events = [];
       }
-      if (event.type === "run_started") state.runId = event.run_id;
+      if (event.type === "run_started") {
+        state.runId = event.run_id;
+        if (event.run_id === state.manualSetup.runId) state.manualSetup.preview = null;
+      }
       if (!state.runId || event.run_id === state.runId) state.events.push(event);
       state.lastSequence = Math.max(state.lastSequence, Number(event.sequence) || 0);
       if (["run_started", "self_play_completed", "iteration_completed", "run_completed", "run_failed"].includes(event.type)) {
@@ -231,7 +242,7 @@ function render() {
   renderProgress();
   renderLossChart();
   renderIterations();
-  renderSetup(latestState());
+  renderSetup(state.manualSetup.preview || latestState());
   renderSelfPlay();
   renderHistory();
   renderDiagnostics();
@@ -532,6 +543,7 @@ function renderSetup(snapshot) {
   const content = byId("setup-content");
   const empty = byId("setup-empty");
   if (!content || !empty) return;
+  initializeSetupEditor(snapshot);
   const setup = snapshot?.setup;
   const available = Boolean(setup?.map?.sectors?.length);
   empty.hidden = available;
@@ -693,6 +705,195 @@ function renderSetup(snapshot) {
     <span>助推 ${booster.id + 1} · ${booster.owner >= 0 ? `P${booster.owner}` : "公共"}</span>
     <strong>${escapeHtml(BOOSTER_NAMES[booster.id] || booster.label)}</strong>
   </article>`).join("");
+}
+
+function initializeSetupEditor(snapshot) {
+  if (state.manualSetup.initialized) return;
+  const players = Math.min(4, Math.max(2, Number(snapshot?.players?.length || 2)));
+  byId("setup-editor-players").value = String(players);
+  byId("setup-editor-seed").value = String(Number(snapshot?.setup?.seed || 0));
+  const assigned = (snapshot?.setup?.factions || []).map((faction) => Number(faction.id));
+  state.manualSetup.factions = Array.from(
+    { length: players },
+    (_, player) => assigned[player] ?? [0, 2, 4, 6][player],
+  );
+  renderSetupEditorSeats(Number(snapshot?.first_player || 0));
+  state.manualSetup.initialized = true;
+  renderManualSetupStatus();
+}
+
+function renderSetupEditorSeats(preferredFirstPlayer = null) {
+  const players = Number(byId("setup-editor-players").value || 2);
+  const previous = state.manualSetup.factions || [];
+  const defaults = [0, 2, 4, 6];
+  state.manualSetup.factions = Array.from(
+    { length: players },
+    (_, player) => previous[player] ?? defaults[player],
+  );
+  byId("setup-editor-factions").innerHTML = state.manualSetup.factions.map((selected, player) => `<label class="setup-editor-faction">
+    <span>P${player}</span>
+    <select data-player="${player}" aria-label="P${player} 种族">
+      ${BASE_FACTIONS.map((faction) => `<option value="${faction.id}" ${faction.id === selected ? "selected" : ""}>版图 ${faction.board}${faction.side} · ${escapeHtml(faction.name)}</option>`).join("")}
+    </select>
+  </label>`).join("");
+  const firstSelect = byId("setup-editor-first-player");
+  const currentFirst = preferredFirstPlayer === null
+    ? Math.min(players - 1, Number(firstSelect.value || 0))
+    : Math.min(players - 1, Number(preferredFirstPlayer));
+  firstSelect.innerHTML = Array.from(
+    { length: players },
+    (_, player) => `<option value="${player}" ${player === currentFirst ? "selected" : ""}>P${player}</option>`,
+  ).join("");
+}
+
+function manualSetupPayload() {
+  const players = Number(byId("setup-editor-players").value);
+  const factions = [...byId("setup-editor-factions").querySelectorAll("select")]
+    .slice(0, players)
+    .map((select) => Number(select.value));
+  const boards = factions.map((id) => BASE_FACTIONS.find((faction) => faction.id === id)?.board);
+  if (factions.length !== players || boards.some((board) => board === undefined)) {
+    throw new Error("请为每个座位选择种族");
+  }
+  if (new Set(boards).size !== boards.length) {
+    throw new Error("同一张双面版图不能分配给多个玩家");
+  }
+  const seed = Number(byId("setup-editor-seed").value);
+  const firstPlayer = Number(byId("setup-editor-first-player").value);
+  const simulations = Number(byId("setup-editor-simulations").value);
+  if (!Number.isInteger(seed) || seed < 0 || seed > 2147483647) {
+    throw new Error("随机种子必须是 0–2147483647 的整数");
+  }
+  if (!Number.isInteger(simulations) || simulations < 1 || simulations > 128) {
+    throw new Error("每步搜索次数必须是 1–128 的整数");
+  }
+  return {
+    players,
+    seed,
+    first_player: firstPlayer,
+    factions,
+    simulations,
+  };
+}
+
+function setSetupEditorMessage(message, status = "ready") {
+  state.manualSetup.message = message;
+  state.manualSetup.messageStatus = status;
+  renderManualSetupStatus();
+}
+
+function renderManualSetupStatus() {
+  const status = state.manualSetup.simulation || { status: "idle" };
+  const element = byId("setup-editor-status");
+  const running = status.status === "running";
+  let label = state.manualSetup.message || "就绪";
+  let className = state.manualSetup.messageStatus || "ready";
+  if (running) {
+    label = `模拟运行中 · ${formatNumber(status.move || 0)} 步${status.last_action ? ` · ${status.last_action}` : ""}`;
+    className = "running";
+  } else if (status.status === "complete") {
+    label = `模拟完成 · ${formatNumber(status.move)} 步 · ${(status.scores || []).map((score) => formatNumber(score, 1)).join(" / ")} VP`;
+    className = "complete";
+  } else if (status.status === "failed") {
+    label = status.error || "模拟失败";
+    className = "failed";
+  }
+  element.textContent = label;
+  element.className = `setup-editor-status ${className}`;
+  const disabled = running || state.manualSetup.busy;
+  byId("setup-editor-run").disabled = disabled;
+  byId("setup-editor-preview").disabled = disabled;
+  byId("setup-editor-randomize").disabled = disabled;
+  byId("setup-editor-form").setAttribute("aria-busy", String(disabled));
+}
+
+async function previewManualSetup({ quiet = false } = {}) {
+  const config = manualSetupPayload();
+  state.manualSetup.busy = true;
+  if (!quiet) setSetupEditorMessage("正在生成合法初始设置", "running");
+  try {
+    const response = await fetch("/api/setup/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(config),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    state.manualSetup.preview = data.state;
+    renderSetup(data.state);
+    if (!quiet) setSetupEditorMessage("预览已应用", "complete");
+    return config;
+  } finally {
+    state.manualSetup.busy = false;
+    renderManualSetupStatus();
+  }
+}
+
+async function runManualSimulation() {
+  try {
+    const config = await previewManualSetup({ quiet: true });
+    state.manualSetup.busy = true;
+    setSetupEditorMessage("正在启动单局模拟", "running");
+    const response = await fetch("/api/simulation", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(config),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    state.manualSetup.simulation = data;
+    state.manualSetup.runId = data.run_id;
+    state.live = true;
+    byId("live-toggle").checked = true;
+    renderManualSetupStatus();
+    await pollEvents(true);
+  } catch (error) {
+    setSetupEditorMessage(error.message || String(error), "failed");
+  } finally {
+    state.manualSetup.busy = false;
+    renderManualSetupStatus();
+  }
+}
+
+async function pollSimulationStatus() {
+  try {
+    const response = await fetch("/api/simulation", { cache: "no-store" });
+    if (!response.ok) return;
+    const previous = state.manualSetup.simulation?.status;
+    state.manualSetup.simulation = await response.json();
+    renderManualSetupStatus();
+    if (previous === "running" && state.manualSetup.simulation.status !== "running") {
+      await pollEvents(true);
+      await refreshHistoryIndex();
+    }
+  } catch (_error) {
+    // The main connection indicator already reports dashboard availability.
+  }
+}
+
+async function randomizeManualSetup() {
+  const random = new Uint32Array(1);
+  crypto.getRandomValues(random);
+  byId("setup-editor-seed").value = String(random[0] & 0x7fffffff);
+  const players = Number(byId("setup-editor-players").value);
+  const boards = Array.from({ length: 7 }, (_, board) => board + 1);
+  for (let index = boards.length - 1; index > 0; index -= 1) {
+    const swap = random[0] % (index + 1);
+    [boards[index], boards[swap]] = [boards[swap], boards[index]];
+    random[0] = (Math.imul(random[0], 1664525) + 1013904223) >>> 0;
+  }
+  state.manualSetup.factions = boards.slice(0, players).map((board) => {
+    const faces = BASE_FACTIONS.filter((faction) => faction.board === board);
+    const face = faces[random[0] % faces.length];
+    random[0] = (Math.imul(random[0], 1664525) + 1013904223) >>> 0;
+    return face.id;
+  });
+  renderSetupEditorSeats(random[0] % players);
+  try {
+    await previewManualSetup();
+  } catch (error) {
+    setSetupEditorMessage(error.message || String(error), "failed");
+  }
 }
 
 function historyRuns() {
@@ -1486,7 +1687,7 @@ function selectView(name) {
   window.location.hash = selected;
   requestAnimationFrame(() => {
     renderLossChart();
-    renderSetup(latestState());
+    renderSetup(state.manualSetup.preview || latestState());
     renderBoard(latestState());
     renderHistory();
   });
@@ -1500,6 +1701,31 @@ byId("live-toggle").addEventListener("change", (event) => {
   if (state.live) pollEvents(true);
 });
 byId("refresh-button").addEventListener("click", () => pollEvents(true));
+byId("setup-editor-players").addEventListener("change", () => {
+  renderSetupEditorSeats();
+  setSetupEditorMessage("设置已修改", "ready");
+});
+byId("setup-editor-factions").addEventListener("change", (event) => {
+  const select = event.target.closest("select[data-player]");
+  if (!select) return;
+  state.manualSetup.factions[Number(select.dataset.player)] = Number(select.value);
+  setSetupEditorMessage("设置已修改", "ready");
+});
+byId("setup-editor-form").addEventListener("input", (event) => {
+  if (!event.target.closest("select[data-player]")) {
+    setSetupEditorMessage("设置已修改", "ready");
+  }
+});
+byId("setup-editor-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    await previewManualSetup();
+  } catch (error) {
+    setSetupEditorMessage(error.message || String(error), "failed");
+  }
+});
+byId("setup-editor-randomize").addEventListener("click", randomizeManualSetup);
+byId("setup-editor-run").addEventListener("click", runManualSimulation);
 byId("history-run-select").addEventListener("change", async (event) => {
   stopHistoryPlayback();
   state.history.runId = event.target.value || null;
@@ -1536,14 +1762,16 @@ byId("history-action-table").addEventListener("click", (event) => {
 });
 window.addEventListener("resize", () => {
   renderLossChart();
-  renderSetup(latestState());
+  renderSetup(state.manualSetup.preview || latestState());
   renderBoard(latestState());
   renderHistory();
 });
 
 selectView(window.location.hash.replace("#", "") || "overview");
 pollEvents(true);
+pollSimulationStatus();
 setInterval(() => pollEvents(false), POLL_INTERVAL_MS);
+setInterval(pollSimulationStatus, POLL_INTERVAL_MS);
 setInterval(() => {
   renderStatus();
   renderMetrics();

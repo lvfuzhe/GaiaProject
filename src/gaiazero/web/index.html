@@ -145,6 +145,27 @@
     <section id="setup" class="view" aria-labelledby="setup-title" hidden>
       <h2 id="setup-title" class="sr-only">初始设置</h2>
       <div id="setup-empty" class="history-empty panel">当前规则快照没有初始设置数据</div>
+      <section class="setup-editor content-band" aria-labelledby="setup-editor-title">
+        <div class="setup-editor-heading">
+          <div><p class="eyebrow">Manual configuration</p><h3 id="setup-editor-title">手动设置与单局模拟</h3></div>
+          <span id="setup-editor-status" class="setup-editor-status ready" role="status" aria-live="polite">就绪</span>
+        </div>
+        <form id="setup-editor-form">
+          <div class="setup-editor-fields">
+            <label><span>玩家人数</span><select id="setup-editor-players"><option value="2">2 人</option><option value="3">3 人</option><option value="4">4 人</option></select></label>
+            <label><span>随机种子</span><input id="setup-editor-seed" type="number" min="0" max="2147483647" step="1" value="0"></label>
+            <label><span>首位玩家</span><select id="setup-editor-first-player"></select></label>
+            <label><span>PIMCTS 搜索/步</span><input id="setup-editor-simulations" type="number" min="1" max="128" step="1" value="8"></label>
+          </div>
+          <div class="setup-editor-subheading"><strong>座位与种族</strong><span>同一张双面板仅可选择一面</span></div>
+          <div id="setup-editor-factions" class="setup-editor-factions"></div>
+          <div class="setup-editor-actions">
+            <button id="setup-editor-randomize" class="secondary-command" type="button">随机配置</button>
+            <button id="setup-editor-preview" class="secondary-command" type="submit">应用预览</button>
+            <button id="setup-editor-run" class="primary-command" type="button"><span aria-hidden="true">▶</span>运行单局</button>
+          </div>
+        </form>
+      </section>
       <div id="setup-content" hidden>
         <header class="setup-summary">
           <div>

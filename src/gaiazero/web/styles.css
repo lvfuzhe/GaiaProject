@@ -319,6 +319,166 @@ main {
   line-height: 1.2;
 }
 
+.setup-editor {
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--blue);
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.setup-editor-heading,
+.setup-editor-subheading,
+.setup-editor-actions {
+  display: flex;
+  align-items: center;
+}
+
+.setup-editor-heading,
+.setup-editor-subheading {
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.setup-editor-heading h3 {
+  font-size: 15px;
+}
+
+.setup-editor-status {
+  max-width: min(52vw, 620px);
+  overflow: hidden;
+  padding: 5px 8px;
+  color: var(--muted);
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.setup-editor-status.running {
+  color: var(--blue);
+  border-color: #b8cde2;
+  background: #f1f6fb;
+}
+
+.setup-editor-status.complete {
+  color: var(--green);
+  border-color: #b9d6ca;
+  background: var(--green-soft);
+}
+
+.setup-editor-status.failed {
+  color: var(--red);
+  border-color: #e5c1b8;
+  background: #fbf2f0;
+}
+
+.setup-editor-fields {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(130px, 1fr));
+  gap: 10px;
+}
+
+.setup-editor-fields label,
+.setup-editor-faction {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.setup-editor-fields label > span,
+.setup-editor-faction > span {
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.setup-editor-fields input,
+.setup-editor-fields select,
+.setup-editor-faction select {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 0 9px;
+  color: var(--ink);
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  background: #fff;
+  font-size: 10px;
+}
+
+.setup-editor-fields input:focus,
+.setup-editor-fields select:focus,
+.setup-editor-faction select:focus {
+  border-color: var(--blue);
+  outline: 2px solid #dbe8f4;
+  outline-offset: 0;
+}
+
+.setup-editor-subheading {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.setup-editor-subheading strong {
+  font-size: 10px;
+}
+
+.setup-editor-subheading span {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.setup-editor-factions {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.setup-editor-actions {
+  margin-top: 14px;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.primary-command,
+.secondary-command {
+  min-height: 34px;
+  padding: 7px 12px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.primary-command {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #fff;
+  border: 1px solid var(--green);
+  background: var(--green);
+}
+
+.secondary-command {
+  color: var(--ink);
+  border: 1px solid var(--line-strong);
+  background: var(--surface-soft);
+}
+
+.primary-command:disabled,
+.secondary-command:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
 .setup-summary-values {
   margin: 0;
   display: grid;
@@ -2304,6 +2464,11 @@ footer {
     grid-template-columns: 1fr;
   }
 
+  .setup-editor-fields,
+  .setup-editor-factions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .setup-faction-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -2370,6 +2535,40 @@ footer {
   .setup-summary-values {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 14px;
+  }
+
+  .setup-editor {
+    padding: 14px;
+  }
+
+  .setup-editor-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .setup-editor-status {
+    max-width: 100%;
+  }
+
+  .setup-editor-fields,
+  .setup-editor-factions {
+    grid-template-columns: 1fr;
+  }
+
+  .setup-editor-subheading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .setup-editor-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  #setup-editor-run {
+    grid-column: 1 / -1;
   }
 
   .setup-map-frame {

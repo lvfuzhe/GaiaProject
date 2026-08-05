@@ -1,8 +1,10 @@
 import json
 import threading
+import time
 import unittest
 from pathlib import Path
-from urllib.request import urlopen
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 from gaiazero.dashboard import create_dashboard_server
 from gaiazero.game import MiniGaiaState
@@ -16,6 +18,17 @@ class DashboardTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.metrics.unlink(missing_ok=True)
+
+    @staticmethod
+    def post_json(url: str, payload: dict[str, object]) -> tuple[int, dict[str, object]]:
+        request = Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(request, timeout=5) as response:
+            return response.status, json.loads(response.read())
 
     def test_telemetry_round_trip_with_board_snapshot(self) -> None:
         telemetry = JsonlTelemetry(self.metrics, run_id="test-run")
@@ -84,6 +97,8 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("loss-chart", page)
             self.assertIn("setup-faction-catalog", page)
             self.assertIn("setup-research-tech", page)
+            self.assertIn("setup-editor-form", page)
+            self.assertIn("setup-editor-run", page)
             self.assertIn("player-board-grid", page)
             self.assertIn("history-player-board-grid", page)
             self.assertEqual(sector_content_type, "image/gif")
@@ -99,6 +114,91 @@ class DashboardTests(unittest.TestCase):
                 expected_type = "image/gif" if name.endswith(".gif") else "image/jpeg"
                 self.assertEqual(content_type, expected_type)
                 self.assertTrue(content.startswith(b"GIF" if expected_type == "image/gif" else b"\xff\xd8"))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    def test_manual_setup_preview_and_validation(self) -> None:
+        server = create_dashboard_server(self.metrics, port=0, quiet=True)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            base = f"http://127.0.0.1:{server.server_port}"
+            payload = {
+                "players": 2,
+                "seed": 23,
+                "first_player": 1,
+                "factions": [0, 2],
+                "simulations": 1,
+            }
+            status, preview = self.post_json(f"{base}/api/setup/preview", payload)
+            self.assertEqual(status, 200)
+            self.assertEqual(preview["config"], payload)
+            self.assertEqual(preview["state"]["first_player"], 1)
+            self.assertEqual(
+                [player["faction_id"] for player in preview["state"]["players"]],
+                [0, 2],
+            )
+            for player in preview["state"]["players"]:
+                self.assertTrue(any(
+                    planet["owner"] == player["id"]
+                    and planet["terrain"] == player["home_terrain"]
+                    for planet in preview["state"]["planets"]
+                ))
+
+            invalid = {**payload, "factions": [0, 1]}
+            with self.assertRaises(HTTPError) as raised:
+                self.post_json(f"{base}/api/setup/preview", invalid)
+            self.assertEqual(raised.exception.code, 400)
+            error = json.loads(raised.exception.read())
+            self.assertIn("different double-sided boards", error["error"])
+
+            with urlopen(f"{base}/api/simulation", timeout=5) as response:
+                simulation = json.loads(response.read())
+            self.assertEqual(simulation["status"], "idle")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    def test_single_simulation_writes_complete_replay(self) -> None:
+        server = create_dashboard_server(self.metrics, port=0, quiet=True)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            base = f"http://127.0.0.1:{server.server_port}"
+            status, started = self.post_json(
+                f"{base}/api/simulation",
+                {
+                    "players": 2,
+                    "seed": 3,
+                    "first_player": 1,
+                    "factions": [0, 2],
+                    "simulations": 1,
+                },
+            )
+            self.assertEqual(status, 202)
+            self.assertEqual(started["status"], "running")
+            run_id = started["run_id"]
+
+            deadline = time.monotonic() + 30
+            simulation = started
+            while simulation["status"] == "running" and time.monotonic() < deadline:
+                time.sleep(0.1)
+                with urlopen(f"{base}/api/simulation", timeout=5) as response:
+                    simulation = json.loads(response.read())
+
+            self.assertEqual(simulation["status"], "complete", simulation)
+            self.assertGreater(simulation["move"], 0)
+            self.assertEqual(len(simulation["scores"]), 2)
+
+            trace = read_game_trace(self.metrics, run_id=run_id, iteration=1, game=1)
+            self.assertIsNotNone(trace)
+            self.assertTrue(trace["trace_complete"])
+            self.assertEqual(trace["captured_moves"], simulation["move"])
+            self.assertEqual(len(trace["steps"]), simulation["move"] + 1)
+            self.assertTrue(trace["steps"][-1]["state"]["terminal"])
         finally:
             server.shutdown()
             server.server_close()

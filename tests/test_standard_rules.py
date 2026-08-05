@@ -130,6 +130,27 @@ class StandardGaiaRulesTests(unittest.TestCase):
                     self.assertEqual(state.terrains[planet], faction.home)
                     self.assertEqual(state.owners[planet], player)
 
+    def test_manual_setup_applies_factions_first_player_and_home_planets(self) -> None:
+        state = GaiaState.initial(
+            3,
+            seed=17,
+            faction_indices=(0, 2, 4),
+            first_player=2,
+        )
+
+        self.assertEqual(state.first_player, 2)
+        self.assertEqual(state.current_player, 2)
+        self.assertEqual(tuple(player.faction for player in state.players), (0, 2, 4))
+        for player, faction_id in enumerate((0, 2, 4)):
+            faction = FACTIONS[faction_id]
+            for planet in state.starting_planets[player]:
+                self.assertEqual(state.terrains[planet], faction.home)
+                self.assertEqual(state.owners[planet], player)
+
+    def test_manual_setup_rejects_two_sides_of_the_same_faction_board(self) -> None:
+        with self.assertRaisesRegex(ValueError, "different double-sided boards"):
+            GaiaState.initial(2, faction_indices=(0, 1), first_player=0)
+
     def test_random_map_never_places_equal_home_types_adjacent(self) -> None:
         for seed in range(20):
             state = GaiaState.initial(2 + seed % 3, seed)
