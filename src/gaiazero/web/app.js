@@ -146,6 +146,8 @@ const state = {
   polling: false,
   manualSetup: {
     initialized: false,
+    hydrated: false,
+    edited: false,
     preview: null,
     busy: false,
     runId: null,
@@ -553,7 +555,15 @@ function renderSetup(snapshot) {
   const map = setup.map;
   byId("setup-seed").textContent = setup.seed;
   byId("setup-map-summary").textContent = `${map.sector_count} 个板块 · ${snapshot.planets.length} 个星球`;
-  byId("setup-first-player").textContent = `P${snapshot.first_player}`;
+  const runStart = [...state.events].reverse().find((event) =>
+    event.type === "run_started" && event.run_id === state.runId,
+  );
+  const initialFirstPlayer = snapshot === state.manualSetup.preview
+    ? snapshot.first_player
+    : runStart?.payload?.config?.first_player
+      ?? runStart?.payload?.state?.first_player
+      ?? snapshot.first_player;
+  byId("setup-first-player").textContent = `P${initialFirstPlayer}`;
   byId("setup-ruleset").textContent = snapshot.ruleset || "--";
   byId("setup-map-method").textContent = "进阶随机拼接 · 同色星球不相邻";
   byId("setup-sector-count").textContent = `${map.sector_count} 块`;
@@ -708,17 +718,36 @@ function renderSetup(snapshot) {
 }
 
 function initializeSetupEditor(snapshot) {
-  if (state.manualSetup.initialized) return;
-  const players = Math.min(4, Math.max(2, Number(snapshot?.players?.length || 2)));
+  if (state.manualSetup.initialized && (
+    !snapshot || state.manualSetup.hydrated || state.manualSetup.edited
+  )) return;
+  const runStart = [...state.events].reverse().find((event) =>
+    event.type === "run_started" && event.payload?.state?.setup,
+  );
+  const setupSnapshot = runStart?.payload?.state || snapshot;
+  const runConfig = runStart?.payload?.config || {};
+  const players = Math.min(4, Math.max(2, Number(
+    runConfig.players || setupSnapshot?.players?.length || 2,
+  )));
   byId("setup-editor-players").value = String(players);
-  byId("setup-editor-seed").value = String(Number(snapshot?.setup?.seed || 0));
-  const assigned = (snapshot?.setup?.factions || []).map((faction) => Number(faction.id));
+  byId("setup-editor-seed").value = String(Number(
+    runConfig.seed ?? setupSnapshot?.setup?.seed ?? 0,
+  ));
+  if (Number.isInteger(Number(runConfig.simulations))) {
+    byId("setup-editor-simulations").value = String(Number(runConfig.simulations));
+  }
+  const assigned = Array.isArray(runConfig.factions)
+    ? runConfig.factions.map(Number)
+    : (setupSnapshot?.setup?.factions || []).map((faction) => Number(faction.id));
   state.manualSetup.factions = Array.from(
     { length: players },
     (_, player) => assigned[player] ?? [0, 2, 4, 6][player],
   );
-  renderSetupEditorSeats(Number(snapshot?.first_player || 0));
+  renderSetupEditorSeats(Number(
+    runConfig.first_player ?? setupSnapshot?.first_player ?? 0,
+  ));
   state.manualSetup.initialized = true;
+  state.manualSetup.hydrated = Boolean(snapshot);
   renderManualSetupStatus();
 }
 
@@ -872,6 +901,7 @@ async function pollSimulationStatus() {
 }
 
 async function randomizeManualSetup() {
+  state.manualSetup.edited = true;
   const random = new Uint32Array(1);
   crypto.getRandomValues(random);
   byId("setup-editor-seed").value = String(random[0] & 0x7fffffff);
@@ -1702,17 +1732,20 @@ byId("live-toggle").addEventListener("change", (event) => {
 });
 byId("refresh-button").addEventListener("click", () => pollEvents(true));
 byId("setup-editor-players").addEventListener("change", () => {
+  state.manualSetup.edited = true;
   renderSetupEditorSeats();
   setSetupEditorMessage("设置已修改", "ready");
 });
 byId("setup-editor-factions").addEventListener("change", (event) => {
   const select = event.target.closest("select[data-player]");
   if (!select) return;
+  state.manualSetup.edited = true;
   state.manualSetup.factions[Number(select.dataset.player)] = Number(select.value);
   setSetupEditorMessage("设置已修改", "ready");
 });
 byId("setup-editor-form").addEventListener("input", (event) => {
   if (!event.target.closest("select[data-player]")) {
+    state.manualSetup.edited = true;
     setSetupEditorMessage("设置已修改", "ready");
   }
 });
