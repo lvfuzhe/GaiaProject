@@ -324,6 +324,14 @@ class GaiaState:
         *,
         faction_indices: tuple[int, ...] | None = None,
         first_player: int | None = None,
+        sector_tiles: tuple[int, ...] | None = None,
+        sector_rotations: tuple[int, ...] | None = None,
+        booster_tiles: tuple[int, ...] | None = None,
+        round_scoring_tiles: tuple[int, ...] | None = None,
+        final_scoring_tiles: tuple[int, ...] | None = None,
+        standard_tech_tiles: tuple[int, ...] | None = None,
+        advanced_tech_tiles: tuple[int, ...] | None = None,
+        terraforming_federation_tile: int | None = None,
     ) -> GaiaState:
         if not 2 <= num_players <= 4:
             raise ValueError("GaiaState supports two to four players")
@@ -337,6 +345,14 @@ class GaiaState:
             ),
             faction_indices=faction_indices,
             first_player=first_player,
+            sector_tiles=sector_tiles,
+            sector_rotations=sector_rotations,
+            booster_tiles=booster_tiles,
+            round_scoring_tiles=round_scoring_tiles,
+            final_scoring_tiles=final_scoring_tiles,
+            standard_tech_tiles=standard_tech_tiles,
+            advanced_tech_tiles=advanced_tech_tiles,
+            terraforming_federation_tile=terraforming_federation_tile,
         )
         owners = [-1] * N
         buildings = [Building.EMPTY] * N

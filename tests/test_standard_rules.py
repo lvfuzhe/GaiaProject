@@ -151,6 +151,45 @@ class StandardGaiaRulesTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "different double-sided boards"):
             GaiaState.initial(2, faction_indices=(0, 1), first_player=0)
 
+    def test_manual_setup_can_override_every_random_component(self) -> None:
+        donor = GaiaState.initial(3, seed=18, faction_indices=(0, 2, 4), first_player=2)
+        state = GaiaState.initial(
+            3,
+            seed=17,
+            faction_indices=(0, 2, 4),
+            first_player=2,
+            sector_tiles=donor.sector_tiles,
+            sector_rotations=donor.sector_rotations,
+            booster_tiles=(0, 1, 2, 3, 4, 5),
+            round_scoring_tiles=(9, 8, 7, 6, 5, 4),
+            final_scoring_tiles=(5, 3),
+            standard_tech_tiles=(8, 7, 6, 5, 4, 3, 2, 1, 0),
+            advanced_tech_tiles=(14, 13, 12, 11, 10, 9),
+            terraforming_federation_tile=5,
+        )
+
+        self.assertEqual(state.sector_tiles, donor.sector_tiles)
+        self.assertEqual(state.sector_rotations, donor.sector_rotations)
+        self.assertEqual(state.round_scoring_tiles, (9, 8, 7, 6, 5, 4))
+        self.assertEqual(state.final_scoring_tiles, (5, 3))
+        self.assertEqual(state.standard_tech_tiles, (8, 7, 6, 5, 4, 3, 2, 1, 0))
+        self.assertEqual(state.advanced_tech_tiles, (14, 13, 12, 11, 10, 9))
+        self.assertEqual(state.terraforming_federation_tile, 5)
+        self.assertEqual(state.booster_owner[:6], (1, 0, 2, -1, -1, -1))
+
+    def test_manual_setup_rejects_duplicate_random_tiles(self) -> None:
+        with self.assertRaisesRegex(ValueError, "sector tiles must not contain duplicates"):
+            GaiaState.initial(
+                2,
+                sector_tiles=(0, 0, 1, 2, 3, 4, 5),
+                sector_rotations=(0, 0, 0, 0, 0, 0, 0),
+            )
+        with self.assertRaisesRegex(ValueError, "round scoring tiles must not contain duplicates"):
+            GaiaState.initial(
+                2,
+                round_scoring_tiles=(0, 0, 1, 2, 3, 4),
+            )
+
     def test_random_map_never_places_equal_home_types_adjacent(self) -> None:
         for seed in range(20):
             state = GaiaState.initial(2 + seed % 3, seed)

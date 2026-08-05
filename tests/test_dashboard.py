@@ -99,6 +99,10 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("setup-research-tech", page)
             self.assertIn("setup-editor-form", page)
             self.assertIn("setup-editor-run", page)
+            self.assertIn("setup-random-editor", page)
+            self.assertIn("setup-editor-sectors", page)
+            self.assertIn("setup-editor-standard-tech", page)
+            self.assertIn("setup-editor-boosters", page)
             self.assertIn("player-board-grid", page)
             self.assertIn("history-player-board-grid", page)
             self.assertEqual(sector_content_type, "image/gif")
@@ -134,7 +138,16 @@ class DashboardTests(unittest.TestCase):
             }
             status, preview = self.post_json(f"{base}/api/setup/preview", payload)
             self.assertEqual(status, 200)
-            self.assertEqual(preview["config"], payload)
+            for key, value in payload.items():
+                self.assertEqual(preview["config"][key], value)
+            random_setup = preview["config"]["random_setup"]
+            self.assertEqual(len(random_setup["sector_tiles"]), 7)
+            self.assertEqual(len(random_setup["sector_rotations"]), 7)
+            self.assertEqual(len(random_setup["booster_tiles"]), 5)
+            self.assertEqual(len(random_setup["round_scoring_tiles"]), 6)
+            self.assertEqual(len(random_setup["final_scoring_tiles"]), 2)
+            self.assertEqual(len(random_setup["standard_tech_tiles"]), 9)
+            self.assertEqual(len(random_setup["advanced_tech_tiles"]), 6)
             self.assertEqual(preview["state"]["first_player"], 1)
             self.assertEqual(
                 [player["faction_id"] for player in preview["state"]["players"]],
@@ -146,6 +159,36 @@ class DashboardTests(unittest.TestCase):
                     and planet["terrain"] == player["home_terrain"]
                     for planet in preview["state"]["planets"]
                 ))
+
+            customized = {
+                **payload,
+                "random_setup": {
+                    **random_setup,
+                    "standard_tech_tiles": list(reversed(random_setup["standard_tech_tiles"])),
+                    "advanced_tech_tiles": list(reversed(random_setup["advanced_tech_tiles"])),
+                    "terraforming_federation_tile": (
+                        random_setup["terraforming_federation_tile"] + 1
+                    ) % 6,
+                },
+            }
+            _, custom_preview = self.post_json(f"{base}/api/setup/preview", customized)
+            self.assertEqual(
+                custom_preview["config"]["random_setup"],
+                customized["random_setup"],
+            )
+            custom_setup = custom_preview["state"]["setup"]
+            self.assertEqual(
+                [tile["id"] for tile in custom_setup["standard_tech"]],
+                customized["random_setup"]["standard_tech_tiles"],
+            )
+            self.assertEqual(
+                [tile["id"] for tile in custom_setup["advanced_tech"]],
+                customized["random_setup"]["advanced_tech_tiles"],
+            )
+            self.assertEqual(
+                custom_setup["terraforming_federation"]["id"],
+                customized["random_setup"]["terraforming_federation_tile"],
+            )
 
             invalid = {**payload, "factions": [0, 1]}
             with self.assertRaises(HTTPError) as raised:

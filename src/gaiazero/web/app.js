@@ -16,6 +16,7 @@ const TRACK_LABELS = {
   economy: "经济",
   science: "科学"
 };
+const TRACK_KEYS = Object.keys(TRACK_LABELS);
 const BOOSTER_NAMES = [
   "矿石与矿场计分", "知识与贸易站计分", "信用点与能量", "信用点",
   "矿石与能量", "知识与能量", "信用点与能量", "航行行动", "改造行动", "盖亚行动"
@@ -113,6 +114,46 @@ const STANDARD_TECH_KEYS = [
   "ore-income", "knowledge-income", "credits-income", "gaia-vp", "power-income",
   "qic", "mine-vp", "federation-vp", "planet-type-vp",
 ];
+const ROUND_SETUP_KEYS = [
+  "mine-2a", "mine-2b", "trading-3a", "trading-3b", "terraform-2a",
+  "terraform-2b", "gaia-3a", "gaia-3b", "research-2", "big-5",
+];
+const FINAL_SETUP_KEYS = [
+  "federation-structures", "structures", "planet-types",
+  "gaia-planets", "sectors", "satellites",
+];
+const DEFAULT_RANDOM_SETUPS = {
+  2: {
+    sector_tiles: [2, 4, 3, 6, 5, 0, 1],
+    sector_rotations: [1, 4, 3, 5, 3, 3, 5],
+    booster_tiles: [6, 4, 0, 2, 7],
+    round_scoring_tiles: [0, 2, 7, 4, 9, 3],
+    final_scoring_tiles: [0, 4],
+    standard_tech_tiles: [7, 6, 4, 8, 2, 3, 5, 0, 1],
+    advanced_tech_tiles: [12, 14, 10, 6, 9, 7],
+    terraforming_federation_tile: 5,
+  },
+  3: {
+    sector_tiles: [4, 6, 2, 7, 3, 5, 9, 0, 8, 1],
+    sector_rotations: [3, 3, 5, 4, 3, 3, 3, 5, 1, 4],
+    booster_tiles: [6, 0, 9, 4, 5, 7],
+    round_scoring_tiles: [5, 4, 9, 6, 8, 3],
+    final_scoring_tiles: [4, 0],
+    standard_tech_tiles: [4, 6, 2, 3, 8, 7, 5, 0, 1],
+    advanced_tech_tiles: [13, 9, 3, 4, 8, 5],
+    terraforming_federation_tile: 4,
+  },
+  4: {
+    sector_tiles: [4, 6, 2, 7, 3, 5, 9, 0, 8, 1],
+    sector_rotations: [3, 3, 5, 4, 3, 3, 3, 5, 1, 4],
+    booster_tiles: [2, 7, 5, 3, 1, 4, 9],
+    round_scoring_tiles: [6, 4, 5, 7, 1, 3],
+    final_scoring_tiles: [2, 1],
+    standard_tech_tiles: [8, 5, 1, 0, 4, 7, 2, 6, 3],
+    advanced_tech_tiles: [7, 2, 8, 5, 3, 13],
+    terraforming_federation_tile: 1,
+  },
+};
 const BUILDING_SPECS = [
   { key: "mine", label: "矿场", short: "M", total: 8 },
   { key: "trading_station", label: "贸易站", short: "TS", total: 4 },
@@ -148,6 +189,8 @@ const state = {
     initialized: false,
     hydrated: false,
     edited: false,
+    configView: "map",
+    randomElements: null,
     preview: null,
     busy: false,
     runId: null,
@@ -746,6 +789,13 @@ function initializeSetupEditor(snapshot) {
   renderSetupEditorSeats(Number(
     runConfig.first_player ?? setupSnapshot?.first_player ?? 0,
   ));
+  state.manualSetup.randomElements = randomElementsFromSnapshot(
+    setupSnapshot,
+    runConfig,
+    players,
+    Number(runConfig.first_player ?? setupSnapshot?.first_player ?? 0),
+  );
+  renderRandomElementEditor();
   state.manualSetup.initialized = true;
   state.manualSetup.hydrated = Boolean(snapshot);
   renderManualSetupStatus();
@@ -775,7 +825,176 @@ function renderSetupEditorSeats(preferredFirstPlayer = null) {
   ).join("");
 }
 
-function manualSetupPayload() {
+function defaultRandomElements(players) {
+  const source = DEFAULT_RANDOM_SETUPS[players] || DEFAULT_RANDOM_SETUPS[2];
+  return Object.fromEntries(Object.entries(source).map(([key, value]) => [
+    key,
+    Array.isArray(value) ? [...value] : value,
+  ]));
+}
+
+function normalizedRandomElements(players, values = {}) {
+  const defaults = defaultRandomElements(players);
+  const expectedLengths = {
+    sector_tiles: players === 2 ? 7 : 10,
+    sector_rotations: players === 2 ? 7 : 10,
+    booster_tiles: players + 3,
+    round_scoring_tiles: 6,
+    final_scoring_tiles: 2,
+    standard_tech_tiles: 9,
+    advanced_tech_tiles: 6,
+  };
+  for (const [field, expected] of Object.entries(expectedLengths)) {
+    if (Array.isArray(values[field]) && values[field].length === expected) {
+      defaults[field] = values[field].map(Number);
+    }
+  }
+  const federation = Number(values.terraforming_federation_tile);
+  if (Number.isInteger(federation) && federation >= 0 && federation < 6) {
+    defaults.terraforming_federation_tile = federation;
+  }
+  return defaults;
+}
+
+function randomElementsFromSnapshot(snapshot, config, players, firstPlayer) {
+  if (config?.random_setup) {
+    return normalizedRandomElements(players, config.random_setup);
+  }
+  const setup = snapshot?.setup;
+  if (!setup) return defaultRandomElements(players);
+  const turnOrder = Array.from(
+    { length: players },
+    (_, offset) => (firstPlayer + offset) % players,
+  );
+  const assignedBoosters = turnOrder.reverse().map((player) =>
+    setup.boosters.find((booster) => booster.owner === player)?.id,
+  );
+  const publicBoosters = setup.boosters
+    .filter((booster) => booster.owner === -1)
+    .map((booster) => booster.id);
+  return normalizedRandomElements(players, {
+    sector_tiles: setup.map?.sectors?.map((sector) => Number(sector.tile) - 1),
+    sector_rotations: setup.map?.sectors?.map((sector) => Number(sector.rotation) / 60),
+    booster_tiles: [...assignedBoosters, ...publicBoosters],
+    round_scoring_tiles: setup.round_scoring?.map((tile) => tile.id),
+    final_scoring_tiles: setup.final_scoring?.map((tile) => tile.id),
+    standard_tech_tiles: setup.standard_tech?.map((tile) => tile.id),
+    advanced_tech_tiles: setup.advanced_tech?.map((tile) => tile.id),
+    terraforming_federation_tile: setup.terraforming_federation?.id,
+  });
+}
+
+function selectOptions(count, selected, labeler) {
+  return Array.from({ length: count }, (_, value) =>
+    `<option value="${value}" ${value === selected ? "selected" : ""}>${escapeHtml(labeler(value))}</option>`,
+  ).join("");
+}
+
+function tileControl(field, index, selected, kind, slotLabel, count, labeler) {
+  return `<label class="setup-tile-control" data-kind="${kind}">
+    <span>${escapeHtml(slotLabel)}</span>
+    <select data-random-field="${field}" data-random-index="${index}" aria-label="${escapeHtml(slotLabel)}">
+      ${selectOptions(count, selected, labeler)}
+    </select>
+  </label>`;
+}
+
+function renderRandomElementEditor() {
+  const players = Number(byId("setup-editor-players").value || 2);
+  const elements = normalizedRandomElements(players, state.manualSetup.randomElements || {});
+  state.manualSetup.randomElements = elements;
+  const sectorCount = players === 2 ? 7 : 10;
+  byId("setup-editor-sectors").innerHTML = Array.from({ length: sectorCount }, (_, index) => {
+    const selected = elements.sector_tiles[index];
+    const side = players === 2 && selected >= 4 && selected <= 6 ? "outlined" : "solid";
+    return `<div class="setup-sector-control">
+      <img src="${sectorArtworkPath(selected + 1, side)}" alt="星区 S${String(selected + 1).padStart(2, "0")}">
+      <label><span>位置 ${index + 1} · 板块</span><select data-random-field="sector_tiles" data-random-index="${index}">
+        ${selectOptions(sectorCount, selected, (value) => `S${String(value + 1).padStart(2, "0")}`)}
+      </select></label>
+      <label><span>旋转角度</span><select data-random-field="sector_rotations" data-random-index="${index}">
+        ${selectOptions(6, elements.sector_rotations[index], (value) => `${value * 60}°`)}
+      </select></label>
+    </div>`;
+  }).join("");
+  byId("setup-editor-round-scoring").innerHTML = elements.round_scoring_tiles.map((tile, index) =>
+    tileControl(
+      "round_scoring_tiles", index, tile, "round", `第 ${index + 1} 轮`, 10,
+      (value) => `R${value + 1} · ${SETUP_LABELS[ROUND_SETUP_KEYS[value]]}`,
+    ),
+  ).join("");
+  byId("setup-editor-final-scoring").innerHTML = elements.final_scoring_tiles.map((tile, index) =>
+    tileControl(
+      "final_scoring_tiles", index, tile, "final", `终局槽位 ${index + 1}`, 6,
+      (value) => `F${value + 1} · ${SETUP_LABELS[FINAL_SETUP_KEYS[value]]}`,
+    ),
+  ).join("");
+  byId("setup-editor-standard-tech").innerHTML = elements.standard_tech_tiles.map((tile, index) =>
+    tileControl(
+      "standard_tech_tiles", index, tile, "standard",
+      index < 6 ? TRACK_LABELS[TRACK_KEYS[index]] : `通用槽位 ${index - 5}`,
+      9,
+      (value) => `T${value + 1} · ${SETUP_LABELS[STANDARD_TECH_KEYS[value]]}`,
+    ),
+  ).join("");
+  byId("setup-editor-advanced-tech").innerHTML = elements.advanced_tech_tiles.map((tile, index) =>
+    tileControl(
+      "advanced_tech_tiles", index, tile, "advanced", TRACK_LABELS[TRACK_KEYS[index]], 15,
+      (value) => `A${value + 1} · ${ADVANCED_TECH_NAMES[value]}`,
+    ),
+  ).join("");
+  const firstPlayer = Number(byId("setup-editor-first-player").value || 0);
+  const assignedPlayers = Array.from(
+    { length: players },
+    (_, offset) => (firstPlayer + offset) % players,
+  ).reverse();
+  byId("setup-editor-boosters").innerHTML = elements.booster_tiles.map((tile, index) =>
+    tileControl(
+      "booster_tiles", index, tile, "booster",
+      index < players ? `P${assignedPlayers[index]} 初始助推` : `公共槽位 ${index - players + 1}`,
+      10,
+      (value) => `B${value + 1} · ${BOOSTER_NAMES[value]}`,
+    ),
+  ).join("");
+  byId("setup-editor-federation").innerHTML = `<label><span>轨顶板块</span>
+    <select id="setup-editor-federation-tile" data-random-field="terraforming_federation_tile">
+      ${selectOptions(6, elements.terraforming_federation_tile, (value) => `联邦 ${value + 1} · ${FEDERATION_NAMES[value]}`)}
+    </select>
+  </label>`;
+}
+
+function captureRandomElements() {
+  const result = {};
+  document.querySelectorAll("[data-random-field]").forEach((select) => {
+    const field = select.dataset.randomField;
+    const index = select.dataset.randomIndex;
+    if (index === undefined) {
+      result[field] = Number(select.value);
+    } else {
+      if (!result[field]) result[field] = [];
+      result[field][Number(index)] = Number(select.value);
+    }
+  });
+  state.manualSetup.randomElements = result;
+  return result;
+}
+
+function validateTileSelection(values, expected, available, label, requireAll = false) {
+  if (!Array.isArray(values) || values.length !== expected) {
+    throw new Error(`${label}需要 ${expected} 个槽位`);
+  }
+  if (values.some((value) => !Number.isInteger(value) || value < 0 || value >= available)) {
+    throw new Error(`${label}包含无效板块`);
+  }
+  if (new Set(values).size !== values.length) {
+    throw new Error(`${label}不能重复`);
+  }
+  if (requireAll && new Set(values).size !== available) {
+    throw new Error(`${label}必须使用全部板块`);
+  }
+}
+
+function manualSetupPayload({ includeRandom = true } = {}) {
   const players = Number(byId("setup-editor-players").value);
   const factions = [...byId("setup-editor-factions").querySelectorAll("select")]
     .slice(0, players)
@@ -796,13 +1015,27 @@ function manualSetupPayload() {
   if (!Number.isInteger(simulations) || simulations < 1 || simulations > 128) {
     throw new Error("每步搜索次数必须是 1–128 的整数");
   }
-  return {
+  const config = {
     players,
     seed,
     first_player: firstPlayer,
     factions,
     simulations,
   };
+  if (!includeRandom) return config;
+  const randomSetup = captureRandomElements();
+  const sectorCount = players === 2 ? 7 : 10;
+  validateTileSelection(randomSetup.sector_tiles, sectorCount, sectorCount, "星区板块", true);
+  if (randomSetup.sector_rotations?.length !== sectorCount) {
+    throw new Error(`星区旋转需要 ${sectorCount} 个槽位`);
+  }
+  validateTileSelection(randomSetup.booster_tiles, players + 3, 10, "助推板块");
+  validateTileSelection(randomSetup.round_scoring_tiles, 6, 10, "轮次计分板块");
+  validateTileSelection(randomSetup.final_scoring_tiles, 2, 6, "终局计分板块");
+  validateTileSelection(randomSetup.standard_tech_tiles, 9, 9, "基础科技板块", true);
+  validateTileSelection(randomSetup.advanced_tech_tiles, 6, 15, "高级科技板块");
+  config.random_setup = randomSetup;
+  return config;
 }
 
 function setSetupEditorMessage(message, status = "ready") {
@@ -848,10 +1081,15 @@ async function previewManualSetup({ quiet = false } = {}) {
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    state.manualSetup.randomElements = normalizedRandomElements(
+      data.config.players,
+      data.config.random_setup,
+    );
+    renderRandomElementEditor();
     state.manualSetup.preview = data.state;
     renderSetup(data.state);
     if (!quiet) setSetupEditorMessage("预览已应用", "complete");
-    return config;
+    return data.config;
   } finally {
     state.manualSetup.busy = false;
     renderManualSetupStatus();
@@ -919,10 +1157,30 @@ async function randomizeManualSetup() {
     return face.id;
   });
   renderSetupEditorSeats(random[0] % players);
+  state.manualSetup.busy = true;
+  setSetupEditorMessage("正在随机生成全部初始板块", "running");
   try {
-    await previewManualSetup();
+    const config = manualSetupPayload({ includeRandom: false });
+    const response = await fetch("/api/setup/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(config),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    state.manualSetup.randomElements = normalizedRandomElements(
+      players,
+      data.config.random_setup,
+    );
+    renderRandomElementEditor();
+    state.manualSetup.preview = data.state;
+    renderSetup(data.state);
+    setSetupEditorMessage("全部随机元素已更新", "complete");
   } catch (error) {
     setSetupEditorMessage(error.message || String(error), "failed");
+  } finally {
+    state.manualSetup.busy = false;
+    renderManualSetupStatus();
   }
 }
 
@@ -1734,7 +1992,15 @@ byId("refresh-button").addEventListener("click", () => pollEvents(true));
 byId("setup-editor-players").addEventListener("change", () => {
   state.manualSetup.edited = true;
   renderSetupEditorSeats();
-  setSetupEditorMessage("设置已修改", "ready");
+  state.manualSetup.randomElements = defaultRandomElements(
+    Number(byId("setup-editor-players").value),
+  );
+  renderRandomElementEditor();
+  setSetupEditorMessage("玩家人数已修改，随机元素已按合法模板重置", "ready");
+});
+byId("setup-editor-first-player").addEventListener("change", () => {
+  captureRandomElements();
+  renderRandomElementEditor();
 });
 byId("setup-editor-factions").addEventListener("change", (event) => {
   const select = event.target.closest("select[data-player]");
@@ -1744,6 +2010,20 @@ byId("setup-editor-factions").addEventListener("change", (event) => {
   setSetupEditorMessage("设置已修改", "ready");
 });
 byId("setup-editor-form").addEventListener("input", (event) => {
+  const randomSelect = event.target.closest("select[data-random-field]");
+  if (randomSelect) {
+    captureRandomElements();
+    if (randomSelect.dataset.randomField === "sector_tiles") {
+      const players = Number(byId("setup-editor-players").value);
+      const tile = Number(randomSelect.value);
+      const side = players === 2 && tile >= 4 && tile <= 6 ? "outlined" : "solid";
+      const image = randomSelect.closest(".setup-sector-control")?.querySelector("img");
+      if (image) {
+        image.src = sectorArtworkPath(tile + 1, side);
+        image.alt = `星区 S${String(tile + 1).padStart(2, "0")}`;
+      }
+    }
+  }
   if (!event.target.closest("select[data-player]")) {
     state.manualSetup.edited = true;
     setSetupEditorMessage("设置已修改", "ready");
@@ -1759,6 +2039,21 @@ byId("setup-editor-form").addEventListener("submit", async (event) => {
 });
 byId("setup-editor-randomize").addEventListener("click", randomizeManualSetup);
 byId("setup-editor-run").addEventListener("click", runManualSimulation);
+document.querySelectorAll("[data-setup-config-view]").forEach((tab) => {
+  tab.addEventListener("click", () => {
+    state.manualSetup.configView = tab.dataset.setupConfigView;
+    document.querySelectorAll("[data-setup-config-view]").forEach((item) => {
+      const active = item.dataset.setupConfigView === state.manualSetup.configView;
+      item.classList.toggle("active", active);
+      item.setAttribute("aria-selected", String(active));
+    });
+    document.querySelectorAll("[data-setup-config-panel]").forEach((panel) => {
+      const active = panel.dataset.setupConfigPanel === state.manualSetup.configView;
+      panel.classList.toggle("active", active);
+      panel.hidden = !active;
+    });
+  });
+});
 byId("history-run-select").addEventListener("change", async (event) => {
   stopHistoryPlayback();
   state.history.runId = event.target.value || null;

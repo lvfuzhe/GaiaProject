@@ -115,12 +115,12 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         try:
             payload = self._read_json_body()
             config = _normalize_manual_config(payload)
-            initial = GaiaState.initial(
-                config["players"],
-                config["seed"],
-                faction_indices=tuple(config["factions"]),
-                first_player=config["first_player"],
-            )
+            requested_random_setup = config["random_setup"]
+            initial = _manual_initial_state(config)
+            resolved_random_setup = _resolved_random_setup(initial)
+            if requested_random_setup:
+                resolved_random_setup.update(requested_random_setup)
+            config["random_setup"] = resolved_random_setup
         except (json.JSONDecodeError, TypeError, ValueError) as error:
             self._send_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
             return
@@ -284,12 +284,108 @@ def _normalize_manual_config(payload: dict[str, Any]) -> dict[str, Any]:
     factions = [int(faction) for faction in factions_value]
     if len(factions) != players:
         raise ValueError("one faction is required for each player")
+    random_setup = _normalize_random_setup(payload.get("random_setup"))
     return {
         "players": players,
         "seed": seed,
         "first_player": first_player,
         "factions": factions,
         "simulations": simulations,
+        "random_setup": random_setup,
+    }
+
+
+def _normalize_random_setup(value: object) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise TypeError("random_setup must be an object")
+    array_fields = (
+        "sector_tiles",
+        "sector_rotations",
+        "booster_tiles",
+        "round_scoring_tiles",
+        "final_scoring_tiles",
+        "standard_tech_tiles",
+        "advanced_tech_tiles",
+    )
+    allowed_fields = {*array_fields, "terraforming_federation_tile"}
+    unknown = set(value) - allowed_fields
+    if unknown:
+        raise ValueError(f"unknown random_setup field: {sorted(unknown)[0]}")
+    normalized: dict[str, Any] = {}
+    for field in array_fields:
+        if field not in value:
+            continue
+        items = value[field]
+        if not isinstance(items, list):
+            raise TypeError(f"random_setup.{field} must be an array")
+        normalized[field] = [int(item) for item in items]
+    if "terraforming_federation_tile" in value:
+        normalized["terraforming_federation_tile"] = int(
+            value["terraforming_federation_tile"]
+        )
+    if ("sector_tiles" in normalized) != ("sector_rotations" in normalized):
+        raise ValueError("sector tiles and rotations must be provided together")
+    return normalized
+
+
+def _manual_initial_state(config: dict[str, Any]) -> GaiaState:
+    random_setup = config.get("random_setup") or {}
+    tuple_fields = (
+        "sector_tiles",
+        "sector_rotations",
+        "booster_tiles",
+        "round_scoring_tiles",
+        "final_scoring_tiles",
+        "standard_tech_tiles",
+        "advanced_tech_tiles",
+    )
+    overrides = {
+        field: tuple(random_setup[field])
+        for field in tuple_fields
+        if field in random_setup
+    }
+    if "terraforming_federation_tile" in random_setup:
+        overrides["terraforming_federation_tile"] = random_setup[
+            "terraforming_federation_tile"
+        ]
+    return GaiaState.initial(
+        config["players"],
+        config["seed"],
+        faction_indices=tuple(config["factions"]),
+        first_player=config["first_player"],
+        **overrides,
+    )
+
+
+def _resolved_random_setup(state: GaiaState) -> dict[str, Any]:
+    turn_order = [
+        (state.first_player + offset) % state.num_players
+        for offset in range(state.num_players)
+    ]
+    assigned_boosters = [
+        next(
+            booster
+            for booster, owner in enumerate(state.booster_owner)
+            if owner == player
+        )
+        for player in reversed(turn_order)
+    ]
+    public_boosters = [
+        booster
+        for booster, owner in enumerate(state.booster_owner)
+        if owner == -1
+    ]
+    return {
+        "sector_tiles": list(state.sector_tiles),
+        "sector_rotations": list(state.sector_rotations),
+        "booster_tiles": assigned_boosters + public_boosters,
+        "round_scoring_tiles": list(state.round_scoring_tiles),
+        "final_scoring_tiles": list(state.final_scoring_tiles),
+        "standard_tech_tiles": list(state.standard_tech_tiles),
+        "advanced_tech_tiles": list(state.advanced_tech_tiles),
+        "terraforming_federation_tile": state.terraforming_federation_tile,
     }
 
 

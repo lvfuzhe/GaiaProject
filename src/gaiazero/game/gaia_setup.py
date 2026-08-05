@@ -93,13 +93,43 @@ def generate_setup(
     faction_starting_structures: tuple[int, ...],
     faction_indices: tuple[int, ...] | None = None,
     first_player: int | None = None,
+    sector_tiles: tuple[int, ...] | None = None,
+    sector_rotations: tuple[int, ...] | None = None,
+    booster_tiles: tuple[int, ...] | None = None,
+    round_scoring_tiles: tuple[int, ...] | None = None,
+    final_scoring_tiles: tuple[int, ...] | None = None,
+    standard_tech_tiles: tuple[int, ...] | None = None,
+    advanced_tech_tiles: tuple[int, ...] | None = None,
+    terraforming_federation_tile: int | None = None,
 ) -> GaiaSetup:
     if not 2 <= num_players <= 4:
         raise ValueError("num_players must be between two and four")
     rng = np.random.default_rng(seed)
     centers = SECTOR_CENTERS_2P if num_players == 2 else SECTOR_CENTERS_34P
     tile_pool = np.arange(7 if num_players == 2 else MAX_SECTORS)
-    map_data = _random_map(rng, tile_pool, centers)
+    random_map = _random_map(rng, tile_pool, centers)
+    if (sector_tiles is None) != (sector_rotations is None):
+        raise ValueError("sector_tiles and sector_rotations must be provided together")
+    if sector_tiles is None:
+        map_data = random_map
+    else:
+        selected_sector_tiles = _validate_selection(
+            sector_tiles,
+            expected_count=len(centers),
+            available_count=len(tile_pool),
+            label="sector tiles",
+            require_all=True,
+        )
+        selected_rotations = tuple(int(value) for value in sector_rotations)
+        if len(selected_rotations) != len(centers):
+            raise ValueError(f"sector rotations must contain {len(centers)} values")
+        if any(rotation < 0 or rotation > 5 for rotation in selected_rotations):
+            raise ValueError("sector rotations must be between zero and five")
+        map_data = _assemble_map(centers, selected_sector_tiles, selected_rotations)
+        if not _map_is_valid(*map_data[:4]):
+            raise ValueError(
+                "sector arrangement is illegal: equal home planet types may not be adjacent"
+            )
 
     if faction_indices is None:
         board_choices = rng.choice(len(faction_boards), size=num_players, replace=False)
@@ -137,10 +167,16 @@ def generate_setup(
     selected_first_player = seed % num_players if first_player is None else int(first_player)
     if not 0 <= selected_first_player < num_players:
         raise ValueError("first_player is out of range")
-    selected_boosters = [
+    random_boosters = tuple(
         int(value)
         for value in rng.choice(BOOSTER_COUNT, size=num_players + 3, replace=False)
-    ]
+    )
+    selected_boosters = random_boosters if booster_tiles is None else _validate_selection(
+        booster_tiles,
+        expected_count=num_players + 3,
+        available_count=BOOSTER_COUNT,
+        label="booster tiles",
+    )
     booster_owner = [-2] * BOOSTER_COUNT
     for booster in selected_boosters:
         booster_owner[booster] = -1
@@ -154,6 +190,66 @@ def generate_setup(
         strict=True,
     ):
         booster_owner[booster] = player
+
+    random_round_scoring = tuple(
+        int(value) for value in rng.choice(10, size=6, replace=False)
+    )
+    random_final_scoring = tuple(
+        int(value) for value in rng.choice(6, size=2, replace=False)
+    )
+    random_standard_tech = tuple(int(value) for value in rng.permutation(9))
+    random_advanced_tech = tuple(
+        int(value) for value in rng.choice(15, size=6, replace=False)
+    )
+    random_federation = int(rng.integers(0, 6))
+    selected_round_scoring = (
+        random_round_scoring
+        if round_scoring_tiles is None
+        else _validate_selection(
+            round_scoring_tiles,
+            expected_count=6,
+            available_count=10,
+            label="round scoring tiles",
+        )
+    )
+    selected_final_scoring = (
+        random_final_scoring
+        if final_scoring_tiles is None
+        else _validate_selection(
+            final_scoring_tiles,
+            expected_count=2,
+            available_count=6,
+            label="final scoring tiles",
+        )
+    )
+    selected_standard_tech = (
+        random_standard_tech
+        if standard_tech_tiles is None
+        else _validate_selection(
+            standard_tech_tiles,
+            expected_count=9,
+            available_count=9,
+            label="standard technology tiles",
+            require_all=True,
+        )
+    )
+    selected_advanced_tech = (
+        random_advanced_tech
+        if advanced_tech_tiles is None
+        else _validate_selection(
+            advanced_tech_tiles,
+            expected_count=6,
+            available_count=15,
+            label="advanced technology tiles",
+        )
+    )
+    selected_federation = (
+        random_federation
+        if terraforming_federation_tile is None
+        else int(terraforming_federation_tile)
+    )
+    if not 0 <= selected_federation < 6:
+        raise ValueError("terraforming federation tile is out of range")
 
     return GaiaSetup(
         seed=seed,
@@ -169,18 +265,32 @@ def generate_setup(
         sector_rotations=map_data[6],
         sector_centers=tuple(centers),
         booster_owner=tuple(booster_owner),
-        round_scoring_tiles=tuple(
-            int(value) for value in rng.choice(10, size=6, replace=False)
-        ),
-        final_scoring_tiles=tuple(
-            int(value) for value in rng.choice(6, size=2, replace=False)
-        ),
-        standard_tech_tiles=tuple(int(value) for value in rng.permutation(9)),
-        advanced_tech_tiles=tuple(
-            int(value) for value in rng.choice(15, size=6, replace=False)
-        ),
-        terraforming_federation_tile=int(rng.integers(0, 6)),
+        round_scoring_tiles=selected_round_scoring,
+        final_scoring_tiles=selected_final_scoring,
+        standard_tech_tiles=selected_standard_tech,
+        advanced_tech_tiles=selected_advanced_tech,
+        terraforming_federation_tile=selected_federation,
     )
+
+
+def _validate_selection(
+    values: tuple[int, ...],
+    *,
+    expected_count: int,
+    available_count: int,
+    label: str,
+    require_all: bool = False,
+) -> tuple[int, ...]:
+    selected = tuple(int(value) for value in values)
+    if len(selected) != expected_count:
+        raise ValueError(f"{label} must contain {expected_count} values")
+    if any(value < 0 or value >= available_count for value in selected):
+        raise ValueError(f"{label} contain an out-of-range value")
+    if len(set(selected)) != len(selected):
+        raise ValueError(f"{label} must not contain duplicates")
+    if require_all and set(selected) != set(range(available_count)):
+        raise ValueError(f"{label} must contain every available tile")
+    return selected
 
 
 def hex_distance(aq: int, ar: int, bq: int, br: int) -> int:
@@ -214,36 +324,52 @@ def _random_map(
     for _ in range(2_000):
         sector_tiles = tuple(int(value) for value in rng.permutation(tile_pool))
         rotations = tuple(int(value) for value in rng.integers(0, 6, size=len(centers)))
-        active = [False] * MAX_PLANETS
-        planet_q = [0] * MAX_PLANETS
-        planet_r = [0] * MAX_PLANETS
-        terrains = [0] * MAX_PLANETS
-        sectors = [-1] * MAX_PLANETS
-        for position, ((center_q, center_r), tile, rotation) in enumerate(
-            zip(centers, sector_tiles, rotations, strict=True)
-        ):
-            for local, ((q, r), terrain) in enumerate(
-                zip(SECTOR_LOCAL_POSITIONS[tile], SECTOR_TERRAINS[tile], strict=True)
-            ):
-                slot = position * PLANETS_PER_SECTOR + local
-                rotated_q, rotated_r = _rotate(q, r, rotation)
-                active[slot] = True
-                planet_q[slot] = center_q + rotated_q
-                planet_r[slot] = center_r + rotated_r
-                terrains[slot] = terrain
-                sectors[slot] = tile + 1
-        last = (
-            tuple(active),
-            tuple(planet_q),
-            tuple(planet_r),
-            tuple(terrains),
-            tuple(sectors),
-            sector_tiles,
-            rotations,
-        )
+        last = _assemble_map(centers, sector_tiles, rotations)
         if _map_is_valid(*last[:4]):
             return last
     raise RuntimeError("unable to assemble a valid random sector map")
+
+
+def _assemble_map(
+    centers: tuple[tuple[int, int], ...],
+    sector_tiles: tuple[int, ...],
+    rotations: tuple[int, ...],
+) -> tuple[
+    tuple[bool, ...],
+    tuple[int, ...],
+    tuple[int, ...],
+    tuple[int, ...],
+    tuple[int, ...],
+    tuple[int, ...],
+    tuple[int, ...],
+]:
+    active = [False] * MAX_PLANETS
+    planet_q = [0] * MAX_PLANETS
+    planet_r = [0] * MAX_PLANETS
+    terrains = [0] * MAX_PLANETS
+    sectors = [-1] * MAX_PLANETS
+    for position, ((center_q, center_r), tile, rotation) in enumerate(
+        zip(centers, sector_tiles, rotations, strict=True)
+    ):
+        for local, ((q, r), terrain) in enumerate(
+            zip(SECTOR_LOCAL_POSITIONS[tile], SECTOR_TERRAINS[tile], strict=True)
+        ):
+            slot = position * PLANETS_PER_SECTOR + local
+            rotated_q, rotated_r = _rotate(q, r, rotation)
+            active[slot] = True
+            planet_q[slot] = center_q + rotated_q
+            planet_r[slot] = center_r + rotated_r
+            terrains[slot] = terrain
+            sectors[slot] = tile + 1
+    return (
+        tuple(active),
+        tuple(planet_q),
+        tuple(planet_r),
+        tuple(terrains),
+        tuple(sectors),
+        sector_tiles,
+        rotations,
+    )
 
 
 def _map_is_valid(

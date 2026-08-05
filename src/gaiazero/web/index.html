@@ -159,6 +159,37 @@
           </div>
           <div class="setup-editor-subheading"><strong>座位与种族</strong><span>同一张双面板仅可选择一面</span></div>
           <div id="setup-editor-factions" class="setup-editor-factions"></div>
+          <details id="setup-random-editor" class="setup-random-editor" open>
+            <summary><span><strong>全部随机元素</strong><small>星区、计分、科技、助推与联邦板块</small></span><span class="setup-random-summary-mark" aria-hidden="true">⌄</span></summary>
+            <div class="setup-config-tabs" role="tablist" aria-label="随机元素类型">
+              <button class="setup-config-tab active" type="button" role="tab" aria-selected="true" data-setup-config-view="map">星区地图</button>
+              <button class="setup-config-tab" type="button" role="tab" aria-selected="false" data-setup-config-view="scoring">计分板块</button>
+              <button class="setup-config-tab" type="button" role="tab" aria-selected="false" data-setup-config-view="tech">科技板块</button>
+              <button class="setup-config-tab" type="button" role="tab" aria-selected="false" data-setup-config-view="boosters">助推与联邦</button>
+            </div>
+            <section id="setup-config-map" class="setup-config-panel active" data-setup-config-panel="map" role="tabpanel">
+              <div class="setup-config-heading"><strong>星区位置与方向</strong><span>板块不可重复，旋转以 60° 为一步</span></div>
+              <div id="setup-editor-sectors" class="setup-sector-controls"></div>
+            </section>
+            <section id="setup-config-scoring" class="setup-config-panel" data-setup-config-panel="scoring" role="tabpanel" hidden>
+              <div class="setup-config-heading"><strong>轮次计分板块</strong><span>从左到右对应第 1–6 轮</span></div>
+              <div id="setup-editor-round-scoring" class="setup-tile-controls six"></div>
+              <div class="setup-config-heading secondary"><strong>终局计分板块</strong><span>两个板块不可重复</span></div>
+              <div id="setup-editor-final-scoring" class="setup-tile-controls two"></div>
+            </section>
+            <section id="setup-config-tech" class="setup-config-panel" data-setup-config-panel="tech" role="tabpanel" hidden>
+              <div class="setup-config-heading"><strong>基础科技位置</strong><span>六条轨道与三个通用槽位</span></div>
+              <div id="setup-editor-standard-tech" class="setup-tile-controls tech"></div>
+              <div class="setup-config-heading secondary"><strong>高级科技位置</strong><span>从左到右对应六条科研轨道</span></div>
+              <div id="setup-editor-advanced-tech" class="setup-tile-controls six"></div>
+            </section>
+            <section id="setup-config-boosters" class="setup-config-panel" data-setup-config-panel="boosters" role="tabpanel" hidden>
+              <div class="setup-config-heading"><strong>初始与公共助推板块</strong><span>玩家槽位按实际初始归属显示</span></div>
+              <div id="setup-editor-boosters" class="setup-tile-controls boosters"></div>
+              <div class="setup-config-heading secondary"><strong>地形改造轨顶联邦板块</strong></div>
+              <div id="setup-editor-federation" class="setup-federation-control"></div>
+            </section>
+          </details>
           <div class="setup-editor-actions">
             <button id="setup-editor-randomize" class="secondary-command" type="button">随机配置</button>
             <button id="setup-editor-preview" class="secondary-command" type="submit">应用预览</button>
