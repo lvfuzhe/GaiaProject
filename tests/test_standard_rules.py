@@ -63,6 +63,19 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(setup["map"]["sector_count"], 10)
         self.assertEqual(len(setup["map"]["sectors"]), 10)
         self.assertEqual(len(setup["factions"]), 3)
+        self.assertEqual(len(setup["faction_catalog"]), 14)
+        self.assertEqual(
+            {faction["name"] for faction in setup["faction_catalog"]},
+            {faction.name for faction in FACTIONS},
+        )
+        self.assertEqual(
+            len({(faction["board"], faction["side"]) for faction in setup["faction_catalog"]}),
+            14,
+        )
+        self.assertTrue(all(
+            faction["side"] in ("A", "B")
+            for faction in setup["factions"]
+        ))
         self.assertEqual(len(setup["boosters"]), 6)
         self.assertEqual(len(setup["round_scoring"]), 6)
         self.assertEqual(len(setup["final_scoring"]), 2)

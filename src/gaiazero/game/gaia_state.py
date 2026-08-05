@@ -96,6 +96,25 @@ FACTION_BOARDS: tuple[tuple[int, int], ...] = (
     (12, 13),
 )
 
+# Side labels follow the printed player boards. The Ice board is ordered
+# Nevlas/Itars internally, while its physical A/B faces are Itars/Nevlas.
+FACTION_BOARD_SIDES: tuple[str, ...] = (
+    "A",
+    "B",
+    "A",
+    "B",
+    "A",
+    "B",
+    "A",
+    "B",
+    "A",
+    "B",
+    "A",
+    "B",
+    "B",
+    "A",
+)
+
 MAX_ROUNDS = 6
 TRACK_COUNT = len(Track)
 TECH_COUNT = TRACK_COUNT
@@ -1289,6 +1308,7 @@ class GaiaState:
                         "player": player,
                         "id": info.faction,
                         "board": FACTIONS[info.faction].board + 1,
+                        "side": FACTION_BOARD_SIDES[info.faction],
                         "name": FACTIONS[info.faction].name,
                         "home_terrain": int(FACTIONS[info.faction].home),
                         "start_track": FACTIONS[info.faction].start_track.name.lower(),
@@ -1296,6 +1316,23 @@ class GaiaState:
                         "starting_planets": list(self.starting_planets[player]),
                     }
                     for player, info in enumerate(self.players)
+                ],
+                "faction_catalog": [
+                    {
+                        "id": faction_id,
+                        "board": faction.board + 1,
+                        "side": FACTION_BOARD_SIDES[faction_id],
+                        "name": faction.name,
+                        "home_terrain": int(faction.home),
+                        "start_track": faction.start_track.name.lower(),
+                        "ability": faction.ability,
+                        "starting_power": list(faction.power),
+                        "starting_qic": faction.starting_qic,
+                        "starting_structures": faction.starting_structures,
+                        "starts_with_pi": faction.starts_with_pi,
+                        "federation_threshold": faction.federation_threshold,
+                    }
+                    for faction_id, faction in enumerate(FACTIONS)
                 ],
                 "boosters": [
                     {

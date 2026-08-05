@@ -93,6 +93,22 @@ const FACTION_ABILITIES = {
   Nevlas: "能量碗 III 的能量可双倍计算",
   Itars: "盖亚区能量可用于获得科技"
 };
+const BASE_FACTIONS = [
+  { id: 0, board: 1, side: "A", name: "Terrans", home_terrain: 0, start_track: "gaia_project", starting_power: [4, 4, 0], starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
+  { id: 1, board: 1, side: "B", name: "Lantids", home_terrain: 0, start_track: "science", starting_power: [4, 4, 0], starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
+  { id: 2, board: 2, side: "A", name: "Xenos", home_terrain: 1, start_track: "artificial_intelligence", starting_power: [2, 4, 0], starting_qic: 1, starting_structures: 3, starts_with_pi: false, federation_threshold: 6 },
+  { id: 3, board: 2, side: "B", name: "Gleens", home_terrain: 1, start_track: "navigation", starting_power: [2, 4, 0], starting_qic: 0, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
+  { id: 4, board: 3, side: "A", name: "Taklons", home_terrain: 2, start_track: "economy", starting_power: [2, 4, 0], starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
+  { id: 5, board: 3, side: "B", name: "Ambas", home_terrain: 2, start_track: "navigation", starting_power: [4, 4, 0], starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
+  { id: 6, board: 4, side: "A", name: "Hadsch Hallas", home_terrain: 4, start_track: "economy", starting_power: [2, 4, 0], starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
+  { id: 7, board: 4, side: "B", name: "Ivits", home_terrain: 4, start_track: "navigation", starting_power: [4, 4, 0], starting_qic: 1, starting_structures: 1, starts_with_pi: true, federation_threshold: 7 },
+  { id: 8, board: 5, side: "A", name: "Geodens", home_terrain: 3, start_track: "terraforming", starting_power: [2, 4, 0], starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
+  { id: 9, board: 5, side: "B", name: "Bal T'aks", home_terrain: 3, start_track: "gaia_project", starting_power: [4, 4, 0], starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
+  { id: 10, board: 6, side: "A", name: "Firaks", home_terrain: 5, start_track: "science", starting_power: [2, 4, 0], starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
+  { id: 11, board: 6, side: "B", name: "Bescods", home_terrain: 5, start_track: "economy", starting_power: [2, 4, 0], starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
+  { id: 12, board: 7, side: "B", name: "Nevlas", home_terrain: 6, start_track: "science", starting_power: [2, 4, 0], starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
+  { id: 13, board: 7, side: "A", name: "Itars", home_terrain: 6, start_track: "gaia_project", starting_power: [4, 4, 0], starting_qic: 0, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
+];
 const PHASE_LABELS = {
   run_started: "初始化完成",
   self_play_started: "正在生成自博弈",
@@ -522,20 +538,53 @@ function renderSetup(snapshot) {
     <td class="mono">${sector.q}, ${sector.r}</td>
   </tr>`).join("");
 
-  byId("setup-faction-count").textContent = `${setup.factions.length} 个座位`;
-  byId("setup-faction-grid").innerHTML = setup.factions.map((faction) => `<article class="faction-setup-item">
-    <div class="faction-setup-head">
-      <div><span class="faction-seat">P${faction.player}${faction.player === snapshot.first_player ? " · 首位" : ""}</span><strong>${escapeHtml(faction.name)}</strong></div>
-      <i class="home-swatch terrain-${faction.home_terrain}"></i>
-    </div>
-    <div class="faction-setup-meta">
-      <span class="setup-tag">双面板 ${faction.board}</span>
-      <span class="setup-tag">${TERRAIN_LABELS[faction.home_terrain]}</span>
-      <span class="setup-tag">${TRACK_LABELS[faction.start_track] || faction.start_track} +1</span>
-      <span class="setup-tag">起始 ${faction.starting_planets.map((planet) => `#${planet}`).join(" · ")}</span>
-    </div>
-    <small>${escapeHtml(FACTION_ABILITIES[faction.name] || faction.ability)}</small>
-  </article>`).join("");
+  const factionCatalog = setup.faction_catalog?.length === 14 ? setup.faction_catalog : BASE_FACTIONS;
+  const catalogById = new Map(factionCatalog.map((faction) => [faction.id, faction]));
+  const factionBoardAsset = (id) => `/assets/factions/faction-${String(id + 1).padStart(2, "0")}.jpg`;
+  const factionCard = (faction, assignment = null) => {
+    const startingPower = faction.starting_power || [];
+    const startBuilding = faction.starts_with_pi
+      ? "行星研究院"
+      : `${faction.starting_structures ?? 2} 座矿场`;
+    const seat = assignment
+      ? `P${assignment.player}${assignment.player === snapshot.first_player ? " · 首位" : ""}`
+      : `个人版图 ${faction.board}${faction.side}`;
+    const planets = assignment?.starting_planets?.length
+      ? `<span class="setup-tag">星球 ${assignment.starting_planets.map((planet) => `#${planet}`).join(" · ")}</span>`
+      : "";
+    return `<article class="faction-setup-item ${assignment ? "assigned" : ""}">
+      <img class="faction-board-art" src="${factionBoardAsset(faction.id)}" alt="${escapeHtml(faction.name)} 个人版图">
+      <div class="faction-card-body">
+        <div class="faction-setup-head">
+          <div><span class="faction-seat">${seat}</span><strong>${escapeHtml(faction.name)}</strong></div>
+          <i class="home-swatch terrain-${faction.home_terrain}" aria-label="${TERRAIN_LABELS[faction.home_terrain]}"></i>
+        </div>
+        <div class="faction-setup-meta">
+          <span class="setup-tag">${TERRAIN_LABELS[faction.home_terrain]}</span>
+          <span class="setup-tag">${TRACK_LABELS[faction.start_track] || faction.start_track} +1</span>
+          <span class="setup-tag">起始 ${startBuilding}</span>
+          ${startingPower.length ? `<span class="setup-tag">能量 ${startingPower.join(" / ")}</span>` : ""}
+          <span class="setup-tag">Q.I.C. ${faction.starting_qic ?? 1}</span>
+          ${faction.federation_threshold === 6 ? `<span class="setup-tag">联邦强度 6</span>` : ""}
+          ${planets}
+        </div>
+        <small>${escapeHtml(FACTION_ABILITIES[faction.name] || faction.ability || "")}</small>
+      </div>
+    </article>`;
+  };
+  const assignedFactions = setup.factions.map((assignment) => ({
+    ...(catalogById.get(assignment.id) || {}),
+    ...assignment,
+  }));
+  byId("setup-faction-count").textContent = `${assignedFactions.length} 个座位`;
+  byId("setup-faction-grid").innerHTML = assignedFactions
+    .map((faction) => factionCard(faction, faction))
+    .join("");
+  byId("setup-faction-catalog-count").textContent = `${factionCatalog.length} / 14`;
+  byId("setup-faction-catalog").innerHTML = [...factionCatalog]
+    .sort((left, right) => left.board - right.board || left.side.localeCompare(right.side))
+    .map((faction) => factionCard(faction))
+    .join("");
 
   byId("setup-round-track").innerHTML = setup.round_scoring.map((tile) => {
     const current = snapshot.round === tile.round && !snapshot.terminal;

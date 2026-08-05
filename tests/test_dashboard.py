@@ -56,6 +56,10 @@ class DashboardTests(unittest.TestCase):
             with urlopen(f"{base}/assets/boards/research-board.png", timeout=5) as response:
                 research_board_image = response.read()
                 research_board_content_type = response.headers.get_content_type()
+            faction_assets = []
+            for number in range(1, 15):
+                with urlopen(f"{base}/assets/factions/faction-{number:02d}.jpg", timeout=5) as response:
+                    faction_assets.append((response.headers.get_content_type(), response.read()))
             tile_assets = {}
             for path in (
                 "tech-standard-01.jpg",
@@ -78,11 +82,16 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(game["steps"][0]["move"], 0)
             self.assertIn("GaiaZero", page)
             self.assertIn("loss-chart", page)
+            self.assertIn("setup-faction-catalog", page)
             self.assertEqual(sector_content_type, "image/gif")
             self.assertTrue(sector_image.startswith(b"GIF"))
             self.assertTrue(outlined_sector_image.startswith(b"GIF"))
             self.assertEqual(research_board_content_type, "image/png")
             self.assertTrue(research_board_image.startswith(b"\x89PNG\r\n\x1a\n"))
+            self.assertTrue(all(
+                content_type == "image/jpeg" and content.startswith(b"\xff\xd8")
+                for content_type, content in faction_assets
+            ))
             for name, (content_type, content) in tile_assets.items():
                 expected_type = "image/gif" if name.endswith(".gif") else "image/jpeg"
                 self.assertEqual(content_type, expected_type)

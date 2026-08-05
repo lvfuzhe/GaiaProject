@@ -379,18 +379,61 @@ main {
 }
 
 .setup-faction-grid {
-  margin-top: 12px;
+  margin-top: 10px;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.faction-group-heading {
+  margin-top: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.faction-group-heading strong {
+  font-size: 12px;
+}
+
+.faction-catalog-heading {
+  margin-top: 28px;
+  padding-top: 22px;
+  border-top: 1px solid var(--line);
+}
+
+.faction-catalog-grid {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
 }
 
 .faction-setup-item {
-  min-height: 164px;
-  padding: 15px;
+  min-width: 0;
+  overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--surface);
+}
+
+.faction-setup-item.assigned {
+  border-color: color-mix(in srgb, var(--green) 48%, var(--line));
+}
+
+.faction-board-art {
+  display: block;
+  width: 100%;
+  aspect-ratio: 392 / 167;
+  object-fit: cover;
+  background: #e6e4d6;
+  border-bottom: 1px solid var(--line);
+}
+
+.faction-card-body {
+  min-height: 144px;
+  padding: 13px 14px 14px;
 }
 
 .faction-setup-head {
@@ -408,7 +451,7 @@ main {
 
 .faction-setup-head strong {
   margin-top: 3px;
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .faction-seat {
@@ -435,7 +478,7 @@ main {
 .home-swatch.terrain-6 { background: #b7d8e7; }
 
 .faction-setup-meta {
-  margin: 14px 0 9px;
+  margin: 11px 0 9px;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -1805,6 +1848,10 @@ footer {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .faction-catalog-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .booster-setup-grid {
     grid-template-columns: repeat(5, minmax(0, 1fr));
   }
@@ -1862,6 +1909,7 @@ footer {
   }
 
   .setup-faction-grid,
+  .faction-catalog-grid,
   .final-tile-grid,
   .free-tech-grid {
     grid-template-columns: 1fr;
