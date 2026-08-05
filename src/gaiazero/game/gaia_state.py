@@ -1253,6 +1253,17 @@ class GaiaState:
                     "power": [info.bowl_one, info.bowl_two, info.bowl_three],
                     "gaia_power": info.gaia_power,
                     "gaiaformers": info.gaiaformers,
+                    "gaiaformers_on_board": sum(
+                        owner == player for owner in self.gaiaformer_owner
+                    ),
+                    "structures": {
+                        building.name.lower(): {
+                            "built": self._building_count(player, building),
+                            "supply": maximum
+                            - self._building_count(player, building),
+                        }
+                        for building, maximum in MAX_BUILDINGS.items()
+                    },
                     "tracks": list(info.tracks),
                     "satellites": info.satellites,
                     "colonized_types": info.colonized_types,

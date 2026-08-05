@@ -7,6 +7,7 @@ from gaiazero.game.gaia_state import (
     BOOSTER_COUNT,
     FEDERATION_ACTION,
     FACTIONS,
+    MAX_BUILDINGS,
     Building,
     GaiaHeuristicEvaluator,
     GaiaState,
@@ -85,6 +86,19 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertTrue(all(sector["side"] == "solid" for sector in setup["map"]["sectors"]))
         self.assertTrue(all(isinstance(player["satellites"], int) for player in snapshot["players"]))
         self.assertTrue(all(isinstance(player["colonized_types"], int) for player in snapshot["players"]))
+        for player in snapshot["players"]:
+            self.assertIsInstance(player["gaiaformers_on_board"], int)
+            for building, maximum in MAX_BUILDINGS.items():
+                inventory = player["structures"][building.name.lower()]
+                self.assertEqual(inventory["built"] + inventory["supply"], maximum)
+                self.assertEqual(
+                    inventory["built"],
+                    sum(
+                        planet["owner"] == player["id"]
+                        and planet["building"] == building.name.lower()
+                        for planet in snapshot["planets"]
+                    ),
+                )
 
         two_player_sectors = GaiaState.initial(2, seed=41).snapshot()["setup"]["map"]["sectors"]
         self.assertTrue(all(

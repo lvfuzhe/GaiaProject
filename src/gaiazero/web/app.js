@@ -109,6 +109,17 @@ const BASE_FACTIONS = [
   { id: 12, board: 7, side: "B", name: "Nevlas", home_terrain: 6, start_track: "science", starting_power: [2, 4, 0], starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
   { id: 13, board: 7, side: "A", name: "Itars", home_terrain: 6, start_track: "gaia_project", starting_power: [4, 4, 0], starting_qic: 0, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
 ];
+const STANDARD_TECH_KEYS = [
+  "ore-income", "knowledge-income", "credits-income", "gaia-vp", "power-income",
+  "qic", "mine-vp", "federation-vp", "planet-type-vp",
+];
+const BUILDING_SPECS = [
+  { key: "mine", label: "矿场", short: "M", total: 8 },
+  { key: "trading_station", label: "贸易站", short: "TS", total: 4 },
+  { key: "research_lab", label: "研究所", short: "RL", total: 3 },
+  { key: "planetary_institute", label: "行星研究院", short: "PI", total: 1 },
+  { key: "academy", label: "学院", short: "AC", total: 2 },
+];
 const PHASE_LABELS = {
   run_started: "初始化完成",
   self_play_started: "正在生成自博弈",
@@ -478,6 +489,10 @@ function tileAsset(kind, id, key = "") {
   return prefix ? `/assets/tiles/${prefix}-${String(number).padStart(2, "0")}.${extension}` : "";
 }
 
+function factionBoardAsset(id) {
+  return `/assets/factions/faction-${String(Number(id) + 1).padStart(2, "0")}.jpg`;
+}
+
 function finalMetric(snapshot, key, playerId) {
   const player = snapshot.players?.[playerId] || {};
   const planets = (snapshot.planets || []).filter((planet) => planet.owner === playerId);
@@ -540,7 +555,6 @@ function renderSetup(snapshot) {
 
   const factionCatalog = setup.faction_catalog?.length === 14 ? setup.faction_catalog : BASE_FACTIONS;
   const catalogById = new Map(factionCatalog.map((faction) => [faction.id, faction]));
-  const factionBoardAsset = (id) => `/assets/factions/faction-${String(id + 1).padStart(2, "0")}.jpg`;
   const factionCard = (faction, assignment = null) => {
     const startingPower = faction.starting_power || [];
     const startBuilding = faction.starts_with_pi
@@ -612,7 +626,37 @@ function renderSetup(snapshot) {
 
   const standardByTrack = new Map(setup.standard_tech.filter((tile) => tile.track).map((tile) => [tile.track, tile]));
   const advancedByTrack = new Map(setup.advanced_tech.map((tile) => [tile.track, tile]));
+  const freeStandardTech = setup.standard_tech.filter((tile) => !tile.track);
   const researchPlayers = snapshot.players || [];
+  const trackTechSlots = Object.entries(TRACK_LABELS).flatMap(([track, label], trackIndex) => {
+    const standard = standardByTrack.get(track);
+    const advanced = advancedByTrack.get(track);
+    const standardName = setupLabel(standard);
+    const advancedName = ADVANCED_TECH_NAMES[advanced?.id] || advanced?.label || "--";
+    return [
+      `<span class="research-tech-slot advanced track-${trackIndex}" role="img" tabindex="0" aria-label="${escapeHtml(label)}高级科技：${escapeHtml(advancedName)}" title="${escapeHtml(label)}高级科技 · ${escapeHtml(advancedName)}">
+        <img src="${tileAsset("advanced", advanced?.id, advanced?.key)}" alt="" aria-hidden="true">
+      </span>`,
+      `<span class="research-tech-slot standard track-${trackIndex}" role="img" tabindex="0" aria-label="${escapeHtml(label)}基础科技：${escapeHtml(standardName)}" title="${escapeHtml(label)}基础科技 · ${escapeHtml(standardName)}">
+        <img src="${tileAsset("standard", standard?.id, standard?.key)}" alt="" aria-hidden="true">
+      </span>`,
+    ];
+  });
+  const freeTechSlots = freeStandardTech.map((tile, index) => {
+    const name = setupLabel(tile);
+    return `<span class="research-tech-slot standard free-${index}" role="img" tabindex="0" aria-label="通用基础科技 ${index + 1}：${escapeHtml(name)}" title="通用基础科技 ${index + 1} · ${escapeHtml(name)}">
+      <img src="${tileAsset("standard", tile.id, tile.key)}" alt="" aria-hidden="true">
+    </span>`;
+  });
+  const researchTech = byId("setup-research-tech");
+  const techSignature = [
+    ...setup.standard_tech.map((tile) => `s${tile.space}:${tile.id}`),
+    ...setup.advanced_tech.map((tile, index) => `a${index}:${tile.id}`),
+  ].join("|");
+  if (researchTech.dataset.signature !== techSignature) {
+    researchTech.innerHTML = [...trackTechSlots, ...freeTechSlots].join("");
+    researchTech.dataset.signature = techSignature;
+  }
   byId("setup-research-markers").innerHTML = Object.entries(TRACK_LABELS).flatMap(([track, label], trackIndex) =>
     Array.from({ length: 6 }, (_, level) => {
       const players = researchPlayers.filter((player) => Number(player.tracks?.[trackIndex] || 0) === level);
@@ -636,7 +680,7 @@ function renderSetup(snapshot) {
     </article>`;
   }).join("");
   byId("setup-research-player-legend").innerHTML = (snapshot.players || []).map((player) => `<span><i class="player-mini p${player.id}"></i>P${player.id} ${escapeHtml(player.faction || "")}</span>`).join("");
-  byId("setup-free-tech").innerHTML = setup.standard_tech.filter((tile) => !tile.track).map((tile) => `<article class="tech-setup-tile standard">
+  byId("setup-free-tech").innerHTML = freeStandardTech.map((tile) => `<article class="tech-setup-tile standard">
     <img class="setup-tile-art tech-tile-art" src="${tileAsset("standard", tile.id, tile.key)}" alt="${escapeHtml(setupLabel(tile))}">
     <span>通用槽位 ${tile.space - 5}</span><strong>${escapeHtml(setupLabel(tile))}</strong>
   </article>`).join("");
@@ -885,6 +929,7 @@ function renderHistory() {
   const previous = steps[state.history.step - 1]?.state;
   byId("history-delta").textContent = historyDelta(previous, snapshot, step);
   renderPlayerRows("history-players-table", snapshot, "history-active-player");
+  renderPersonalBoards("history-player-board-grid", snapshot);
   const checks = auditHistoryTrace(trace);
   const failed = checks.some((check) => check.status === "fail");
   const warned = checks.some((check) => check.status === "warn");
@@ -1148,6 +1193,7 @@ function renderPlayers(snapshot) {
     ? "对局已结束"
     : `当前行动 P${snapshot.current_player}`;
   renderPlayerRows("players-table", snapshot);
+  renderPersonalBoards("player-board-grid", snapshot);
 }
 
 function renderPlayerRows(tableId, snapshot, noteId = null) {
@@ -1172,6 +1218,128 @@ function renderPlayerRows(tableId, snapshot, noteId = null) {
         <td>${player.passed ? "已过轮" : "行动中"}</td>
       </tr>`).join("")
     : '<tr><td colspan="10" class="empty-cell">暂无玩家状态</td></tr>';
+}
+
+function renderPersonalBoards(containerId, snapshot) {
+  const container = byId(containerId);
+  if (!container) return;
+  const players = snapshot?.players || [];
+  if (!players.length) {
+    container.innerHTML = '<div class="personal-board-empty">暂无个人版图状态</div>';
+    container.dataset.signature = "empty";
+    return;
+  }
+
+  const signature = JSON.stringify({
+    round: snapshot.round,
+    current: snapshot.current_player,
+    terminal: snapshot.terminal,
+    players,
+    planets: (snapshot.planets || []).map((planet) => [
+      planet.id, planet.owner, planet.building, planet.q, planet.r, planet.gaiaformer,
+    ]),
+  });
+  if (container.dataset.signature === signature) return;
+
+  const techCatalog = new Map(
+    (snapshot.setup?.standard_tech || []).map((tile) => [Number(tile.id), tile]),
+  );
+  const planets = snapshot.planets || [];
+  const factionIdByName = new Map(BASE_FACTIONS.map((faction) => [faction.name, faction.id]));
+  const resourceSpecs = [
+    { key: "credits", label: "信用点", cap: 30 },
+    { key: "ore", label: "矿石", cap: 15 },
+    { key: "knowledge", label: "知识", cap: 15 },
+    { key: "qic", label: "Q.I.C.", cap: null },
+  ];
+
+  container.innerHTML = players.map((player) => {
+    const factionId = Number.isInteger(Number(player.faction_id))
+      ? Number(player.faction_id)
+      : (factionIdByName.get(player.faction) ?? 0);
+    const colonies = planets.filter(
+      (planet) => Number(planet.owner) === Number(player.id) && planet.building !== "empty",
+    );
+    const structureRows = BUILDING_SPECS.map((spec) => {
+      const fallbackBuilt = colonies.filter((planet) => planet.building === spec.key).length;
+      const recorded = player.structures?.[spec.key];
+      const built = Number(recorded?.built ?? fallbackBuilt);
+      const supply = Number(recorded?.supply ?? Math.max(0, spec.total - built));
+      const slots = Array.from({ length: spec.total }, (_, index) => {
+        const inSupply = index < supply;
+        return `<i class="structure-slot ${inSupply ? "in-supply" : "deployed"}" title="${inSupply ? "版图库存" : "已部署到星图"}">
+          <span class="structure-piece ${spec.key}"></span>
+        </i>`;
+      }).join("");
+      return `<div class="structure-inventory-row">
+        <div class="structure-name"><span class="structure-code">${spec.short}</span><strong>${spec.label}</strong></div>
+        <div class="structure-slots" aria-label="${spec.label}库存 ${supply}，已部署 ${built}">${slots}</div>
+        <span class="structure-count">库存 ${supply} · 星图 ${built}</span>
+      </div>`;
+    }).join("");
+    const baseLocations = colonies.length
+      ? colonies.map((planet) => {
+        const spec = BUILDING_SPECS.find((item) => item.key === planet.building);
+        return `<span class="base-location">#${planet.id} ${spec?.short || "--"} · ${planet.q},${planet.r}</span>`;
+      }).join("")
+      : '<span class="base-location empty">尚未部署基地</span>';
+    const acquiredTech = Array.isArray(player.tech_tiles) ? player.tech_tiles : [];
+    const techTiles = acquiredTech.length
+      ? acquiredTech.map((tileId) => {
+        const id = Number(tileId);
+        const tile = techCatalog.get(id) || { id, key: STANDARD_TECH_KEYS[id], label: "" };
+        const label = setupLabel(tile);
+        return `<div class="owned-tech-tile" title="${escapeHtml(label)}">
+          <div class="owned-tech-art"><img src="${tileAsset("standard", id, tile.key)}" alt="${escapeHtml(label)}"></div>
+          <strong>${escapeHtml(label)}</strong>
+        </div>`;
+      }).join("")
+      : '<div class="owned-tech-empty">尚未获得科技</div>';
+    const power = Array.isArray(player.power) ? player.power : [0, 0, 0];
+    const powerAreas = [
+      ["I", power[0]], ["II", power[1]], ["III", power[2]], ["盖亚区", player.gaia_power],
+    ].map(([label, value]) => `<div><span>${label}</span><strong>${formatNumber(value)}</strong></div>`).join("");
+    const resources = resourceSpecs.map((resource) => `<div class="personal-resource">
+      <span>${resource.label}</span><strong>${formatNumber(player[resource.key])}</strong>${resource.cap ? `<small>/ ${resource.cap}</small>` : ""}
+    </div>`).join("");
+    const status = snapshot.terminal
+      ? "对局结束"
+      : player.passed ? "已过轮" : player.id === snapshot.current_player ? "当前行动" : "等待行动";
+
+    return `<article class="personal-board-card p${player.id} ${player.id === snapshot.current_player ? "active" : ""}">
+      <div class="personal-board-layout">
+        <div class="personal-board-surface">
+          <header class="personal-board-heading">
+            <div><span class="personal-board-seat"><i class="player-color p${player.id}"></i>P${player.id} · ${status}</span><h4>${escapeHtml(player.faction || `Faction ${factionId + 1}`)}</h4></div>
+            <div class="personal-board-score"><span>VP</span><strong>${formatNumber(player.vp ?? snapshot.scores?.[player.id])}</strong></div>
+          </header>
+          <div class="personal-board-overview">
+            <img class="personal-board-faction-art" src="${factionBoardAsset(factionId)}" alt="${escapeHtml(player.faction || "种族")}个人版图">
+            <div class="personal-board-resources">
+              <div class="personal-resource-grid">${resources}</div>
+              <div class="power-cycle" aria-label="能量碗 I、II、III 和盖亚区">${powerAreas}</div>
+              <div class="personal-board-counters">
+                <span>盖亚塑形者 <strong>${formatNumber(player.gaiaformers)}</strong></span>
+                <span>场上塑形者 <strong>${formatNumber(player.gaiaformers_on_board ?? planets.filter((planet) => planet.gaiaformer === player.id).length)}</strong></span>
+                <span>联邦 <strong>${formatNumber(player.federations)}</strong></span>
+                <span>卫星 <strong>${formatNumber(player.satellites)}</strong></span>
+              </div>
+            </div>
+          </div>
+          <section class="personal-board-section">
+            <div class="personal-board-section-heading"><strong>建筑与基地</strong><span>${colonies.length} 处星图基地</span></div>
+            <div class="structure-inventory">${structureRows}</div>
+            <div class="base-location-list" aria-label="星图基地位置">${baseLocations}</div>
+          </section>
+        </div>
+        <aside class="personal-tech-rack">
+          <div class="personal-tech-heading"><strong>已获科技</strong><span>${acquiredTech.length} 块</span></div>
+          <div class="owned-tech-grid">${techTiles}</div>
+        </aside>
+      </div>
+    </article>`;
+  }).join("");
+  container.dataset.signature = signature;
 }
 
 function renderLatestAction() {

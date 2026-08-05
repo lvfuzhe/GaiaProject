@@ -219,6 +219,7 @@
               <div class="research-board-scroll" role="region" aria-label="科研背景板与玩家等级" tabindex="0">
                 <div class="research-board-stage">
                   <img class="research-board-art" src="/assets/boards/research-board.png" alt="盖亚计划原版科研背景板">
+                  <div id="setup-research-tech" class="research-board-tech" aria-label="本局随机科技板块"></div>
                   <div id="setup-research-markers" class="research-board-markers"></div>
                 </div>
               </div>
@@ -306,6 +307,17 @@
             <tbody id="players-table"><tr><td colspan="10" class="empty-cell">暂无玩家状态</td></tr></tbody>
           </table>
         </div>
+      </section>
+
+      <section class="content-band player-boards-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Personal boards</p>
+            <h3>个人主版图</h3>
+          </div>
+          <span class="muted">实时资源 · 建筑库存 · 已获科技</span>
+        </div>
+        <div id="player-board-grid" class="player-board-grid"></div>
       </section>
 
       <section class="panel content-band games-panel">
@@ -426,6 +438,17 @@
               <tbody id="history-players-table"><tr><td colspan="10" class="empty-cell">暂无玩家状态</td></tr></tbody>
             </table>
           </div>
+        </section>
+
+        <section class="content-band player-boards-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Personal boards at step</p>
+              <h3>个人主版图</h3>
+            </div>
+            <span class="muted">随回放步骤更新</span>
+          </div>
+          <div id="history-player-board-grid" class="player-board-grid"></div>
         </section>
 
         <section class="panel content-band history-log-panel">
