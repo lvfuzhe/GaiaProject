@@ -791,7 +791,7 @@ main {
 
 .research-tech-slot.advanced {
   top: 15.5%;
-  width: 11.8%;
+  width: 8.8%;
   aspect-ratio: 1;
 }
 
@@ -803,7 +803,7 @@ main {
 
 .research-tech-slot.standard {
   top: 61.1%;
-  width: 14.5%;
+  width: 11.2%;
   aspect-ratio: 100 / 77;
 }
 
