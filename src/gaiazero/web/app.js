@@ -617,6 +617,7 @@ function renderSetup(snapshot) {
     showSectors: true,
     planetArtwork: true,
     starfield: true,
+    showPlayerPieces: false,
   });
   byId("setup-sector-table").innerHTML = map.sectors.map((sector) => `<tr>
     <td>${sector.position + 1}</td>
@@ -635,9 +636,6 @@ function renderSetup(snapshot) {
     const seat = assignment
       ? `P${assignment.player}${assignment.player === snapshot.first_player ? " · 首位" : ""}`
       : `个人版图 ${faction.board}${faction.side}`;
-    const planets = assignment?.starting_planets?.length
-      ? `<span class="setup-tag">星球 ${assignment.starting_planets.map((planet) => `#${planet}`).join(" · ")}</span>`
-      : "";
     return `<article class="faction-setup-item ${assignment ? "assigned" : ""}">
       <img class="faction-board-art" src="${factionBoardAsset(faction.id)}" alt="${escapeHtml(faction.name)} 个人版图">
       <div class="faction-card-body">
@@ -652,7 +650,6 @@ function renderSetup(snapshot) {
           ${startingPower.length ? `<span class="setup-tag">能量 ${startingPower.join(" / ")}</span>` : ""}
           <span class="setup-tag">Q.I.C. ${faction.starting_qic ?? 1}</span>
           ${faction.federation_threshold === 6 ? `<span class="setup-tag">联邦强度 6</span>` : ""}
-          ${planets}
         </div>
         <small>${escapeHtml(FACTION_ABILITIES[faction.name] || faction.ability || "")}</small>
       </div>
@@ -760,9 +757,9 @@ function renderSetup(snapshot) {
   byId("setup-federation-tile").textContent = `改造轨顶 · ${FEDERATION_NAMES[federation.id] || federation.label}`;
 
   byId("setup-booster-count").textContent = `${setup.boosters.length} 块`;
-  byId("setup-booster-grid").innerHTML = setup.boosters.map((booster) => `<article class="booster-setup-tile ${booster.owner >= 0 ? "assigned" : ""}">
+  byId("setup-booster-grid").innerHTML = setup.boosters.map((booster) => `<article class="booster-setup-tile">
     <img class="setup-tile-art booster-tile-art" src="${tileAsset("booster", booster.id)}" alt="${escapeHtml(BOOSTER_NAMES[booster.id] || booster.label)}">
-    <span>助推 ${booster.id + 1} · ${booster.owner >= 0 ? `P${booster.owner}` : "公共"}</span>
+    <span>助推 ${booster.id + 1} · 可选</span>
     <strong>${escapeHtml(BOOSTER_NAMES[booster.id] || booster.label)}</strong>
   </article>`).join("");
 }
@@ -872,27 +869,17 @@ function normalizedRandomElements(players, values = {}) {
   return defaults;
 }
 
-function randomElementsFromSnapshot(snapshot, config, players, firstPlayer) {
+function randomElementsFromSnapshot(snapshot, config, players, _firstPlayer) {
   if (config?.random_setup) {
     return normalizedRandomElements(players, config.random_setup);
   }
   const setup = snapshot?.setup;
   if (!setup) return defaultRandomElements(players);
-  const turnOrder = Array.from(
-    { length: players },
-    (_, offset) => (firstPlayer + offset) % players,
-  );
-  const assignedBoosters = turnOrder.reverse().map((player) =>
-    setup.boosters.find((booster) => booster.owner === player)?.id,
-  );
-  const publicBoosters = setup.boosters
-    .filter((booster) => booster.owner === -1)
-    .map((booster) => booster.id);
   return normalizedRandomElements(players, {
     map_mode: setup.map?.method,
     sector_tiles: setup.map?.sectors?.map((sector) => Number(sector.tile) - 1),
     sector_rotations: setup.map?.sectors?.map((sector) => Number(sector.rotation) / 60),
-    booster_tiles: [...assignedBoosters, ...publicBoosters],
+    booster_tiles: setup.boosters.map((booster) => booster.id),
     round_scoring_tiles: setup.round_scoring?.map((tile) => tile.id),
     final_scoring_tiles: setup.final_scoring?.map((tile) => tile.id),
     standard_tech_tiles: setup.standard_tech?.map((tile) => tile.id),
@@ -967,15 +954,10 @@ function renderRandomElementEditor() {
       (value) => `A${value + 1} · ${ADVANCED_TECH_NAMES[value]}`,
     ),
   ).join("");
-  const firstPlayer = Number(byId("setup-editor-first-player").value || 0);
-  const assignedPlayers = Array.from(
-    { length: players },
-    (_, offset) => (firstPlayer + offset) % players,
-  ).reverse();
   byId("setup-editor-boosters").innerHTML = elements.booster_tiles.map((tile, index) =>
     tileControl(
       "booster_tiles", index, tile, "booster",
-      index < players ? `P${assignedPlayers[index]} 初始助推` : `公共槽位 ${index - players + 1}`,
+      `可选槽位 ${index + 1}`,
       10,
       (value) => `B${value + 1} · ${BOOSTER_NAMES[value]}`,
     ),
@@ -1677,7 +1659,7 @@ function drawBoard(canvas, snapshot, options = {}) {
       context.textAlign = "center";
       context.fillText(String(planet.id), x, y + 3);
     }
-    if (planet.owner >= 0) {
+    if (options.showPlayerPieces !== false && planet.owner >= 0) {
       context.strokeStyle = PLAYER_COLORS[planet.owner] || "#17211d";
       context.lineWidth = compactMap ? 2.5 : 4;
       context.beginPath();
@@ -1692,7 +1674,7 @@ function drawBoard(canvas, snapshot, options = {}) {
         compactMap ? 0.68 : 1,
       );
     }
-    if (planet.gaiaformer >= 0 && planet.owner < 0) {
+    if (options.showPlayerPieces !== false && planet.gaiaformer >= 0 && planet.owner < 0) {
       context.strokeStyle = PLAYER_COLORS[planet.gaiaformer] || "#17211d";
       context.lineWidth = 3;
       context.setLineDash([4, 3]);
@@ -1704,7 +1686,7 @@ function drawBoard(canvas, snapshot, options = {}) {
       context.font = "700 11px Segoe UI";
       context.fillText("G", x, y + 4);
     }
-    if (planet.federated && planet.owner >= 0) {
+    if (options.showPlayerPieces !== false && planet.federated && planet.owner >= 0) {
       context.strokeStyle = "rgba(23,33,29,0.7)";
       context.lineWidth = 1;
       context.setLineDash([2, 3]);

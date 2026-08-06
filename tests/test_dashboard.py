@@ -167,12 +167,24 @@ class DashboardTests(unittest.TestCase):
                 [player["faction_id"] for player in preview["state"]["players"]],
                 [0, 2],
             )
-            for player in preview["state"]["players"]:
-                self.assertTrue(any(
-                    planet["owner"] == player["id"]
-                    and planet["terrain"] == player["home_terrain"]
-                    for planet in preview["state"]["planets"]
-                ))
+            self.assertFalse(preview["state"]["setup"]["player_choices_resolved"])
+            self.assertTrue(all(
+                planet["owner"] == -1 and planet["building"] == "empty"
+                for planet in preview["state"]["planets"]
+            ))
+            self.assertTrue(all(
+                "starting_planets" not in faction
+                for faction in preview["state"]["setup"]["factions"]
+            ))
+            self.assertTrue(all(
+                booster["owner"] == -1
+                for booster in preview["state"]["setup"]["boosters"]
+            ))
+            self.assertTrue(all(
+                player["booster"] is None
+                and all(item["built"] == 0 for item in player["structures"].values())
+                for player in preview["state"]["players"]
+            ))
 
             customized = {
                 **payload,

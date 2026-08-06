@@ -128,7 +128,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             return
 
         if request.path == "/api/setup/preview":
-            self._send_json({"config": config, "state": initial.snapshot()})
+            self._send_json({"config": config, "state": _public_setup_snapshot(initial)})
             return
 
         with self.server.simulation_lock:
@@ -369,34 +369,45 @@ def _manual_initial_state(config: dict[str, Any]) -> GaiaState:
 
 
 def _resolved_random_setup(state: GaiaState) -> dict[str, Any]:
-    turn_order = [
-        (state.first_player + offset) % state.num_players
-        for offset in range(state.num_players)
-    ]
-    assigned_boosters = [
-        next(
-            booster
-            for booster, owner in enumerate(state.booster_owner)
-            if owner == player
-        )
-        for player in reversed(turn_order)
-    ]
-    public_boosters = [
+    available_boosters = [
         booster
         for booster, owner in enumerate(state.booster_owner)
-        if owner == -1
+        if owner != -2
     ]
     return {
         "map_mode": state.map_mode,
         "sector_tiles": list(state.sector_tiles),
         "sector_rotations": list(state.sector_rotations),
-        "booster_tiles": assigned_boosters + public_boosters,
+        "booster_tiles": available_boosters,
         "round_scoring_tiles": list(state.round_scoring_tiles),
         "final_scoring_tiles": list(state.final_scoring_tiles),
         "standard_tech_tiles": list(state.standard_tech_tiles),
         "advanced_tech_tiles": list(state.advanced_tech_tiles),
         "terraforming_federation_tile": state.terraforming_federation_tile,
     }
+
+
+def _public_setup_snapshot(state: GaiaState) -> dict[str, object]:
+    """Return public setup components without resolving player placement choices."""
+    snapshot = state.snapshot()
+    for planet in snapshot["planets"]:
+        planet["owner"] = -1
+        planet["building"] = "empty"
+        planet["gaiaformer"] = -1
+        planet["federated"] = False
+    for player in snapshot["players"]:
+        player["booster"] = None
+        player["gaiaformers_on_board"] = 0
+        player["colonized_types"] = 0
+        for inventory in player["structures"].values():
+            inventory["supply"] += inventory["built"]
+            inventory["built"] = 0
+    for faction in snapshot["setup"]["factions"]:
+        faction.pop("starting_planets", None)
+    for booster in snapshot["setup"]["boosters"]:
+        booster["owner"] = -1
+    snapshot["setup"]["player_choices_resolved"] = False
+    return snapshot
 
 
 def _run_single_simulation(
