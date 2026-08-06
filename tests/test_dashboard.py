@@ -61,6 +61,10 @@ class DashboardTests(unittest.TestCase):
                 data = json.loads(response.read())
             with urlopen(base, timeout=5) as response:
                 page = response.read().decode("utf-8")
+            with urlopen(f"{base}/setup/random", timeout=5) as response:
+                random_setup_page = response.read().decode("utf-8")
+            with urlopen(f"{base}/setup/manual", timeout=5) as response:
+                manual_setup_page = response.read().decode("utf-8")
             with urlopen(f"{base}/assets/sectors/sector-01-solid.gif", timeout=5) as response:
                 sector_image = response.read()
                 sector_content_type = response.headers.get_content_type()
@@ -103,6 +107,9 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("setup-editor-sectors", page)
             self.assertIn("setup-editor-standard-tech", page)
             self.assertIn("setup-editor-boosters", page)
+            self.assertIn("setup-editor-map-mode", page)
+            self.assertEqual(random_setup_page, page)
+            self.assertEqual(manual_setup_page, page)
             self.assertIn("player-board-grid", page)
             self.assertIn("history-player-board-grid", page)
             self.assertEqual(sector_content_type, "image/gif")
@@ -141,6 +148,7 @@ class DashboardTests(unittest.TestCase):
             for key, value in payload.items():
                 self.assertEqual(preview["config"][key], value)
             random_setup = preview["config"]["random_setup"]
+            self.assertEqual(random_setup["map_mode"], "bga-random")
             self.assertEqual(len(random_setup["sector_tiles"]), 7)
             self.assertEqual(len(random_setup["sector_rotations"]), 7)
             self.assertEqual(len(random_setup["booster_tiles"]), 5)
@@ -149,6 +157,7 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(len(random_setup["standard_tech_tiles"]), 9)
             self.assertEqual(len(random_setup["advanced_tech_tiles"]), 6)
             self.assertEqual(preview["state"]["first_player"], 1)
+            self.assertEqual(len(preview["state"]["planets"]), 40)
             self.assertEqual(
                 [player["faction_id"] for player in preview["state"]["players"]],
                 [0, 2],
@@ -164,6 +173,7 @@ class DashboardTests(unittest.TestCase):
                 **payload,
                 "random_setup": {
                     **random_setup,
+                    "map_mode": "manual",
                     "standard_tech_tiles": list(reversed(random_setup["standard_tech_tiles"])),
                     "advanced_tech_tiles": list(reversed(random_setup["advanced_tech_tiles"])),
                     "terraforming_federation_tile": (
@@ -189,6 +199,15 @@ class DashboardTests(unittest.TestCase):
                 custom_setup["terraforming_federation"]["id"],
                 customized["random_setup"]["terraforming_federation_tile"],
             )
+            self.assertEqual(custom_setup["map"]["method"], "manual")
+
+            missing_manual_map = {
+                **payload,
+                "random_setup": {"map_mode": "manual"},
+            }
+            with self.assertRaises(HTTPError) as raised:
+                self.post_json(f"{base}/api/setup/preview", missing_manual_map)
+            self.assertEqual(raised.exception.code, 400)
 
             invalid = {**payload, "factions": [0, 1]}
             with self.assertRaises(HTTPError) as raised:

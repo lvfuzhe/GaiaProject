@@ -168,8 +168,17 @@
               <button class="setup-config-tab" type="button" role="tab" aria-selected="false" data-setup-config-view="boosters">助推与联邦</button>
             </div>
             <section id="setup-config-map" class="setup-config-panel active" data-setup-config-panel="map" role="tabpanel">
-              <div class="setup-config-heading"><strong>星区位置与方向</strong><span>板块不可重复，旋转以 60° 为一步</span></div>
-              <div id="setup-editor-sectors" class="setup-sector-controls"></div>
+              <div class="setup-map-mode-row">
+                <div><strong>地图生成路径</strong><span>BGA 随机按星区板块与旋转生成合法星球分布</span></div>
+                <div id="setup-editor-map-mode" class="setup-map-mode" role="group" aria-label="地图生成路径">
+                  <button type="button" class="active" data-map-mode="bga-random" aria-pressed="true">BGA 随机</button>
+                  <button type="button" data-map-mode="manual" aria-pressed="false">手动星区</button>
+                </div>
+              </div>
+              <div id="setup-manual-sector-editor" hidden>
+                <div class="setup-config-heading"><strong>星区位置与方向</strong><span>板块不可重复，旋转以 60° 为一步</span></div>
+                <div id="setup-editor-sectors" class="setup-sector-controls"></div>
+              </div>
             </section>
             <section id="setup-config-scoring" class="setup-config-panel" data-setup-config-panel="scoring" role="tabpanel" hidden>
               <div class="setup-config-heading"><strong>轮次计分板块</strong><span>从左到右对应第 1–6 轮</span></div>
@@ -214,16 +223,16 @@
         <div class="setup-map-layout content-band">
           <section class="setup-section map-assembly">
             <div class="section-heading">
-              <div><p class="eyebrow">Variable map</p><h3>随机星区地图</h3></div>
+              <div><p class="eyebrow">BGA planet map</p><h3>随机星球地图</h3></div>
               <span id="setup-map-method" class="muted">--</span>
             </div>
             <div class="setup-map-frame">
-              <canvas id="setup-map-canvas" aria-label="随机拼接星区地图"></canvas>
+              <canvas id="setup-map-canvas" aria-label="BGA 规则随机星球地图"></canvas>
             </div>
           </section>
           <section class="setup-section sector-ledger">
             <div class="section-heading">
-              <div><p class="eyebrow">Sector assembly</p><h3>板块拼接</h3></div>
+              <div><p class="eyebrow">Map source</p><h3>星区来源</h3></div>
               <span id="setup-sector-count" class="muted">0 块</span>
             </div>
             <div class="table-scroll sector-table-scroll">

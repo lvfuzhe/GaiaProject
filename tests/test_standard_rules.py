@@ -23,16 +23,16 @@ class StandardGaiaRulesTests(unittest.TestCase):
     def test_setup_has_full_research_and_building_model(self) -> None:
         state = GaiaState.initial(4, seed=3)
 
-        self.assertEqual(state.action_size, 267)
+        self.assertEqual(state.action_size, 447)
         self.assertEqual(len(state.players[0].tracks), 6)
         self.assertEqual(state.current_player, 3)
-        self.assertEqual(sum(state.active_planets), 40)
+        self.assertEqual(sum(state.active_planets), 61)
         self.assertEqual(len(state.sector_tiles), 10)
         self.assertEqual(
             sum(owner >= 0 for owner in state.owners),
             sum(len(planets) for planets in state.starting_planets),
         )
-        self.assertEqual(state.snapshot()["ruleset"], "standard-v3")
+        self.assertEqual(state.snapshot()["ruleset"], "standard-v4")
 
     def test_random_setup_is_seeded_and_respects_component_counts(self) -> None:
         first = GaiaState.initial(2, seed=19)
@@ -46,7 +46,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
             (first.sector_tiles, first.sector_rotations, first.players),
             (different.sector_tiles, different.sector_rotations, different.players),
         )
-        self.assertEqual(sum(first.active_planets), 28)
+        self.assertEqual(sum(first.active_planets), 40)
         self.assertEqual(len(first.sector_tiles), 7)
         self.assertEqual(len(set(first.round_scoring_tiles)), 6)
         self.assertEqual(len(set(first.final_scoring_tiles)), 2)
@@ -59,10 +59,11 @@ class StandardGaiaRulesTests(unittest.TestCase):
         snapshot = GaiaState.initial(3, seed=41).snapshot()
         setup = snapshot["setup"]
 
-        self.assertEqual(snapshot["ruleset"], "standard-v3")
+        self.assertEqual(snapshot["ruleset"], "standard-v4")
         self.assertEqual(setup["seed"], 41)
         self.assertEqual(setup["map"]["sector_count"], 10)
         self.assertEqual(len(setup["map"]["sectors"]), 10)
+        self.assertEqual(setup["map"]["method"], "bga-random")
         self.assertEqual(len(setup["factions"]), 3)
         self.assertEqual(len(setup["faction_catalog"]), 14)
         self.assertEqual(
@@ -166,6 +167,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
             standard_tech_tiles=(8, 7, 6, 5, 4, 3, 2, 1, 0),
             advanced_tech_tiles=(14, 13, 12, 11, 10, 9),
             terraforming_federation_tile=5,
+            map_mode="manual",
         )
 
         self.assertEqual(state.sector_tiles, donor.sector_tiles)
@@ -175,6 +177,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(state.standard_tech_tiles, (8, 7, 6, 5, 4, 3, 2, 1, 0))
         self.assertEqual(state.advanced_tech_tiles, (14, 13, 12, 11, 10, 9))
         self.assertEqual(state.terraforming_federation_tile, 5)
+        self.assertEqual(state.map_mode, "manual")
         self.assertEqual(state.booster_owner[:6], (1, 0, 2, -1, -1, -1))
 
     def test_manual_setup_rejects_duplicate_random_tiles(self) -> None:
@@ -198,6 +201,55 @@ class StandardGaiaRulesTests(unittest.TestCase):
                 for right in active[offset + 1 :]:
                     if state.terrains[left] == state.terrains[right] and state.terrains[left] < 7:
                         self.assertNotEqual(state._distance(left, right), 1)
+
+    def test_bga_map_uses_complete_planet_inventory(self) -> None:
+        full = GaiaState.initial(4, seed=23)
+        full_counts = {
+            terrain: sum(
+                active and value == terrain
+                for active, value in zip(full.active_planets, full.terrains, strict=True)
+            )
+            for terrain in range(9)
+        }
+        self.assertEqual(full_counts, {
+            Terrain.TERRA: 6,
+            Terrain.DESERT: 6,
+            Terrain.SWAMP: 6,
+            Terrain.VOLCANIC: 6,
+            Terrain.OXIDE: 6,
+            Terrain.TITANIUM: 6,
+            Terrain.ICE: 6,
+            Terrain.TRANSDIM: 12,
+            Terrain.GAIA: 7,
+        })
+
+        two_player = GaiaState.initial(2, seed=23)
+        two_counts = {
+            terrain: sum(
+                active and value == terrain
+                for active, value in zip(
+                    two_player.active_planets,
+                    two_player.terrains,
+                    strict=True,
+                )
+            )
+            for terrain in range(9)
+        }
+        self.assertEqual(two_counts, {
+            Terrain.TERRA: 4,
+            Terrain.DESERT: 4,
+            Terrain.SWAMP: 4,
+            Terrain.VOLCANIC: 4,
+            Terrain.OXIDE: 4,
+            Terrain.TITANIUM: 4,
+            Terrain.ICE: 4,
+            Terrain.TRANSDIM: 7,
+            Terrain.GAIA: 5,
+        })
+
+    def test_manual_map_mode_requires_an_explicit_sector_layout(self) -> None:
+        with self.assertRaisesRegex(ValueError, "requires sector tiles"):
+            GaiaState.initial(2, map_mode="manual")
 
     def test_sector_artwork_footprints_do_not_overlap(self) -> None:
         local_spaces = {

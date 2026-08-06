@@ -25,6 +25,8 @@ WEB_ROOT = Path(__file__).with_name("web")
 ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/index.html": ("index.html", "text/html; charset=utf-8"),
+    "/setup/random": ("index.html", "text/html; charset=utf-8"),
+    "/setup/manual": ("index.html", "text/html; charset=utf-8"),
     "/styles.css": ("styles.css", "text/css; charset=utf-8"),
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
 }
@@ -309,7 +311,7 @@ def _normalize_random_setup(value: object) -> dict[str, Any] | None:
         "standard_tech_tiles",
         "advanced_tech_tiles",
     )
-    allowed_fields = {*array_fields, "terraforming_federation_tile"}
+    allowed_fields = {*array_fields, "terraforming_federation_tile", "map_mode"}
     unknown = set(value) - allowed_fields
     if unknown:
         raise ValueError(f"unknown random_setup field: {sorted(unknown)[0]}")
@@ -325,6 +327,11 @@ def _normalize_random_setup(value: object) -> dict[str, Any] | None:
         normalized["terraforming_federation_tile"] = int(
             value["terraforming_federation_tile"]
         )
+    if "map_mode" in value:
+        map_mode = str(value["map_mode"])
+        if map_mode not in ("bga-random", "manual"):
+            raise ValueError("random_setup.map_mode must be 'bga-random' or 'manual'")
+        normalized["map_mode"] = map_mode
     if ("sector_tiles" in normalized) != ("sector_rotations" in normalized):
         raise ValueError("sector tiles and rotations must be provided together")
     return normalized
@@ -350,6 +357,8 @@ def _manual_initial_state(config: dict[str, Any]) -> GaiaState:
         overrides["terraforming_federation_tile"] = random_setup[
             "terraforming_federation_tile"
         ]
+    if "map_mode" in random_setup:
+        overrides["map_mode"] = random_setup["map_mode"]
     return GaiaState.initial(
         config["players"],
         config["seed"],
@@ -378,6 +387,7 @@ def _resolved_random_setup(state: GaiaState) -> dict[str, Any]:
         if owner == -1
     ]
     return {
+        "map_mode": state.map_mode,
         "sector_tiles": list(state.sector_tiles),
         "sector_rotations": list(state.sector_rotations),
         "booster_tiles": assigned_boosters + public_boosters,

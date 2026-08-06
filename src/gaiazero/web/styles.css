@@ -531,6 +531,57 @@ main {
   display: none;
 }
 
+.setup-map-mode-row {
+  margin-bottom: 12px;
+  padding: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+
+.setup-map-mode-row > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.setup-map-mode-row strong {
+  font-size: 9px;
+}
+
+.setup-map-mode-row span {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.setup-map-mode {
+  flex: 0 0 auto;
+  padding: 3px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(80px, 1fr));
+  gap: 3px;
+  border: 1px solid var(--line);
+  background: var(--surface-soft);
+}
+
+.setup-map-mode button {
+  min-height: 30px;
+  padding: 5px 10px;
+  color: var(--muted);
+  border: 0;
+  background: transparent;
+  font-size: 9px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.setup-map-mode button.active {
+  color: #fff;
+  background: var(--blue);
+}
+
 .setup-config-heading {
   margin-bottom: 8px;
   display: flex;
@@ -2789,6 +2840,15 @@ footer {
     align-items: flex-start;
     flex-direction: column;
     gap: 3px;
+  }
+
+  .setup-map-mode-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .setup-map-mode {
+    width: 100%;
   }
 
   .setup-sector-control {

@@ -302,6 +302,7 @@ class GaiaState:
     sector_tiles: tuple[int, ...]
     sector_rotations: tuple[int, ...]
     sector_centers: tuple[tuple[int, int], ...]
+    map_mode: str
     owners: tuple[int, ...]
     buildings: tuple[int, ...]
     terrains: tuple[int, ...]
@@ -332,6 +333,7 @@ class GaiaState:
         standard_tech_tiles: tuple[int, ...] | None = None,
         advanced_tech_tiles: tuple[int, ...] | None = None,
         terraforming_federation_tile: int | None = None,
+        map_mode: str = "bga-random",
     ) -> GaiaState:
         if not 2 <= num_players <= 4:
             raise ValueError("GaiaState supports two to four players")
@@ -353,6 +355,7 @@ class GaiaState:
             standard_tech_tiles=standard_tech_tiles,
             advanced_tech_tiles=advanced_tech_tiles,
             terraforming_federation_tile=terraforming_federation_tile,
+            map_mode=map_mode,
         )
         owners = [-1] * N
         buildings = [Building.EMPTY] * N
@@ -399,6 +402,7 @@ class GaiaState:
             sector_tiles=setup.sector_tiles,
             sector_rotations=setup.sector_rotations,
             sector_centers=setup.sector_centers,
+            map_mode=setup.map_mode,
             owners=tuple(owners),
             buildings=tuple(int(value) for value in buildings),
             terrains=setup.terrains,
@@ -1255,7 +1259,7 @@ class GaiaState:
                 self.round_scoring_tiles[self.round_number - 1]
             ].key
         return {
-            "ruleset": "standard-v3",
+            "ruleset": "standard-v4",
             "round": min(self.round_number, MAX_ROUNDS),
             "max_rounds": MAX_ROUNDS,
             "round_scoring": current_scoring,
@@ -1321,7 +1325,7 @@ class GaiaState:
             "setup": {
                 "seed": self.setup_seed,
                 "map": {
-                    "method": "advanced-random-sectors",
+                    "method": self.map_mode,
                     "sector_count": len(self.sector_tiles),
                     "sectors": [
                         {

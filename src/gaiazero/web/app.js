@@ -124,8 +124,8 @@ const FINAL_SETUP_KEYS = [
 ];
 const DEFAULT_RANDOM_SETUPS = {
   2: {
-    sector_tiles: [2, 4, 3, 6, 5, 0, 1],
-    sector_rotations: [1, 4, 3, 5, 3, 3, 5],
+    sector_tiles: [2, 1, 3, 6, 0, 4, 5],
+    sector_rotations: [3, 0, 4, 4, 5, 1, 0],
     booster_tiles: [6, 4, 0, 2, 7],
     round_scoring_tiles: [0, 2, 7, 4, 9, 3],
     final_scoring_tiles: [0, 4],
@@ -190,6 +190,7 @@ const state = {
     hydrated: false,
     edited: false,
     configView: "map",
+    mapMode: window.location.pathname === "/setup/manual" ? "manual" : "bga-random",
     randomElements: null,
     preview: null,
     busy: false,
@@ -597,7 +598,7 @@ function renderSetup(snapshot) {
 
   const map = setup.map;
   byId("setup-seed").textContent = setup.seed;
-  byId("setup-map-summary").textContent = `${map.sector_count} 个板块 · ${snapshot.planets.length} 个星球`;
+  byId("setup-map-summary").textContent = `${snapshot.planets.length} 个星球 · ${map.sector_count} 个来源星区`;
   const runStart = [...state.events].reverse().find((event) =>
     event.type === "run_started" && event.run_id === state.runId,
   );
@@ -608,9 +609,11 @@ function renderSetup(snapshot) {
       ?? snapshot.first_player;
   byId("setup-first-player").textContent = `P${initialFirstPlayer}`;
   byId("setup-ruleset").textContent = snapshot.ruleset || "--";
-  byId("setup-map-method").textContent = "进阶随机拼接 · 同色星球不相邻";
+  byId("setup-map-method").textContent = map.method === "manual"
+    ? "手动星区 · 合法性校验"
+    : "BGA 随机 · 同色母星不相邻";
   byId("setup-sector-count").textContent = `${map.sector_count} 块`;
-  drawBoard(byId("setup-map-canvas"), snapshot, { showSectors: true, sectorArtwork: true });
+  drawBoard(byId("setup-map-canvas"), snapshot, { showSectors: true });
   byId("setup-sector-table").innerHTML = map.sectors.map((sector) => `<tr>
     <td>${sector.position + 1}</td>
     <td class="mono">S${String(sector.tile).padStart(2, "0")}</td>
@@ -795,6 +798,10 @@ function initializeSetupEditor(snapshot) {
     players,
     Number(runConfig.first_player ?? setupSnapshot?.first_player ?? 0),
   );
+  if (window.location.pathname === "/setup/manual") {
+    state.manualSetup.randomElements.map_mode = "manual";
+    state.manualSetup.mapMode = "manual";
+  }
   renderRandomElementEditor();
   state.manualSetup.initialized = true;
   state.manualSetup.hydrated = Boolean(snapshot);
@@ -827,10 +834,13 @@ function renderSetupEditorSeats(preferredFirstPlayer = null) {
 
 function defaultRandomElements(players) {
   const source = DEFAULT_RANDOM_SETUPS[players] || DEFAULT_RANDOM_SETUPS[2];
-  return Object.fromEntries(Object.entries(source).map(([key, value]) => [
+  return {
+    map_mode: state.manualSetup.mapMode,
+    ...Object.fromEntries(Object.entries(source).map(([key, value]) => [
     key,
     Array.isArray(value) ? [...value] : value,
-  ]));
+    ])),
+  };
 }
 
 function normalizedRandomElements(players, values = {}) {
@@ -853,6 +863,8 @@ function normalizedRandomElements(players, values = {}) {
   if (Number.isInteger(federation) && federation >= 0 && federation < 6) {
     defaults.terraforming_federation_tile = federation;
   }
+  defaults.map_mode = values.map_mode === "manual" ? "manual" : "bga-random";
+  state.manualSetup.mapMode = defaults.map_mode;
   return defaults;
 }
 
@@ -873,6 +885,7 @@ function randomElementsFromSnapshot(snapshot, config, players, firstPlayer) {
     .filter((booster) => booster.owner === -1)
     .map((booster) => booster.id);
   return normalizedRandomElements(players, {
+    map_mode: setup.map?.method,
     sector_tiles: setup.map?.sectors?.map((sector) => Number(sector.tile) - 1),
     sector_rotations: setup.map?.sectors?.map((sector) => Number(sector.rotation) / 60),
     booster_tiles: [...assignedBoosters, ...publicBoosters],
@@ -903,6 +916,13 @@ function renderRandomElementEditor() {
   const players = Number(byId("setup-editor-players").value || 2);
   const elements = normalizedRandomElements(players, state.manualSetup.randomElements || {});
   state.manualSetup.randomElements = elements;
+  state.manualSetup.mapMode = elements.map_mode;
+  document.querySelectorAll("[data-map-mode]").forEach((button) => {
+    const active = button.dataset.mapMode === elements.map_mode;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  byId("setup-manual-sector-editor").hidden = elements.map_mode !== "manual";
   const sectorCount = players === 2 ? 7 : 10;
   byId("setup-editor-sectors").innerHTML = Array.from({ length: sectorCount }, (_, index) => {
     const selected = elements.sector_tiles[index];
@@ -964,7 +984,7 @@ function renderRandomElementEditor() {
 }
 
 function captureRandomElements() {
-  const result = {};
+  const result = { map_mode: state.manualSetup.mapMode };
   document.querySelectorAll("[data-random-field]").forEach((select) => {
     const field = select.dataset.randomField;
     const index = select.dataset.randomIndex;
@@ -1025,9 +1045,14 @@ function manualSetupPayload({ includeRandom = true } = {}) {
   if (!includeRandom) return config;
   const randomSetup = captureRandomElements();
   const sectorCount = players === 2 ? 7 : 10;
-  validateTileSelection(randomSetup.sector_tiles, sectorCount, sectorCount, "星区板块", true);
-  if (randomSetup.sector_rotations?.length !== sectorCount) {
-    throw new Error(`星区旋转需要 ${sectorCount} 个槽位`);
+  if (randomSetup.map_mode === "manual") {
+    validateTileSelection(randomSetup.sector_tiles, sectorCount, sectorCount, "星区板块", true);
+    if (randomSetup.sector_rotations?.length !== sectorCount) {
+      throw new Error(`星区旋转需要 ${sectorCount} 个槽位`);
+    }
+  } else {
+    delete randomSetup.sector_tiles;
+    delete randomSetup.sector_rotations;
   }
   validateTileSelection(randomSetup.booster_tiles, players + 3, 10, "助推板块");
   validateTileSelection(randomSetup.round_scoring_tiles, 6, 10, "轮次计分板块");
@@ -1140,6 +1165,7 @@ async function pollSimulationStatus() {
 
 async function randomizeManualSetup() {
   state.manualSetup.edited = true;
+  const requestedMapMode = state.manualSetup.mapMode;
   const random = new Uint32Array(1);
   crypto.getRandomValues(random);
   byId("setup-editor-seed").value = String(random[0] & 0x7fffffff);
@@ -1170,7 +1196,7 @@ async function randomizeManualSetup() {
     if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
     state.manualSetup.randomElements = normalizedRandomElements(
       players,
-      data.config.random_setup,
+      { ...data.config.random_setup, map_mode: requestedMapMode },
     );
     renderRandomElementEditor();
     state.manualSetup.preview = data.state;
@@ -2002,6 +2028,21 @@ byId("setup-editor-first-player").addEventListener("change", () => {
   captureRandomElements();
   renderRandomElementEditor();
 });
+byId("setup-editor-map-mode").addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-map-mode]");
+  if (!button) return;
+  captureRandomElements();
+  state.manualSetup.mapMode = button.dataset.mapMode;
+  state.manualSetup.randomElements.map_mode = state.manualSetup.mapMode;
+  state.manualSetup.edited = true;
+  renderRandomElementEditor();
+  setSetupEditorMessage(
+    state.manualSetup.mapMode === "manual"
+      ? "已进入手动星区路径，可调整板块与旋转"
+      : "已切换为 BGA 随机星球路径",
+    "ready",
+  );
+});
 byId("setup-editor-factions").addEventListener("change", (event) => {
   const select = event.target.closest("select[data-player]");
   if (!select) return;
@@ -2095,7 +2136,8 @@ window.addEventListener("resize", () => {
   renderHistory();
 });
 
-selectView(window.location.hash.replace("#", "") || "overview");
+const pathView = window.location.pathname.startsWith("/setup/") ? "setup" : "";
+selectView(window.location.hash.replace("#", "") || pathView || "overview");
 pollEvents(true);
 pollSimulationStatus();
 setInterval(() => pollEvents(false), POLL_INTERVAL_MS);

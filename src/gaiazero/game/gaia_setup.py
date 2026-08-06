@@ -6,36 +6,33 @@ import numpy as np
 
 
 MAX_SECTORS = 10
-PLANETS_PER_SECTOR = 4
-MAX_PLANETS = MAX_SECTORS * PLANETS_PER_SECTOR
+PLANET_SLOTS_PER_SECTOR = 7
+MAX_PLANETS = MAX_SECTORS * PLANET_SLOTS_PER_SECTOR
 BOOSTER_COUNT = 10
 
 # Terrain integers mirror gaia_state.Terrain without introducing a circular import.
-SECTOR_TERRAINS: tuple[tuple[int, ...], ...] = (
-    (0, 1, 2, 7),
-    (3, 4, 5, 8),
-    (6, 0, 1, 7),
-    (2, 3, 4, 8),
-    (5, 6, 0, 7),
-    (1, 2, 3, 8),
-    (4, 5, 6, 7),
-    (0, 2, 5, 8),
-    (1, 3, 6, 7),
-    (4, 2, 0, 8),
+# Each entry is (q, r, terrain) in the printed sector's zero-degree orientation.
+# The ten solid sides contain the standard 42 home, 12 Transdim and 7 Gaia
+# planets. Sector 02 has seven planets; the remaining sectors have six.
+SECTOR_PLANETS_SOLID: tuple[tuple[tuple[int, int, int], ...], ...] = (
+    ((1, -2, 7), (0, -1, 0), (2, -1, 4), (2, 0, 3), (-1, 1, 2), (-1, 2, 1)),
+    ((1, -2, 1), (0, -1, 6), (2, -1, 7), (-2, 0, 5), (-2, 1, 4), (0, 1, 2), (1, 1, 3)),
+    ((1, -2, 5), (1, -1, 6), (-2, 0, 7), (2, 0, 1), (-1, 1, 8), (1, 1, 0)),
+    ((2, -2, 0), (1, -1, 2), (-2, 0, 5), (-1, 0, 3), (0, 1, 4), (-1, 2, 6)),
+    ((0, -2, 7), (1, -2, 3), (-2, 0, 6), (2, 0, 1), (-1, 1, 8), (1, 1, 4)),
+    ((2, -2, 1), (-1, -1, 7), (0, -1, 0), (2, -1, 7), (1, 0, 8), (-1, 1, 2)),
+    ((-1, -1, 2), (1, -1, 8), (-1, 0, 3), (2, 0, 5), (0, 1, 8), (-2, 2, 7)),
+    ((0, -2, 7), (1, -1, 5), (-2, 0, 0), (-1, 0, 6), (0, 1, 4), (1, 1, 7)),
+    ((0, -2, 6), (-1, -1, 7), (1, -1, 8), (-2, 1, 4), (0, 1, 5), (0, 2, 2)),
+    ((0, -2, 7), (-1, -1, 7), (1, -1, 8), (-1, 1, 1), (1, 1, 3), (0, 2, 0)),
 )
 
-SECTOR_LOCAL_POSITIONS: tuple[tuple[tuple[int, int], ...], ...] = (
-    ((-1, 0), (1, -1), (0, 1), (2, 0)),
-    ((0, -2), (1, 0), (-1, 1), (2, -1)),
-    ((-2, 1), (0, -1), (1, 1), (2, -2)),
-    ((-1, -1), (1, 0), (-1, 2), (2, -1)),
-    ((0, -2), (-1, 0), (1, 1), (2, -1)),
-    ((-2, 0), (0, 1), (1, -1), (2, 0)),
-    ((-1, 1), (0, -1), (2, 0), (1, -2)),
-    ((-2, 1), (0, -2), (1, 0), (1, 1)),
-    ((-1, -1), (-1, 1), (1, 0), (2, -2)),
-    ((-2, 0), (0, -1), (1, 1), (2, -1)),
-)
+# In one- and two-player games sectors 05, 06 and 07 use their outlined side.
+SECTOR_PLANETS_OUTLINED: dict[int, tuple[tuple[int, int, int], ...]] = {
+    4: ((0, -2, 7), (1, -2, 3), (-2, 0, 6), (-1, 1, 8), (1, 1, 4)),
+    5: ((2, -2, 1), (-1, -1, 7), (0, -1, 0), (2, -1, 7), (1, 0, 8)),
+    6: ((1, -1, 2), (-1, 0, 8), (2, 0, 5), (0, 1, 8), (-2, 2, 7)),
+}
 
 # (5, -2) and its rotations align the three-cell edges of two radius-2 sectors.
 SECTOR_CENTERS_2P: tuple[tuple[int, int], ...] = (
@@ -76,6 +73,7 @@ class GaiaSetup:
     sector_tiles: tuple[int, ...]
     sector_rotations: tuple[int, ...]
     sector_centers: tuple[tuple[int, int], ...]
+    map_mode: str
     booster_owner: tuple[int, ...]
     round_scoring_tiles: tuple[int, ...]
     final_scoring_tiles: tuple[int, ...]
@@ -101,15 +99,21 @@ def generate_setup(
     standard_tech_tiles: tuple[int, ...] | None = None,
     advanced_tech_tiles: tuple[int, ...] | None = None,
     terraforming_federation_tile: int | None = None,
+    map_mode: str = "bga-random",
 ) -> GaiaSetup:
     if not 2 <= num_players <= 4:
         raise ValueError("num_players must be between two and four")
     rng = np.random.default_rng(seed)
+    if map_mode not in ("bga-random", "manual"):
+        raise ValueError("map_mode must be 'bga-random' or 'manual'")
     centers = SECTOR_CENTERS_2P if num_players == 2 else SECTOR_CENTERS_34P
     tile_pool = np.arange(7 if num_players == 2 else MAX_SECTORS)
-    random_map = _random_map(rng, tile_pool, centers)
+    outlined = num_players == 2
+    random_map = _random_map(rng, tile_pool, centers, outlined=outlined)
     if (sector_tiles is None) != (sector_rotations is None):
         raise ValueError("sector_tiles and sector_rotations must be provided together")
+    if map_mode == "manual" and sector_tiles is None:
+        raise ValueError("manual map_mode requires sector tiles and rotations")
     if sector_tiles is None:
         map_data = random_map
     else:
@@ -125,7 +129,12 @@ def generate_setup(
             raise ValueError(f"sector rotations must contain {len(centers)} values")
         if any(rotation < 0 or rotation > 5 for rotation in selected_rotations):
             raise ValueError("sector rotations must be between zero and five")
-        map_data = _assemble_map(centers, selected_sector_tiles, selected_rotations)
+        map_data = _assemble_map(
+            centers,
+            selected_sector_tiles,
+            selected_rotations,
+            outlined=outlined,
+        )
         if not _map_is_valid(*map_data[:4]):
             raise ValueError(
                 "sector arrangement is illegal: equal home planet types may not be adjacent"
@@ -264,6 +273,7 @@ def generate_setup(
         sector_tiles=map_data[5],
         sector_rotations=map_data[6],
         sector_centers=tuple(centers),
+        map_mode=map_mode,
         booster_owner=tuple(booster_owner),
         round_scoring_tiles=selected_round_scoring,
         final_scoring_tiles=selected_final_scoring,
@@ -303,6 +313,8 @@ def _random_map(
     rng: np.random.Generator,
     tile_pool: np.ndarray,
     centers: tuple[tuple[int, int], ...],
+    *,
+    outlined: bool,
 ) -> tuple[
     tuple[bool, ...],
     tuple[int, ...],
@@ -324,7 +336,12 @@ def _random_map(
     for _ in range(2_000):
         sector_tiles = tuple(int(value) for value in rng.permutation(tile_pool))
         rotations = tuple(int(value) for value in rng.integers(0, 6, size=len(centers)))
-        last = _assemble_map(centers, sector_tiles, rotations)
+        last = _assemble_map(
+            centers,
+            sector_tiles,
+            rotations,
+            outlined=outlined,
+        )
         if _map_is_valid(*last[:4]):
             return last
     raise RuntimeError("unable to assemble a valid random sector map")
@@ -334,6 +351,8 @@ def _assemble_map(
     centers: tuple[tuple[int, int], ...],
     sector_tiles: tuple[int, ...],
     rotations: tuple[int, ...],
+    *,
+    outlined: bool,
 ) -> tuple[
     tuple[bool, ...],
     tuple[int, ...],
@@ -351,10 +370,13 @@ def _assemble_map(
     for position, ((center_q, center_r), tile, rotation) in enumerate(
         zip(centers, sector_tiles, rotations, strict=True)
     ):
-        for local, ((q, r), terrain) in enumerate(
-            zip(SECTOR_LOCAL_POSITIONS[tile], SECTOR_TERRAINS[tile], strict=True)
-        ):
-            slot = position * PLANETS_PER_SECTOR + local
+        planets = (
+            SECTOR_PLANETS_OUTLINED[tile]
+            if outlined and tile in SECTOR_PLANETS_OUTLINED
+            else SECTOR_PLANETS_SOLID[tile]
+        )
+        for local, (q, r, terrain) in enumerate(planets):
+            slot = position * PLANET_SLOTS_PER_SECTOR + local
             rotated_q, rotated_r = _rotate(q, r, rotation)
             active[slot] = True
             planet_q[slot] = center_q + rotated_q
