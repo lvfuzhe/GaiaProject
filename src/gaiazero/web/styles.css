@@ -793,8 +793,9 @@ main {
 .setup-map-frame {
   height: 520px;
   margin-top: 10px;
-  background: #080d1a;
-  border: 1px solid var(--line);
+  overflow: hidden;
+  background: #050b14;
+  border: 1px solid #24364a;
 }
 
 .sector-table-scroll {

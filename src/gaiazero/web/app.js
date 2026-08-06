@@ -434,7 +434,7 @@ function queueSectorArtworkRender() {
   sectorArtworkRenderQueued = true;
   requestAnimationFrame(() => {
     sectorArtworkRenderQueued = false;
-    renderSetup(latestState());
+    renderSetup(state.manualSetup.preview || latestState());
   });
 }
 
@@ -610,10 +610,14 @@ function renderSetup(snapshot) {
   byId("setup-first-player").textContent = `P${initialFirstPlayer}`;
   byId("setup-ruleset").textContent = snapshot.ruleset || "--";
   byId("setup-map-method").textContent = map.method === "manual"
-    ? "手动星区 · 合法性校验"
-    : "BGA 随机 · 同色母星不相邻";
+    ? "手动星区 · 原图裁切 · 合法性校验"
+    : "BGA 随机 · 原图裁切 · 同色母星不相邻";
   byId("setup-sector-count").textContent = `${map.sector_count} 块`;
-  drawBoard(byId("setup-map-canvas"), snapshot, { showSectors: true });
+  drawBoard(byId("setup-map-canvas"), snapshot, {
+    showSectors: true,
+    planetArtwork: true,
+    starfield: true,
+  });
   byId("setup-sector-table").innerHTML = map.sectors.map((sector) => `<tr>
     <td>${sector.position + 1}</td>
     <td class="mono">S${String(sector.tile).padStart(2, "0")}</td>
@@ -1486,11 +1490,139 @@ function renderBoard(snapshot) {
   drawBoard(byId("board-canvas"), snapshot);
 }
 
+function seededCanvasRandom(seed) {
+  let stateValue = (Number(seed) || 0) ^ 0x9e3779b9;
+  return () => {
+    stateValue ^= stateValue << 13;
+    stateValue ^= stateValue >>> 17;
+    stateValue ^= stateValue << 5;
+    return (stateValue >>> 0) / 4294967296;
+  };
+}
+
+function drawStarfield(context, width, height, seed) {
+  context.save();
+  context.fillStyle = "#050b14";
+  context.fillRect(0, 0, width, height);
+  const random = seededCanvasRandom(seed);
+  const stars = Math.max(120, Math.round(width * height / 1050));
+  for (let index = 0; index < stars; index += 1) {
+    const x = random() * width;
+    const y = random() * height;
+    const radius = random() > 0.93 ? 1.25 : random() > 0.72 ? 0.75 : 0.4;
+    const palette = random();
+    context.fillStyle = palette > 0.86
+      ? `rgba(157,204,255,${0.38 + random() * 0.42})`
+      : palette < 0.08
+        ? `rgba(255,224,165,${0.34 + random() * 0.34})`
+        : `rgba(238,245,255,${0.24 + random() * 0.48})`;
+    context.beginPath();
+    context.arc(x, y, radius, 0, Math.PI * 2);
+    context.fill();
+  }
+  context.restore();
+}
+
+function rotateAxial(q, r, steps) {
+  let rotatedQ = q;
+  let rotatedR = r;
+  for (let step = 0; step < ((steps % 6) + 6) % 6; step += 1) {
+    [rotatedQ, rotatedR] = [-rotatedR, rotatedQ + rotatedR];
+  }
+  return [rotatedQ, rotatedR];
+}
+
+function drawAssembledHexGrid(context, sectors, scale, offsetX, offsetY, compactMap) {
+  const localSpaces = [];
+  for (let q = -2; q <= 2; q += 1) {
+    for (let r = -2; r <= 2; r += 1) {
+      if (Math.max(Math.abs(q), Math.abs(r), Math.abs(q + r)) <= 2) {
+        localSpaces.push([q, r]);
+      }
+    }
+  }
+  context.save();
+  context.strokeStyle = "rgba(145, 177, 204, 0.16)";
+  context.lineWidth = compactMap ? 0.65 : 0.85;
+  for (const sector of sectors) {
+    for (const [localQ, localR] of localSpaces) {
+      const q = Number(sector.q) + localQ;
+      const r = Number(sector.r) + localR;
+      const x = offsetX + Math.sqrt(3) * (q + r / 2) * scale;
+      const y = offsetY + 1.5 * r * scale;
+      drawHexOutline(context, x, y, scale * 0.97);
+    }
+    const rawX = Math.sqrt(3) * (Number(sector.q) + Number(sector.r) / 2);
+    const rawY = 1.5 * Number(sector.r);
+    context.fillStyle = "rgba(194, 213, 230, 0.55)";
+    context.font = `650 ${compactMap ? 7 : 9}px Segoe UI`;
+    context.textAlign = "center";
+    context.fillText(
+      `S${String(sector.tile).padStart(2, "0")}`,
+      offsetX + rawX * scale,
+      offsetY + rawY * scale + (compactMap ? 2 : 3),
+    );
+  }
+  context.restore();
+}
+
+function drawPlanetArtwork(context, x, y, size, cellScale, planet, snapshot) {
+  const sector = snapshot.setup?.map?.sectors?.find(
+    (candidate) => Number(candidate.tile) === Number(planet.sector),
+  );
+  if (!sector) return false;
+  const image = getSectorArtwork(sector.tile, sector.side || "solid");
+  if (!image) return false;
+
+  const rotation = Math.round(Number(sector.rotation) / 60);
+  const [localQ, localR] = rotateAxial(
+    Number(planet.q) - Number(sector.q),
+    Number(planet.r) - Number(sector.r),
+    -rotation,
+  );
+  const columnStep = image.naturalWidth / 5;
+  const rowStep = image.naturalHeight * 3 / 16;
+  const sourceX = image.naturalWidth / 2 + columnStep * (localQ + localR / 2);
+  const sourceY = image.naturalHeight / 2 + rowStep * localR;
+  const cropRatio = Number(planet.terrain) === 7 ? 0.72 : Number(planet.terrain) === 5 ? 0.98 : 0.91;
+  const cropSize = columnStep * cropRatio;
+  const terrainScale = Number(planet.terrain) === 7 ? 0.76 : 0.84;
+  const radius = Math.min(size * terrainScale, cellScale * 0.72);
+
+  context.save();
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.beginPath();
+  context.arc(x, y, radius, 0, Math.PI * 2);
+  context.clip();
+  context.drawImage(
+    image,
+    sourceX - cropSize / 2,
+    sourceY - cropSize / 2,
+    cropSize,
+    cropSize,
+    x - radius,
+    y - radius,
+    radius * 2,
+    radius * 2,
+  );
+  context.restore();
+  context.save();
+  context.strokeStyle = "rgba(226, 239, 249, 0.24)";
+  context.lineWidth = Math.max(0.75, size * 0.05);
+  context.beginPath();
+  context.arc(x, y, radius, 0, Math.PI * 2);
+  context.stroke();
+  context.restore();
+  return true;
+}
+
 function drawBoard(canvas, snapshot, options = {}) {
   if (!canvas) return;
   const { context, width, height } = setupCanvas(canvas);
   context.clearRect(0, 0, width, height);
   if (!snapshot || !snapshot.planets?.length) return;
+  if (options.starfield) drawStarfield(context, width, height, snapshot.setup?.seed || 0);
   const showSectors = options.showSectors ?? Boolean(snapshot.setup?.map?.sectors?.length);
   if (options.sectorArtwork && snapshot.setup?.map?.sectors?.length) {
     drawSectorArtworkMap(context, width, height, snapshot);
@@ -1515,28 +1647,36 @@ function drawBoard(canvas, snapshot, options = {}) {
 
   if (showSectors) {
     const sectors = snapshot.setup?.map?.sectors || [];
-    const sectorSize = Math.max(size * 3.65, scale * 1.9);
-    for (const sector of sectors) {
-      const rawX = Math.sqrt(3) * (sector.q + sector.r / 2);
-      const rawY = 1.5 * sector.r;
-      const x = offsetX + rawX * scale;
-      const y = offsetY + rawY * scale;
-      drawSectorHex(context, x, y, sectorSize, SECTOR_FILLS[sector.position % SECTOR_FILLS.length]);
-      context.fillStyle = "#7a847e";
-      context.font = `700 ${compactMap ? 7 : 9}px Segoe UI`;
-      context.textAlign = "center";
-      context.fillText(`S${String(sector.tile).padStart(2, "0")} · ${sector.rotation}°`, x, y - sectorSize * 0.68);
+    if (options.starfield) {
+      drawAssembledHexGrid(context, sectors, scale, offsetX, offsetY, compactMap);
+    } else {
+      const sectorSize = Math.max(size * 3.65, scale * 1.9);
+      for (const sector of sectors) {
+        const rawX = Math.sqrt(3) * (sector.q + sector.r / 2);
+        const rawY = 1.5 * sector.r;
+        const x = offsetX + rawX * scale;
+        const y = offsetY + rawY * scale;
+        drawSectorHex(context, x, y, sectorSize, SECTOR_FILLS[sector.position % SECTOR_FILLS.length]);
+        context.fillStyle = "#7a847e";
+        context.font = `700 ${compactMap ? 7 : 9}px Segoe UI`;
+        context.textAlign = "center";
+        context.fillText(`S${String(sector.tile).padStart(2, "0")} · ${sector.rotation}°`, x, y - sectorSize * 0.68);
+      }
     }
   }
 
   for (const planet of points) {
     const x = offsetX + planet.rawX * scale;
     const y = offsetY + planet.rawY * scale;
-    drawHex(context, x, y, size, TERRAIN_COLORS[planet.terrain] || "#c7cec8");
-    context.fillStyle = "rgba(255,255,255,0.86)";
-    context.font = `700 ${Math.max(7, Math.min(9, size * 0.55))}px Segoe UI`;
-    context.textAlign = "center";
-    context.fillText(String(planet.id), x, y + 3);
+    const artworkDrawn = options.planetArtwork
+      && drawPlanetArtwork(context, x, y, size, scale, planet, snapshot);
+    if (!artworkDrawn) {
+      drawHex(context, x, y, size, TERRAIN_COLORS[planet.terrain] || "#c7cec8");
+      context.fillStyle = "rgba(255,255,255,0.86)";
+      context.font = `700 ${Math.max(7, Math.min(9, size * 0.55))}px Segoe UI`;
+      context.textAlign = "center";
+      context.fillText(String(planet.id), x, y + 3);
+    }
     if (planet.owner >= 0) {
       context.strokeStyle = PLAYER_COLORS[planet.owner] || "#17211d";
       context.lineWidth = compactMap ? 2.5 : 4;
@@ -1648,6 +1788,18 @@ function drawSectorHex(context, x, y, size, fill) {
   context.setLineDash([5, 4]);
   context.stroke();
   context.setLineDash([]);
+}
+
+function drawHexOutline(context, x, y, size) {
+  context.beginPath();
+  for (let side = 0; side < 6; side += 1) {
+    const angle = Math.PI / 180 * (60 * side - 30);
+    const px = x + size * Math.cos(angle);
+    const py = y + size * Math.sin(angle);
+    if (side === 0) context.moveTo(px, py); else context.lineTo(px, py);
+  }
+  context.closePath();
+  context.stroke();
 }
 
 function drawHex(context, x, y, size, fill) {

@@ -61,6 +61,8 @@ class DashboardTests(unittest.TestCase):
                 data = json.loads(response.read())
             with urlopen(base, timeout=5) as response:
                 page = response.read().decode("utf-8")
+            with urlopen(f"{base}/app.js", timeout=5) as response:
+                app_script = response.read().decode("utf-8")
             with urlopen(f"{base}/setup/random", timeout=5) as response:
                 random_setup_page = response.read().decode("utf-8")
             with urlopen(f"{base}/setup/manual", timeout=5) as response:
@@ -108,6 +110,9 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("setup-editor-standard-tech", page)
             self.assertIn("setup-editor-boosters", page)
             self.assertIn("setup-editor-map-mode", page)
+            self.assertIn("function drawStarfield", app_script)
+            self.assertIn("function drawPlanetArtwork", app_script)
+            self.assertIn("planetArtwork: true", app_script)
             self.assertEqual(random_setup_page, page)
             self.assertEqual(manual_setup_page, page)
             self.assertIn("player-board-grid", page)
