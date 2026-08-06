@@ -718,6 +718,42 @@ main {
   cursor: pointer;
 }
 
+.planet-editor-tools {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.planet-terrain-picker {
+  display: grid;
+  gap: 3px;
+}
+
+.planet-terrain-picker span {
+  color: #8fa6ba;
+  font-size: 8px;
+}
+
+.planet-terrain-picker select {
+  height: 30px;
+  padding: 0 26px 0 8px;
+  color: #dce8f4;
+  border: 1px solid #40576d;
+  border-radius: 3px;
+  background: #142235;
+  font-size: 9px;
+}
+
+.planet-editor-command.active {
+  color: #07111e;
+  border-color: #f2c85c;
+  background: #f2c85c;
+}
+
+.planet-editor-command.danger:not(:disabled) {
+  border-color: #895046;
+}
+
 .planet-editor-command:disabled {
   opacity: 0.45;
   cursor: default;
@@ -734,6 +770,10 @@ main {
 #setup-planet-editor-canvas {
   cursor: crosshair;
   touch-action: manipulation;
+}
+
+#setup-planet-editor-canvas.adding {
+  cursor: copy;
 }
 
 #setup-planet-editor-canvas:focus-visible {
@@ -2956,6 +2996,16 @@ footer {
 
   .planet-editor-command {
     justify-content: center;
+  }
+
+  .planet-editor-tools {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) repeat(3, auto);
+    align-items: end;
+  }
+
+  .planet-terrain-picker select {
+    width: 100%;
   }
 
   .planet-position-frame {

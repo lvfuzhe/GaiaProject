@@ -188,9 +188,22 @@
                     <strong id="setup-planet-editor-selected">未选择</strong>
                     <small id="setup-planet-editor-coordinate">--</small>
                   </div>
-                  <button id="setup-planet-editor-reset" class="planet-editor-command" type="button" title="恢复当前星区板块的星球位置" disabled>
-                    <span aria-hidden="true">↶</span><span>恢复板块位置</span>
-                  </button>
+                  <div class="planet-editor-tools">
+                    <label class="planet-terrain-picker"><span>新增地形</span><select id="setup-planet-editor-terrain">
+                      <option value="0">地球型</option><option value="1">沙漠</option><option value="2">沼泽</option>
+                      <option value="3">火山</option><option value="4">氧化</option><option value="5">钛金</option>
+                      <option value="6">冰冻</option><option value="7">跨维</option><option value="8">盖亚</option>
+                    </select></label>
+                    <button id="setup-planet-editor-add" class="planet-editor-command" type="button" aria-pressed="false" title="切换新增星球模式" disabled>
+                      <span aria-hidden="true">＋</span><span>新增</span>
+                    </button>
+                    <button id="setup-planet-editor-delete" class="planet-editor-command danger" type="button" title="删除当前星球" disabled>
+                      <span aria-hidden="true">−</span><span>删除</span>
+                    </button>
+                    <button id="setup-planet-editor-reset" class="planet-editor-command" type="button" title="撤销尚未应用的星球修改" disabled>
+                      <span aria-hidden="true">↶</span><span>撤销</span>
+                    </button>
+                  </div>
                 </div>
                 <div class="planet-position-frame">
                   <canvas id="setup-planet-editor-canvas" tabindex="0" aria-label="单颗星球位置编辑器；选择星球后点击空六角格移动"></canvas>

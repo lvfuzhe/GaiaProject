@@ -108,6 +108,8 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("setup-random-editor", page)
             self.assertIn("setup-editor-sectors", page)
             self.assertIn("setup-planet-editor-canvas", page)
+            self.assertIn("setup-planet-editor-add", page)
+            self.assertIn("setup-planet-editor-delete", page)
             self.assertIn("setup-planet-editor-reset", page)
             self.assertIn("setup-editor-standard-tech", page)
             self.assertIn("setup-editor-boosters", page)
@@ -115,7 +117,9 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("function drawStarfield", app_script)
             self.assertIn("function drawPlanetArtwork", app_script)
             self.assertIn("function handlePlanetEditorClick", app_script)
-            self.assertIn("function resetPlanetPositions", app_script)
+            self.assertIn("function resetPlanetLayout", app_script)
+            self.assertIn("function addPlanetAt", app_script)
+            self.assertIn("function deleteSelectedPlanet", app_script)
             self.assertIn("planetArtwork: true", app_script)
             self.assertEqual(random_setup_page, page)
             self.assertEqual(manual_setup_page, page)
@@ -246,6 +250,40 @@ class DashboardTests(unittest.TestCase):
                 for planet in custom_preview["state"]["planets"]
                 if (planet["q"], planet["r"]) != (0, 0)
             ))
+
+            removable = next(
+                planet for planet in custom_preview["state"]["planets"]
+                if planet["terrain"] == 8
+            )
+            reduced_layout = [
+                {
+                    "id": planet["id"],
+                    "q": planet["q"],
+                    "r": planet["r"],
+                    "source_id": planet["source_id"],
+                }
+                for planet in custom_preview["state"]["planets"]
+                if planet["id"] != removable["id"]
+            ]
+            layout_setup = {
+                key: value
+                for key, value in customized["random_setup"].items()
+                if key != "planet_positions"
+            }
+            layout_setup["planet_layout"] = reduced_layout
+            _, reduced_preview = self.post_json(f"{base}/api/setup/preview", {
+                **payload,
+                "random_setup": layout_setup,
+            })
+            self.assertEqual(len(reduced_preview["state"]["planets"]), 39)
+            self.assertNotIn(
+                removable["id"],
+                {planet["id"] for planet in reduced_preview["state"]["planets"]},
+            )
+            self.assertEqual(
+                reduced_preview["config"]["random_setup"]["planet_layout"],
+                reduced_layout,
+            )
 
             missing_manual_map = {
                 **payload,

@@ -70,6 +70,8 @@ class GaiaSetup:
     planet_r: tuple[int, ...]
     planet_source_q: tuple[int, ...]
     planet_source_r: tuple[int, ...]
+    planet_source_ids: tuple[int, ...]
+    planet_source_catalog: tuple[tuple[int, int, int, int, int], ...]
     terrains: tuple[int, ...]
     planet_sectors: tuple[int, ...]
     sector_tiles: tuple[int, ...]
@@ -96,6 +98,7 @@ def generate_setup(
     sector_tiles: tuple[int, ...] | None = None,
     sector_rotations: tuple[int, ...] | None = None,
     planet_positions: tuple[tuple[int, int, int], ...] | None = None,
+    planet_layout: tuple[tuple[int, int, int, int], ...] | None = None,
     booster_tiles: tuple[int, ...] | None = None,
     round_scoring_tiles: tuple[int, ...] | None = None,
     final_scoring_tiles: tuple[int, ...] | None = None,
@@ -145,6 +148,34 @@ def generate_setup(
 
     planet_source_q = map_data[1]
     planet_source_r = map_data[2]
+    planet_source_ids = tuple(range(MAX_PLANETS))
+    planet_source_catalog = tuple(
+        (
+            planet,
+            map_data[1][planet],
+            map_data[2][planet],
+            map_data[3][planet],
+            map_data[4][planet],
+        )
+        for planet, active in enumerate(map_data[0])
+        if active
+    )
+    if planet_positions is not None and planet_layout is not None:
+        raise ValueError("planet positions and planet layout cannot both be provided")
+    if planet_layout is not None:
+        if map_mode != "manual":
+            raise ValueError("planet layout requires manual map_mode")
+        (
+            active,
+            planet_q,
+            planet_r,
+            terrains,
+            sectors,
+            planet_source_q,
+            planet_source_r,
+            planet_source_ids,
+        ) = _apply_planet_layout(*map_data[:5], centers, planet_layout)
+        map_data = (active, planet_q, planet_r, terrains, sectors, *map_data[5:])
     if planet_positions is not None:
         if map_mode != "manual":
             raise ValueError("planet positions require manual map_mode")
@@ -288,6 +319,8 @@ def generate_setup(
         planet_r=map_data[2],
         planet_source_q=planet_source_q,
         planet_source_r=planet_source_r,
+        planet_source_ids=planet_source_ids,
+        planet_source_catalog=planet_source_catalog,
         terrains=map_data[3],
         planet_sectors=map_data[4],
         sector_tiles=map_data[5],
@@ -489,6 +522,94 @@ def _apply_planet_positions(
             "planet arrangement is illegal: equal home planet types may not be adjacent"
         )
     return result_q, result_r
+
+
+def _apply_planet_layout(
+    base_active: tuple[bool, ...],
+    base_q: tuple[int, ...],
+    base_r: tuple[int, ...],
+    base_terrains: tuple[int, ...],
+    base_sectors: tuple[int, ...],
+    centers: tuple[tuple[int, int], ...],
+    layout: tuple[tuple[int, int, int, int], ...],
+) -> tuple[
+    tuple[bool, ...],
+    tuple[int, ...],
+    tuple[int, ...],
+    tuple[int, ...],
+    tuple[int, ...],
+    tuple[int, ...],
+    tuple[int, ...],
+    tuple[int, ...],
+]:
+    try:
+        normalized = tuple(
+            (int(item[0]), int(item[1]), int(item[2]), int(item[3]))
+            for item in layout
+        )
+    except (IndexError, TypeError, ValueError) as error:
+        raise ValueError("each planet layout item must contain id, q, r and source_id") from error
+    if not normalized:
+        raise ValueError("planet layout must contain at least one planet")
+    if len(normalized) > MAX_PLANETS:
+        raise ValueError(f"planet layout supports at most {MAX_PLANETS} planets")
+
+    ids = [planet for planet, _q, _r, _source in normalized]
+    if any(planet < 0 or planet >= MAX_PLANETS for planet in ids):
+        raise ValueError(f"planet id must be between 0 and {MAX_PLANETS - 1}")
+    if len(set(ids)) != len(ids):
+        raise ValueError("planet layout must not contain duplicate ids")
+    if any(
+        source < 0 or source >= MAX_PLANETS or not base_active[source]
+        for _planet, _q, _r, source in normalized
+    ):
+        raise ValueError("planet layout source_id must reference a printed sector planet")
+
+    board_spaces = {
+        (center_q + local_q, center_r + local_r)
+        for center_q, center_r in centers
+        for local_q in range(-2, 3)
+        for local_r in range(-2, 3)
+        if max(abs(local_q), abs(local_r), abs(local_q + local_r)) <= 2
+    }
+    destinations = [(q, r) for _planet, q, r, _source in normalized]
+    if any(destination not in board_spaces for destination in destinations):
+        raise ValueError("planet position is outside the assembled map")
+    if len(set(destinations)) != len(destinations):
+        raise ValueError("planet layout must not overlap")
+
+    active = [False] * MAX_PLANETS
+    planet_q = [0] * MAX_PLANETS
+    planet_r = [0] * MAX_PLANETS
+    terrains = [0] * MAX_PLANETS
+    sectors = [-1] * MAX_PLANETS
+    source_q = [0] * MAX_PLANETS
+    source_r = [0] * MAX_PLANETS
+    source_ids = [-1] * MAX_PLANETS
+    for planet, q, r, source in normalized:
+        active[planet] = True
+        planet_q[planet] = q
+        planet_r[planet] = r
+        terrains[planet] = base_terrains[source]
+        sectors[planet] = base_sectors[source]
+        source_q[planet] = base_q[source]
+        source_r[planet] = base_r[source]
+        source_ids[planet] = source
+    result = (
+        tuple(active),
+        tuple(planet_q),
+        tuple(planet_r),
+        tuple(terrains),
+        tuple(sectors),
+        tuple(source_q),
+        tuple(source_r),
+        tuple(source_ids),
+    )
+    if not _map_is_valid(*result[:4]):
+        raise ValueError(
+            "planet arrangement is illegal: equal home planet types may not be adjacent"
+        )
+    return result
 
 
 def _choose_starting_planets(

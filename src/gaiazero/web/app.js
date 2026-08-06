@@ -195,6 +195,8 @@ const state = {
     preview: null,
     selectedPlanetId: null,
     planetEditorError: null,
+    planetEditorMode: "move",
+    planetEditorTerrain: 0,
     busy: false,
     runId: null,
     simulation: { status: "idle" },
@@ -863,11 +865,17 @@ function normalizedRandomElements(players, values = {}) {
       defaults[field] = values[field].map(Number);
     }
   }
-  if (Array.isArray(values.planet_positions)) {
-    defaults.planet_positions = values.planet_positions.map((position) => ({
-      id: Number(position.id),
-      q: Number(position.q),
-      r: Number(position.r),
+  const layout = Array.isArray(values.planet_layout)
+    ? values.planet_layout
+    : Array.isArray(values.planet_positions)
+      ? values.planet_positions.map((position) => ({ ...position, source_id: position.id }))
+      : null;
+  if (layout) {
+    defaults.planet_layout = layout.map((item) => ({
+      id: Number(item.id),
+      q: Number(item.q),
+      r: Number(item.r),
+      source_id: Number(item.source_id),
     }));
   }
   const federation = Number(values.terraforming_federation_tile);
@@ -884,11 +892,15 @@ function randomElementsFromSnapshot(snapshot, config, players, _firstPlayer) {
     const configured = { ...config.random_setup };
     if (
       configured.map_mode === "manual"
+      && !Array.isArray(configured.planet_layout)
       && !Array.isArray(configured.planet_positions)
       && snapshot?.planets?.length
     ) {
-      configured.planet_positions = snapshot.planets.map((planet) => ({
-        id: Number(planet.id), q: Number(planet.q), r: Number(planet.r),
+      configured.planet_layout = snapshot.planets.map((planet) => ({
+        id: Number(planet.id),
+        q: Number(planet.q),
+        r: Number(planet.r),
+        source_id: Number(planet.source_id ?? planet.id),
       }));
     }
     return normalizedRandomElements(players, configured);
@@ -899,8 +911,11 @@ function randomElementsFromSnapshot(snapshot, config, players, _firstPlayer) {
     map_mode: setup.map?.method,
     sector_tiles: setup.map?.sectors?.map((sector) => Number(sector.tile) - 1),
     sector_rotations: setup.map?.sectors?.map((sector) => Number(sector.rotation) / 60),
-    planet_positions: snapshot.planets?.map((planet) => ({
-      id: Number(planet.id), q: Number(planet.q), r: Number(planet.r),
+    planet_layout: snapshot.planets?.map((planet) => ({
+      id: Number(planet.id),
+      q: Number(planet.q),
+      r: Number(planet.r),
+      source_id: Number(planet.source_id ?? planet.id),
     })),
     booster_tiles: setup.boosters.map((booster) => booster.id),
     round_scoring_tiles: setup.round_scoring?.map((tile) => tile.id),
@@ -995,18 +1010,55 @@ function renderRandomElementEditor() {
 
 function planetEditorSnapshot() {
   const snapshot = state.manualSetup.preview;
-  const positions = state.manualSetup.randomElements?.planet_positions;
-  if (!snapshot?.planets?.length || !Array.isArray(positions)) return null;
-  const byPlanet = new Map(positions.map((position) => [Number(position.id), position]));
-  if (byPlanet.size !== snapshot.planets.length) return null;
+  const layout = state.manualSetup.randomElements?.planet_layout;
+  if (!snapshot?.planets?.length || !Array.isArray(layout)) return null;
+  const existing = new Map(snapshot.planets.map((planet) => [Number(planet.id), planet]));
+  const sources = new Map(
+    (snapshot.setup?.map?.planet_sources || []).map((source) => [Number(source.id), {
+      id: Number(source.id),
+      source_id: Number(source.id),
+      q: Number(source.q),
+      r: Number(source.r),
+      source_q: Number(source.q),
+      source_r: Number(source.r),
+      terrain: Number(source.terrain),
+      sector: Number(source.sector),
+      owner: -1,
+      building: "empty",
+      gaiaformer: -1,
+      federated: false,
+    }]));
+  for (const planet of snapshot.planets) {
+    const sourceId = Number(planet.source_id ?? planet.id);
+    if (!sources.has(sourceId)) sources.set(sourceId, planet);
+  }
+  const planets = layout.map((item) => {
+    const id = Number(item.id);
+    const sourceId = Number(item.source_id);
+    const current = existing.get(id);
+    const source = sources.get(sourceId);
+    const template = current && Number(current.source_id ?? current.id) === sourceId
+      ? current
+      : source;
+    if (!template) return null;
+    return {
+      ...template,
+      id,
+      q: Number(item.q),
+      r: Number(item.r),
+      source_id: sourceId,
+      source_q: Number(source?.source_q ?? source?.q ?? template.source_q ?? template.q),
+      source_r: Number(source?.source_r ?? source?.r ?? template.source_r ?? template.r),
+      owner: -1,
+      building: "empty",
+      gaiaformer: -1,
+      federated: false,
+    };
+  });
+  if (planets.some((planet) => !planet)) return null;
   return {
     ...snapshot,
-    planets: snapshot.planets.map((planet) => {
-      const position = byPlanet.get(Number(planet.id));
-      return position
-        ? { ...planet, q: Number(position.q), r: Number(position.r) }
-        : planet;
-    }),
+    planets,
   };
 }
 
@@ -1016,20 +1068,31 @@ function renderPlanetPositionEditor() {
   const snapshot = state.manualSetup.mapMode === "manual" ? planetEditorSnapshot() : null;
   const empty = byId("setup-planet-editor-empty");
   const reset = byId("setup-planet-editor-reset");
+  const add = byId("setup-planet-editor-add");
+  const remove = byId("setup-planet-editor-delete");
   const selectedLabel = byId("setup-planet-editor-selected");
   const coordinate = byId("setup-planet-editor-coordinate");
+  const terrainPicker = byId("setup-planet-editor-terrain");
+  terrainPicker.value = String(state.manualSetup.planetEditorTerrain);
   empty.hidden = Boolean(snapshot);
   reset.disabled = !snapshot;
+  add.disabled = !snapshot;
   byId("setup-planet-editor-count").textContent = snapshot
-    ? `${snapshot.planets.length} 颗 · ${assembledBoardSpaces(snapshot.setup?.map?.sectors || []).length} 个合法格`
+    ? `${snapshot.planets.length} / 70 颗 · ${assembledBoardSpaces(snapshot.setup?.map?.sectors || []).length} 个合法格`
     : "等待地图预览";
   const selected = snapshot?.planets?.find(
     (planet) => Number(planet.id) === Number(state.manualSetup.selectedPlanetId),
   );
   if (!selected) state.manualSetup.selectedPlanetId = null;
+  remove.disabled = !selected;
+  add.classList.toggle("active", state.manualSetup.planetEditorMode === "add");
+  add.setAttribute("aria-pressed", String(state.manualSetup.planetEditorMode === "add"));
+  canvas.classList.toggle("adding", state.manualSetup.planetEditorMode === "add");
   selectedLabel.textContent = selected
     ? `#${selected.id} · ${TERRAIN_LABELS[selected.terrain] || "星球"}`
-    : "未选择";
+    : state.manualSetup.planetEditorMode === "add"
+      ? `新增 · ${TERRAIN_LABELS[state.manualSetup.planetEditorTerrain]}`
+      : "未选择";
   coordinate.textContent = state.manualSetup.planetEditorError
     || (selected ? `坐标 ${selected.q}, ${selected.r}` : "--");
   coordinate.classList.toggle("error", Boolean(state.manualSetup.planetEditorError));
@@ -1081,12 +1144,76 @@ function moveSelectedPlanet(q, r) {
     renderPlanetPositionEditor();
     return;
   }
-  const positions = state.manualSetup.randomElements.planet_positions;
-  const index = positions.findIndex((position) => Number(position.id) === Number(selected.id));
-  positions[index] = { id: Number(selected.id), q: Number(q), r: Number(r) };
+  const layout = state.manualSetup.randomElements.planet_layout;
+  const index = layout.findIndex((item) => Number(item.id) === Number(selected.id));
+  layout[index] = { ...layout[index], q: Number(q), r: Number(r) };
   state.manualSetup.planetEditorError = null;
   state.manualSetup.edited = true;
   setSetupEditorMessage(`星球 #${selected.id} 已移动，应用预览后生效`, "ready");
+  renderPlanetPositionEditor();
+}
+
+function addPlanetAt(q, r) {
+  const snapshot = planetEditorSnapshot();
+  const layout = state.manualSetup.randomElements?.planet_layout;
+  if (!snapshot || !Array.isArray(layout)) return;
+  if (layout.length >= 70) {
+    state.manualSetup.planetEditorError = "已达到 70 颗星球上限";
+    renderPlanetPositionEditor();
+    return;
+  }
+  if (snapshot.planets.some((planet) => Number(planet.q) === q && Number(planet.r) === r)) {
+    state.manualSetup.planetEditorError = "该小六角格已有星球";
+    renderPlanetPositionEditor();
+    return;
+  }
+  const terrain = Number(state.manualSetup.planetEditorTerrain);
+  if (terrain < 7 && snapshot.planets.some((planet) =>
+    Number(planet.terrain) === terrain
+    && axialCoordinateDistance(q, r, planet.q, planet.r) === 1
+  )) {
+    state.manualSetup.planetEditorError = "同色母星不能相邻";
+    renderPlanetPositionEditor();
+    return;
+  }
+  const source = (state.manualSetup.preview.setup?.map?.planet_sources || []).find(
+    (candidate) => Number(candidate.terrain) === terrain,
+  );
+  if (!source) {
+    state.manualSetup.planetEditorError = "当前星区没有该地形的原图素材";
+    renderPlanetPositionEditor();
+    return;
+  }
+  const used = new Set(layout.map((item) => Number(item.id)));
+  const id = Array.from({ length: 70 }, (_, value) => value).find((value) => !used.has(value));
+  layout.push({ id, q: Number(q), r: Number(r), source_id: Number(source.id) });
+  layout.sort((left, right) => left.id - right.id);
+  state.manualSetup.selectedPlanetId = id;
+  state.manualSetup.planetEditorError = null;
+  state.manualSetup.edited = true;
+  setSetupEditorMessage(`已新增${TERRAIN_LABELS[terrain]}星球 #${id}，应用预览后生效`, "ready");
+  renderPlanetPositionEditor();
+}
+
+function deleteSelectedPlanet() {
+  const id = state.manualSetup.selectedPlanetId;
+  const layout = state.manualSetup.randomElements?.planet_layout;
+  if (id === null || !Array.isArray(layout)) return;
+  const index = layout.findIndex((item) => Number(item.id) === Number(id));
+  if (index < 0) return;
+  layout.splice(index, 1);
+  state.manualSetup.selectedPlanetId = null;
+  state.manualSetup.planetEditorMode = "move";
+  state.manualSetup.planetEditorError = null;
+  state.manualSetup.edited = true;
+  setSetupEditorMessage(`星球 #${id} 已删除，应用预览后生效`, "ready");
+  renderPlanetPositionEditor();
+}
+
+function toggleAddPlanetMode() {
+  state.manualSetup.planetEditorMode = state.manualSetup.planetEditorMode === "add" ? "move" : "add";
+  state.manualSetup.selectedPlanetId = null;
+  state.manualSetup.planetEditorError = null;
   renderPlanetPositionEditor();
 }
 
@@ -1104,6 +1231,16 @@ function handlePlanetEditorClick(event) {
     y: geometry.offsetY + 1.5 * Number(item.r) * geometry.scale,
   });
   const planets = snapshot.planets.map(withPixels);
+  const nearestSpace = geometry.spaces
+    .map(withPixels)
+    .map((space) => ({ ...space, distance: Math.hypot(clickX - space.x, clickY - space.y) }))
+    .sort((left, right) => left.distance - right.distance)[0];
+  if (state.manualSetup.planetEditorMode === "add") {
+    if (nearestSpace && nearestSpace.distance <= geometry.scale) {
+      addPlanetAt(nearestSpace.q, nearestSpace.r);
+    }
+    return;
+  }
   const nearestPlanet = planets
     .map((planet) => ({ ...planet, distance: Math.hypot(clickX - planet.x, clickY - planet.y) }))
     .sort((left, right) => left.distance - right.distance)[0];
@@ -1114,33 +1251,31 @@ function handlePlanetEditorClick(event) {
     return;
   }
   if (state.manualSetup.selectedPlanetId === null) return;
-  const nearestSpace = geometry.spaces
-    .map(withPixels)
-    .map((space) => ({ ...space, distance: Math.hypot(clickX - space.x, clickY - space.y) }))
-    .sort((left, right) => left.distance - right.distance)[0];
   if (nearestSpace && nearestSpace.distance <= geometry.scale) {
     moveSelectedPlanet(nearestSpace.q, nearestSpace.r);
   }
 }
 
-function resetPlanetPositions() {
+function resetPlanetLayout() {
   const snapshot = state.manualSetup.preview;
   if (!snapshot?.planets?.length) return;
-  state.manualSetup.randomElements.planet_positions = snapshot.planets.map((planet) => ({
+  state.manualSetup.randomElements.planet_layout = snapshot.planets.map((planet) => ({
     id: Number(planet.id),
-    q: Number(planet.source_q ?? planet.q),
-    r: Number(planet.source_r ?? planet.r),
+    q: Number(planet.q),
+    r: Number(planet.r),
+    source_id: Number(planet.source_id ?? planet.id),
   }));
   state.manualSetup.selectedPlanetId = null;
+  state.manualSetup.planetEditorMode = "move";
   state.manualSetup.planetEditorError = null;
   state.manualSetup.edited = true;
-  setSetupEditorMessage("星球已恢复到当前星区板块位置", "ready");
+  setSetupEditorMessage("已撤销尚未应用的星球修改", "ready");
   renderPlanetPositionEditor();
 }
 
 function captureRandomElements() {
   const result = { map_mode: state.manualSetup.mapMode };
-  const planetPositions = state.manualSetup.randomElements?.planet_positions;
+  const planetLayout = state.manualSetup.randomElements?.planet_layout;
   document.querySelectorAll("[data-random-field]").forEach((select) => {
     const field = select.dataset.randomField;
     const index = select.dataset.randomIndex;
@@ -1151,8 +1286,8 @@ function captureRandomElements() {
       result[field][Number(index)] = Number(select.value);
     }
   });
-  if (Array.isArray(planetPositions)) {
-    result.planet_positions = planetPositions.map((position) => ({ ...position }));
+  if (Array.isArray(planetLayout)) {
+    result.planet_layout = planetLayout.map((item) => ({ ...item }));
   }
   state.manualSetup.randomElements = result;
   return result;
@@ -1173,20 +1308,20 @@ function validateTileSelection(values, expected, available, label, requireAll = 
   }
 }
 
-function validatePlanetPositions(positions, players) {
-  if (positions === undefined) return;
-  const expected = players === 2 ? 40 : 61;
-  if (!Array.isArray(positions) || positions.length !== expected) {
-    throw new Error(`单颗星球位置需要完整包含 ${expected} 颗星球`);
+function validatePlanetLayout(layout) {
+  if (layout === undefined) return;
+  if (!Array.isArray(layout) || layout.length < 1 || layout.length > 70) {
+    throw new Error("手动星图必须包含 1–70 颗星球");
   }
-  if (positions.some((position) =>
-    !Number.isInteger(position.id)
-    || !Number.isInteger(position.q)
-    || !Number.isInteger(position.r)
+  if (layout.some((item) =>
+    !Number.isInteger(item.id)
+    || !Number.isInteger(item.q)
+    || !Number.isInteger(item.r)
+    || !Number.isInteger(item.source_id)
   )) {
-    throw new Error("单颗星球位置包含无效坐标");
+    throw new Error("手动星图包含无效星球数据");
   }
-  if (new Set(positions.map((position) => position.id)).size !== positions.length) {
+  if (new Set(layout.map((item) => item.id)).size !== layout.length) {
     throw new Error("单颗星球编号不能重复");
   }
 }
@@ -1227,11 +1362,12 @@ function manualSetupPayload({ includeRandom = true } = {}) {
     if (randomSetup.sector_rotations?.length !== sectorCount) {
       throw new Error(`星区旋转需要 ${sectorCount} 个槽位`);
     }
-    validatePlanetPositions(randomSetup.planet_positions, players);
+    validatePlanetLayout(randomSetup.planet_layout);
   } else {
     delete randomSetup.sector_tiles;
     delete randomSetup.sector_rotations;
     delete randomSetup.planet_positions;
+    delete randomSetup.planet_layout;
   }
   validateTileSelection(randomSetup.booster_tiles, players + 3, 10, "助推板块");
   validateTileSelection(randomSetup.round_scoring_tiles, 6, 10, "轮次计分板块");
@@ -1379,8 +1515,11 @@ async function randomizeManualSetup() {
     state.manualSetup.hydrated = true;
     const resolvedSetup = { ...data.config.random_setup, map_mode: requestedMapMode };
     if (requestedMapMode === "manual") {
-      resolvedSetup.planet_positions = data.state.planets.map((planet) => ({
-        id: Number(planet.id), q: Number(planet.q), r: Number(planet.r),
+      resolvedSetup.planet_layout = data.state.planets.map((planet) => ({
+        id: Number(planet.id),
+        q: Number(planet.q),
+        r: Number(planet.r),
+        source_id: Number(planet.source_id ?? planet.id),
       }));
     }
     state.manualSetup.randomElements = normalizedRandomElements(players, resolvedSetup);
@@ -2417,6 +2556,7 @@ byId("setup-editor-players").addEventListener("change", () => {
   state.manualSetup.preview = null;
   state.manualSetup.selectedPlanetId = null;
   state.manualSetup.planetEditorError = null;
+  state.manualSetup.planetEditorMode = "move";
   renderSetupEditorSeats();
   state.manualSetup.randomElements = defaultRandomElements(
     Number(byId("setup-editor-players").value),
@@ -2455,9 +2595,10 @@ byId("setup-editor-form").addEventListener("input", (event) => {
   if (randomSelect) {
     captureRandomElements();
     if (["sector_tiles", "sector_rotations"].includes(randomSelect.dataset.randomField)) {
-      delete state.manualSetup.randomElements.planet_positions;
+      delete state.manualSetup.randomElements.planet_layout;
       state.manualSetup.selectedPlanetId = null;
       state.manualSetup.planetEditorError = null;
+      state.manualSetup.planetEditorMode = "move";
       renderPlanetPositionEditor();
     }
     if (randomSelect.dataset.randomField === "sector_tiles") {
@@ -2487,7 +2628,14 @@ byId("setup-editor-form").addEventListener("submit", async (event) => {
 byId("setup-editor-randomize").addEventListener("click", randomizeManualSetup);
 byId("setup-editor-run").addEventListener("click", runManualSimulation);
 byId("setup-planet-editor-canvas").addEventListener("click", handlePlanetEditorClick);
-byId("setup-planet-editor-reset").addEventListener("click", resetPlanetPositions);
+byId("setup-planet-editor-add").addEventListener("click", toggleAddPlanetMode);
+byId("setup-planet-editor-delete").addEventListener("click", deleteSelectedPlanet);
+byId("setup-planet-editor-reset").addEventListener("click", resetPlanetLayout);
+byId("setup-planet-editor-terrain").addEventListener("change", (event) => {
+  state.manualSetup.planetEditorTerrain = Number(event.target.value);
+  state.manualSetup.planetEditorError = null;
+  renderPlanetPositionEditor();
+});
 document.querySelectorAll("[data-setup-config-view]").forEach((tab) => {
   tab.addEventListener("click", () => {
     state.manualSetup.configView = tab.dataset.setupConfigView;

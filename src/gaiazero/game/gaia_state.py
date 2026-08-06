@@ -300,6 +300,8 @@ class GaiaState:
     planet_r: tuple[int, ...]
     planet_source_q: tuple[int, ...]
     planet_source_r: tuple[int, ...]
+    planet_source_ids: tuple[int, ...]
+    planet_source_catalog: tuple[tuple[int, int, int, int, int], ...]
     planet_sectors: tuple[int, ...]
     sector_tiles: tuple[int, ...]
     sector_rotations: tuple[int, ...]
@@ -330,6 +332,7 @@ class GaiaState:
         sector_tiles: tuple[int, ...] | None = None,
         sector_rotations: tuple[int, ...] | None = None,
         planet_positions: tuple[tuple[int, int, int], ...] | None = None,
+        planet_layout: tuple[tuple[int, int, int, int], ...] | None = None,
         booster_tiles: tuple[int, ...] | None = None,
         round_scoring_tiles: tuple[int, ...] | None = None,
         final_scoring_tiles: tuple[int, ...] | None = None,
@@ -353,6 +356,7 @@ class GaiaState:
             sector_tiles=sector_tiles,
             sector_rotations=sector_rotations,
             planet_positions=planet_positions,
+            planet_layout=planet_layout,
             booster_tiles=booster_tiles,
             round_scoring_tiles=round_scoring_tiles,
             final_scoring_tiles=final_scoring_tiles,
@@ -404,6 +408,8 @@ class GaiaState:
             planet_r=setup.planet_r,
             planet_source_q=setup.planet_source_q,
             planet_source_r=setup.planet_source_r,
+            planet_source_ids=setup.planet_source_ids,
+            planet_source_catalog=setup.planet_source_catalog,
             planet_sectors=setup.planet_sectors,
             sector_tiles=setup.sector_tiles,
             sector_rotations=setup.sector_rotations,
@@ -1320,6 +1326,7 @@ class GaiaState:
                     "r": self.planet_r[index],
                     "source_q": self.planet_source_q[index],
                     "source_r": self.planet_source_r[index],
+                    "source_id": self.planet_source_ids[index],
                     "sector": self.planet_sectors[index],
                     "terrain": self.terrains[index],
                     "owner": self.owners[index],
@@ -1349,6 +1356,16 @@ class GaiaState:
                             "r": self.sector_centers[position][1],
                         }
                         for position, tile in enumerate(self.sector_tiles)
+                    ],
+                    "planet_sources": [
+                        {
+                            "id": planet,
+                            "q": q,
+                            "r": r,
+                            "terrain": terrain,
+                            "sector": sector,
+                        }
+                        for planet, q, r, terrain, sector in self.planet_source_catalog
                     ],
                 },
                 "factions": [

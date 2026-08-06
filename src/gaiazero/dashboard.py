@@ -122,6 +122,11 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             resolved_random_setup = _resolved_random_setup(initial)
             if requested_random_setup:
                 resolved_random_setup.update(requested_random_setup)
+                if (
+                    "planet_positions" in requested_random_setup
+                    and "planet_layout" not in requested_random_setup
+                ):
+                    resolved_random_setup.pop("planet_layout", None)
             config["random_setup"] = resolved_random_setup
         except (json.JSONDecodeError, TypeError, ValueError) as error:
             self._send_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
@@ -314,6 +319,7 @@ def _normalize_random_setup(value: object) -> dict[str, Any] | None:
     allowed_fields = {
         *array_fields,
         "planet_positions",
+        "planet_layout",
         "terraforming_federation_tile",
         "map_mode",
     }
@@ -344,6 +350,27 @@ def _normalize_random_setup(value: object) -> dict[str, Any] | None:
                 "r": int(position["r"]),
             })
         normalized["planet_positions"] = normalized_positions
+    if "planet_layout" in value:
+        layout = value["planet_layout"]
+        if not isinstance(layout, list):
+            raise TypeError("random_setup.planet_layout must be an array")
+        normalized_layout: list[dict[str, int]] = []
+        for item in layout:
+            if not isinstance(item, dict):
+                raise TypeError("each planet layout item must be an object")
+            if set(item) != {"id", "q", "r", "source_id"}:
+                raise ValueError(
+                    "each planet layout item must contain only id, q, r and source_id"
+                )
+            normalized_layout.append({
+                "id": int(item["id"]),
+                "q": int(item["q"]),
+                "r": int(item["r"]),
+                "source_id": int(item["source_id"]),
+            })
+        normalized["planet_layout"] = normalized_layout
+    if "planet_positions" in normalized and "planet_layout" in normalized:
+        raise ValueError("planet_positions and planet_layout cannot both be provided")
     if "terraforming_federation_tile" in value:
         normalized["terraforming_federation_tile"] = int(
             value["terraforming_federation_tile"]
@@ -385,6 +412,11 @@ def _manual_initial_state(config: dict[str, Any]) -> GaiaState:
             (position["id"], position["q"], position["r"])
             for position in random_setup["planet_positions"]
         )
+    if "planet_layout" in random_setup:
+        overrides["planet_layout"] = tuple(
+            (item["id"], item["q"], item["r"], item["source_id"])
+            for item in random_setup["planet_layout"]
+        )
     return GaiaState.initial(
         config["players"],
         config["seed"],
@@ -412,8 +444,13 @@ def _resolved_random_setup(state: GaiaState) -> dict[str, Any]:
         "terraforming_federation_tile": state.terraforming_federation_tile,
     }
     if state.map_mode == "manual":
-        resolved["planet_positions"] = [
-            {"id": planet, "q": state.planet_q[planet], "r": state.planet_r[planet]}
+        resolved["planet_layout"] = [
+            {
+                "id": planet,
+                "q": state.planet_q[planet],
+                "r": state.planet_r[planet],
+                "source_id": state.planet_source_ids[planet],
+            }
             for planet, active in enumerate(state.active_planets)
             if active
         ]

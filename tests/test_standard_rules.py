@@ -305,6 +305,62 @@ class StandardGaiaRulesTests(unittest.TestCase):
                 map_mode="manual",
             )
 
+    def test_manual_layout_can_add_and_delete_individual_planets(self) -> None:
+        donor = GaiaState.initial(2, seed=37, faction_indices=(0, 2))
+        deleted = next(
+            planet
+            for planet, active in enumerate(donor.active_planets)
+            if active and donor.terrains[planet] == Terrain.GAIA
+        )
+        source = next(
+            planet
+            for planet, active in enumerate(donor.active_planets)
+            if active and donor.terrains[planet] == Terrain.TRANSDIM
+        )
+        added = next(
+            planet for planet, active in enumerate(donor.active_planets) if not active
+        )
+        occupied = {
+            (donor.planet_q[planet], donor.planet_r[planet])
+            for planet, active in enumerate(donor.active_planets)
+            if active
+        }
+        board_spaces = {
+            (center_q + q, center_r + r)
+            for center_q, center_r in donor.sector_centers
+            for q in range(-2, 3)
+            for r in range(-2, 3)
+            if max(abs(q), abs(r), abs(q + r)) <= 2
+        }
+        destination = next(iter(board_spaces - occupied))
+        layout = tuple(
+            (
+                planet,
+                donor.planet_q[planet],
+                donor.planet_r[planet],
+                donor.planet_source_ids[planet],
+            )
+            for planet, active in enumerate(donor.active_planets)
+            if active and planet != deleted
+        ) + ((added, destination[0], destination[1], source),)
+
+        state = GaiaState.initial(
+            2,
+            seed=37,
+            faction_indices=(0, 2),
+            sector_tiles=donor.sector_tiles,
+            sector_rotations=donor.sector_rotations,
+            planet_layout=layout,
+            map_mode="manual",
+        )
+
+        self.assertFalse(state.active_planets[deleted])
+        self.assertTrue(state.active_planets[added])
+        self.assertEqual((state.planet_q[added], state.planet_r[added]), destination)
+        self.assertEqual(state.terrains[added], Terrain.TRANSDIM)
+        self.assertEqual(state.planet_source_ids[added], source)
+        self.assertEqual(sum(state.active_planets), sum(donor.active_planets))
+
     def test_sector_artwork_footprints_do_not_overlap(self) -> None:
         local_spaces = {
             (q, r)
