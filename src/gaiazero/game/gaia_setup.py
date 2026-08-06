@@ -65,6 +65,7 @@ class GaiaSetup:
     first_player: int
     faction_indices: tuple[int, ...]
     starting_planets: tuple[tuple[int, ...], ...]
+    placement_order: tuple[int, ...]
     active_planets: tuple[bool, ...]
     planet_q: tuple[int, ...]
     planet_r: tuple[int, ...]
@@ -209,22 +210,27 @@ def generate_setup(
         selected_boards = [faction_to_board[faction] for faction in selected_factions]
         if len(set(selected_boards)) != len(selected_boards):
             raise ValueError("selected factions must use different double-sided boards")
-    starting_planets = tuple(
-        _choose_starting_planets(
-            rng,
-            map_data[0],
-            map_data[1],
-            map_data[2],
-            map_data[3],
-            faction_homes[faction],
-            faction_starting_structures[faction],
-        )
-        for faction in selected_factions
-    )
-
     selected_first_player = seed % num_players if first_player is None else int(first_player)
     if not 0 <= selected_first_player < num_players:
         raise ValueError("first_player is out of range")
+    for faction in selected_factions:
+        home = faction_homes[faction]
+        required = faction_starting_structures[faction]
+        available = sum(
+            active and terrain == home
+            for active, terrain in zip(map_data[0], map_data[3], strict=True)
+        )
+        if available < required:
+            raise RuntimeError(
+                f"map has only {available} home planets for terrain {home}; "
+                f"{required} are required"
+            )
+    placement_order = _starting_placement_order(
+        selected_first_player,
+        selected_factions,
+        faction_starting_structures,
+        num_players,
+    )
     random_boosters = tuple(
         int(value)
         for value in rng.choice(BOOSTER_COUNT, size=num_players + 3, replace=False)
@@ -313,7 +319,8 @@ def generate_setup(
         seed=seed,
         first_player=selected_first_player,
         faction_indices=selected_factions,
-        starting_planets=starting_planets,
+        starting_planets=tuple(() for _ in range(num_players)),
+        placement_order=placement_order,
         active_planets=map_data[0],
         planet_q=map_data[1],
         planet_r=map_data[2],
@@ -612,54 +619,26 @@ def _apply_planet_layout(
     return result
 
 
-def _choose_starting_planets(
-    rng: np.random.Generator,
-    active: tuple[bool, ...],
-    planet_q: tuple[int, ...],
-    planet_r: tuple[int, ...],
-    terrains: tuple[int, ...],
-    home: int,
-    count: int,
+def _starting_placement_order(
+    first_player: int,
+    faction_indices: tuple[int, ...],
+    faction_starting_structures: tuple[int, ...],
+    num_players: int,
 ) -> tuple[int, ...]:
-    candidates = [
-        index
-        for index, is_active in enumerate(active)
-        if is_active and terrains[index] == home
-    ]
-    if len(candidates) < count:
-        raise RuntimeError(f"random map has only {len(candidates)} home planets for terrain {home}")
-    rng.shuffle(candidates)
-    chosen = [candidates.pop()]
-    while len(chosen) < count:
-        best_distance = max(
-            min(
-                hex_distance(
-                    planet_q[candidate],
-                    planet_r[candidate],
-                    planet_q[selected],
-                    planet_r[selected],
-                )
-                for selected in chosen
-            )
-            for candidate in candidates
+    """Return the player sequence for the snake-shaped starting placement."""
+    forward = tuple((first_player + offset) % num_players for offset in range(num_players))
+    max_structures = max(
+        faction_starting_structures[faction] for faction in faction_indices
+    )
+    order: list[int] = []
+    for layer in range(max_structures):
+        sequence = forward if layer % 2 == 0 else tuple(reversed(forward))
+        order.extend(
+            player
+            for player in sequence
+            if faction_starting_structures[faction_indices[player]] > layer
         )
-        choices = [
-            candidate
-            for candidate in candidates
-            if min(
-                hex_distance(
-                    planet_q[candidate],
-                    planet_r[candidate],
-                    planet_q[selected],
-                    planet_r[selected],
-                )
-                for selected in chosen
-            ) == best_distance
-        ]
-        selected = choices[int(rng.integers(0, len(choices)))]
-        candidates.remove(selected)
-        chosen.append(selected)
-    return tuple(chosen)
+    return tuple(order)
 
 
 def _rotate(q: int, r: int, steps: int) -> tuple[int, int]:

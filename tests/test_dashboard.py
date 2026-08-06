@@ -120,6 +120,8 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("function resetPlanetLayout", app_script)
             self.assertIn("function addPlanetAt", app_script)
             self.assertIn("function deleteSelectedPlanet", app_script)
+            self.assertIn("function snapshotRoundLabel", app_script)
+            self.assertIn("开局基地按蛇形顺位放置", app_script)
             self.assertIn("planetArtwork: true", app_script)
             self.assertEqual(random_setup_page, page)
             self.assertEqual(manual_setup_page, page)
@@ -344,6 +346,17 @@ class DashboardTests(unittest.TestCase):
             self.assertTrue(trace["trace_complete"])
             self.assertEqual(trace["captured_moves"], simulation["move"])
             self.assertEqual(len(trace["steps"]), simulation["move"] + 1)
+            self.assertEqual(trace["steps"][0]["state"]["phase"], "starting_placement")
+            self.assertEqual(trace["steps"][0]["state"]["round"], 0)
+            self.assertTrue(all(
+                planet["owner"] == -1
+                for planet in trace["steps"][0]["state"]["planets"]
+            ))
+            self.assertEqual(trace["steps"][1]["player"], 1)
+            self.assertTrue(
+                trace["steps"][1]["action_label"].startswith("place starting")
+            )
+            self.assertEqual(trace["steps"][1]["state"]["placement"]["step"], 1)
             self.assertTrue(trace["steps"][-1]["state"]["terminal"])
         finally:
             server.shutdown()

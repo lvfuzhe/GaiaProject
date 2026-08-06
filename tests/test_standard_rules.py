@@ -19,6 +19,15 @@ from gaiazero.game.gaia_setup import hex_distance
 from gaiazero.mcts import PUCTSearch, SearchConfig
 
 
+def finish_starting_placement(state: GaiaState) -> GaiaState:
+    while state.is_starting_placement:
+        legal = state.legal_actions()
+        if not legal:
+            raise AssertionError("starting placement has no legal home planet")
+        state = state.apply(legal[0])
+    return state
+
+
 class StandardGaiaRulesTests(unittest.TestCase):
     def test_setup_has_full_research_and_building_model(self) -> None:
         state = GaiaState.initial(4, seed=3)
@@ -28,10 +37,10 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(state.current_player, 3)
         self.assertEqual(sum(state.active_planets), 61)
         self.assertEqual(len(state.sector_tiles), 10)
-        self.assertEqual(
-            sum(owner >= 0 for owner in state.owners),
-            sum(len(planets) for planets in state.starting_planets),
-        )
+        self.assertEqual(sum(owner >= 0 for owner in state.owners), 0)
+        self.assertEqual(sum(len(planets) for planets in state.starting_planets), 0)
+        self.assertEqual(state.round_number, 0)
+        self.assertTrue(state.is_starting_placement)
         self.assertEqual(state.snapshot()["ruleset"], "standard-v4")
 
     def test_random_setup_is_seeded_and_respects_component_counts(self) -> None:
@@ -126,6 +135,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
             state = GaiaState.initial(4, seed)
             factions = [FACTIONS[player.faction] for player in state.players]
             self.assertEqual(len({faction.board for faction in factions}), 4)
+            state = finish_starting_placement(state)
             for player, faction in enumerate(factions):
                 for planet in state.starting_planets[player]:
                     self.assertEqual(state.terrains[planet], faction.home)
@@ -142,11 +152,59 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(state.first_player, 2)
         self.assertEqual(state.current_player, 2)
         self.assertEqual(tuple(player.faction for player in state.players), (0, 2, 4))
+        self.assertEqual(state.starting_planets, ((), (), ()))
+        state = finish_starting_placement(state)
         for player, faction_id in enumerate((0, 2, 4)):
             faction = FACTIONS[faction_id]
             for planet in state.starting_planets[player]:
                 self.assertEqual(state.terrains[planet], faction.home)
                 self.assertEqual(state.owners[planet], player)
+
+    def test_starting_bases_are_placed_in_snake_order_before_round_one(self) -> None:
+        state = GaiaState.initial(
+            3,
+            seed=17,
+            faction_indices=(0, 2, 4),
+            first_player=2,
+        )
+
+        self.assertEqual(state.placement_order, (2, 0, 1, 1, 0, 2, 1))
+        self.assertEqual(state.snapshot()["phase"], "starting_placement")
+        self.assertEqual(sum(owner >= 0 for owner in state.owners), 0)
+        for step, expected_player in enumerate(state.placement_order):
+            self.assertTrue(state.is_starting_placement)
+            self.assertEqual(state.current_player, expected_player)
+            self.assertEqual(state.placement_step, step)
+            legal = state.legal_actions()
+            self.assertTrue(legal)
+            self.assertTrue(all(
+                state.owners[action] == -1
+                and state.terrains[action] == FACTIONS[state.players[expected_player].faction].home
+                for action in legal
+            ))
+            self.assertTrue(state.describe_action(legal[0]).startswith("place starting"))
+            state = state.apply(legal[0])
+
+        self.assertFalse(state.is_starting_placement)
+        self.assertEqual(state.round_number, 1)
+        self.assertEqual(state.current_player, 2)
+        self.assertEqual(tuple(map(len, state.starting_planets)), (2, 3, 2))
+        self.assertEqual(sum(owner >= 0 for owner in state.owners), 7)
+        self.assertEqual(state.snapshot()["phase"], "round")
+
+    def test_ivits_places_one_starting_planetary_institute(self) -> None:
+        state = GaiaState.initial(
+            2,
+            seed=9,
+            faction_indices=(7, 0),
+            first_player=0,
+        )
+
+        self.assertEqual(state.placement_order, (0, 1, 1))
+        state = state.apply(state.legal_actions()[0])
+        planet = state.starting_planets[0][0]
+        self.assertEqual(state.buildings[planet], Building.PLANETARY_INSTITUTE)
+        self.assertTrue(state.describe_action(state.legal_actions()[0]).startswith("place starting"))
 
     def test_manual_setup_rejects_two_sides_of_the_same_faction_board(self) -> None:
         with self.assertRaisesRegex(ValueError, "different double-sided boards"):
@@ -406,7 +464,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual((spent.bowl_one, spent.bowl_two, spent.bowl_three), (2, 0, 1))
 
     def test_gaia_project_transforms_then_returns_gaiaformer(self) -> None:
-        state = GaiaState.initial(2)
+        state = finish_starting_placement(GaiaState.initial(2))
         targets = [
             planet
             for planet, active in enumerate(state.active_planets)
@@ -463,7 +521,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(built.players[0].gaiaformers, 1)
 
     def test_research_lab_requires_immediate_tech_choice(self) -> None:
-        state = GaiaState.initial(2)
+        state = finish_starting_placement(GaiaState.initial(2))
         mine = next(
             planet
             for planet, owner in enumerate(state.owners)
@@ -487,7 +545,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(resolved.players[0].tracks[Track.TERRAFORMING], 1)
 
     def test_upgrade_requiring_tech_is_hidden_when_no_choice_remains(self) -> None:
-        state = GaiaState.initial(2)
+        state = finish_starting_placement(GaiaState.initial(2))
         planet = next(index for index, active in enumerate(state.active_planets) if active)
         owners = list(state.owners)
         buildings = list(state.buildings)
@@ -506,7 +564,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertNotIn(state.upgrade_lab_action(planet), state.legal_actions())
 
     def test_canonical_federation_awards_token(self) -> None:
-        state = GaiaState.initial(2)
+        state = finish_starting_placement(GaiaState.initial(2))
         planets = [index for index, active in enumerate(state.active_planets) if active][:3]
         owners = list(state.owners)
         buildings = list(state.buildings)
@@ -532,7 +590,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertTrue(all(formed.federated[planet] for planet in planets))
 
     def test_passing_returns_old_booster_and_takes_new_one(self) -> None:
-        state = GaiaState.initial(2)
+        state = finish_starting_placement(GaiaState.initial(2))
         player = state.current_player
         old_booster = state._player_booster(player)
         new_booster = next(

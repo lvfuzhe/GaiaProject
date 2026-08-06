@@ -1653,6 +1653,16 @@ function renderHistorySelectors() {
   gameSelect.disabled = !games.length;
 }
 
+function snapshotRoundLabel(snapshot, compact = false) {
+  if (!snapshot) return compact ? "--" : "第 -- 轮";
+  if (snapshot.phase === "starting_placement" || snapshot.placement?.active) {
+    const step = Number(snapshot.placement?.step || 0);
+    const total = Number(snapshot.placement?.total || 0);
+    return compact ? `开局 ${step}/${total}` : `开局基地 ${step} / ${total}`;
+  }
+  return compact ? `第 ${snapshot.round} 轮` : `第 ${snapshot.round} / ${snapshot.max_rounds} 轮`;
+}
+
 function auditHistoryTrace(trace) {
   if (!trace) return [];
   const steps = trace.steps || [];
@@ -1669,11 +1679,33 @@ function auditHistoryTrace(trace) {
     detail: Number.isFinite(expected) ? `${trace.captured_moves} / ${expected} 步` : "对局尚未结束或旧日志未记录步数"
   });
   const rounds = states.map((snapshot) => Number(snapshot.round)).filter(Number.isFinite);
-  const roundsValid = rounds.every((round, index) => round >= 1 && round <= 6 && (index === 0 || round >= rounds[index - 1]));
+  const roundsValid = rounds.every((round, index) => round >= 0 && round <= 6 && (index === 0 || round >= rounds[index - 1]));
   checks.push({
     status: roundsValid && rounds.length ? "pass" : "fail",
     title: roundsValid && rounds.length ? "轮次顺序连续" : "轮次顺序异常",
-    detail: rounds.length ? `观测到 ${new Set(rounds).size} 个轮次` : "没有可验证的状态"
+    detail: rounds.length ? `含开局阶段，观测到 ${new Set(rounds).size} 个阶段/轮次` : "没有可验证的状态"
+  });
+  const placementStates = states.filter((snapshot) => (
+    snapshot.phase === "starting_placement" || Number(snapshot.round) === 0
+  ));
+  const placementValid = placementStates.length > 0 && placementStates.every((snapshot) => {
+    const placement = snapshot.placement || {};
+    const step = Number(placement.step);
+    const total = Number(placement.total);
+    const order = placement.order || [];
+    const structures = (snapshot.planets || []).filter((planet) => Number(planet.owner) >= 0).length;
+    return Number(snapshot.round) === 0
+      && Number.isInteger(step) && step >= 0 && step < total
+      && order.length === total
+      && Number(snapshot.current_player) === Number(order[step])
+      && structures === step;
+  });
+  checks.push({
+    status: placementValid ? "pass" : placementStates.length ? "fail" : "warn",
+    title: placementValid ? "开局基地按蛇形顺位放置" : "开局基地流程待验证",
+    detail: placementStates.length
+      ? `记录了 ${placementStates.length} 个开局状态，顺序与建筑数量一致`
+      : "旧日志没有开局放置阶段"
   });
   const resourcesValid = states.every((snapshot) => (snapshot.players || []).every((player) => (
     Number(player.credits) >= 0 && Number(player.credits) <= 30
@@ -1732,7 +1764,14 @@ function historyDelta(previous, current, step) {
       changes.push(`科研 ${after.tracks.join("·")}`);
     }
   }
-  if (Number(previous.round) !== Number(current.round)) changes.push(`进入第 ${current.round} 轮`);
+  if (current.phase === "starting_placement" || current.placement?.active) {
+    changes.push(`开局基地 ${current.placement?.step || 0}/${current.placement?.total || 0}`);
+  } else if (previous.phase === "starting_placement" && Number(current.round) === 1) {
+    changes.push("开局基地摆放完成");
+    changes.push("进入第 1 轮");
+  } else if (Number(previous.round) !== Number(current.round)) {
+    changes.push(`进入第 ${current.round} 轮`);
+  }
   return changes.length ? changes.join(" · ") : "状态已转移，资源数值无变化";
 }
 
@@ -1755,7 +1794,7 @@ function renderHistory() {
   const snapshot = step.state;
   drawBoard(byId("history-board-canvas"), snapshot);
   byId("history-board-empty").hidden = Boolean(snapshot);
-  byId("history-board-round").textContent = snapshot ? `第 ${snapshot.round} / ${snapshot.max_rounds} 轮` : "第 -- 轮";
+  byId("history-board-round").textContent = snapshotRoundLabel(snapshot);
   const summary = trace.summary || {};
   byId("history-final-scores").textContent = (summary.scores || snapshot?.scores || []).map((value) => formatNumber(value, 1)).join(" / ") || "--";
   byId("history-trace-coverage").textContent = summary.moves === undefined ? `${trace.captured_moves} 步` : `${trace.captured_moves} / ${summary.moves} 步`;
@@ -1784,7 +1823,7 @@ function renderHistory() {
     const scores = (itemState.scores || []).map((value) => formatNumber(value, 1)).join(" / ");
     return `<tr data-step="${index}" class="${index === state.history.step ? "current-step" : ""}">
       <td>${formatNumber(item.move)}</td>
-      <td>${formatNumber(itemState.round)}</td>
+      <td>${escapeHtml(snapshotRoundLabel(itemState, true))}</td>
       <td>${item.player === null || item.player === undefined ? "--" : `P${item.player}`}</td>
       <td>${escapeHtml(item.action_label || "状态快照")}</td>
       <td class="mono">${item.action === null || item.action === undefined ? "--" : item.action}</td>
@@ -1808,7 +1847,7 @@ function renderSelfPlay() {
 
 function renderBoard(snapshot) {
   byId("board-empty").hidden = Boolean(snapshot);
-  byId("board-round").textContent = snapshot ? `第 ${snapshot.round} / ${snapshot.max_rounds} 轮` : "第 -- 轮";
+  byId("board-round").textContent = snapshotRoundLabel(snapshot);
   drawBoard(byId("board-canvas"), snapshot);
 }
 

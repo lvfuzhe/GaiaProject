@@ -295,6 +295,8 @@ class GaiaState:
     next_first_player: int
     players: tuple[PlayerState, ...]
     starting_planets: tuple[tuple[int, ...], ...]
+    placement_order: tuple[int, ...]
+    placement_step: int
     active_planets: tuple[bool, ...]
     planet_q: tuple[int, ...]
     planet_r: tuple[int, ...]
@@ -382,27 +384,22 @@ class GaiaState:
                 bowl_three=faction.power[2],
                 tracks=tuple(tracks),
                 gaiaformers=gaiaformers,
-                colonized_types=1 << int(faction.home),
+                colonized_types=0,
             )
             players.append(info)
-            for planet in setup.starting_planets[player]:
-                owners[planet] = player
-                buildings[planet] = (
-                    Building.PLANETARY_INSTITUTE
-                    if faction.starts_with_pi
-                    else Building.MINE
-                )
 
         first = setup.first_player
         state = cls(
             player_count=num_players,
             setup_seed=seed,
-            round_number=1,
-            player_to_move=first,
+            round_number=0,
+            player_to_move=setup.placement_order[0],
             first_player=first,
             next_first_player=-1,
             players=tuple(players),
             starting_planets=setup.starting_planets,
+            placement_order=setup.placement_order,
+            placement_step=0,
             active_planets=setup.active_planets,
             planet_q=setup.planet_q,
             planet_r=setup.planet_r,
@@ -427,7 +424,7 @@ class GaiaState:
             advanced_tech_tiles=setup.advanced_tech_tiles,
             terraforming_federation_tile=setup.terraforming_federation_tile,
         )
-        return state._grant_income()
+        return state
 
     @property
     def num_players(self) -> int:
@@ -448,6 +445,10 @@ class GaiaState:
     @property
     def is_terminal(self) -> bool:
         return self.round_number > MAX_ROUNDS
+
+    @property
+    def is_starting_placement(self) -> bool:
+        return self.round_number == 0 and self.placement_step < len(self.placement_order)
 
     @property
     def pass_action(self) -> int:
@@ -498,6 +499,15 @@ class GaiaState:
             return ()
         player = self.player_to_move
         info = self.players[player]
+        if self.is_starting_placement:
+            home = FACTIONS[info.faction].home
+            return tuple(
+                self.build_action(planet)
+                for planet in range(N)
+                if self.active_planets[planet]
+                and self.owners[planet] == -1
+                and Terrain(self.terrains[planet]) == home
+            )
         if self.pending_tech_player >= 0:
             return tuple(
                 self.tech_action(track)
@@ -588,6 +598,8 @@ class GaiaState:
             raise ValueError(f"illegal action {action}: {self.describe_action(action)}")
         if TECH_OFFSET <= action < TECH_OFFSET + TECH_COUNT:
             return self._apply_tech(action - TECH_OFFSET)._advance_turn()
+        if self.is_starting_placement and BUILD_OFFSET <= action < GAIA_OFFSET:
+            return self._apply_starting_placement(action - BUILD_OFFSET)
         if action == PASS_FINAL_ACTION or PASS_BOOSTER_OFFSET <= action < PASS_BOOSTER_OFFSET + BOOSTER_COUNT:
             booster = -1 if action == PASS_FINAL_ACTION else action - PASS_BOOSTER_OFFSET
             return self._apply_pass(booster)
@@ -612,6 +624,46 @@ class GaiaState:
         else:
             raise ValueError(f"unknown action {action}")
         return state._advance_turn()
+
+    def _apply_starting_placement(self, planet: int) -> GaiaState:
+        player = self.player_to_move
+        info = self.players[player]
+        home = FACTIONS[info.faction].home
+        if not self.active_planets[planet] or self.owners[planet] != -1:
+            raise ValueError("starting planet is unavailable")
+        if Terrain(self.terrains[planet]) != home:
+            raise ValueError("starting planet must match the faction home terrain")
+
+        owners = list(self.owners)
+        buildings = list(self.buildings)
+        owners[planet] = player
+        buildings[planet] = (
+            Building.PLANETARY_INSTITUTE
+            if FACTIONS[info.faction].starts_with_pi
+            else Building.MINE
+        )
+        starting_planets = list(self.starting_planets)
+        starting_planets[player] = (*starting_planets[player], planet)
+        players = self._replace_player(
+            player,
+            replace(info, colonized_types=info.colonized_types | (1 << int(home))),
+        )
+        next_step = self.placement_step + 1
+        state = replace(
+            self,
+            players=players,
+            owners=tuple(owners),
+            buildings=tuple(int(value) for value in buildings),
+            starting_planets=tuple(starting_planets),
+            placement_step=next_step,
+        )
+        if next_step < len(self.placement_order):
+            return replace(state, player_to_move=self.placement_order[next_step])
+        return replace(
+            state,
+            round_number=1,
+            player_to_move=self.first_player,
+        )._grant_income()
 
     def _apply_build(self, planet: int) -> GaiaState:
         player = self.player_to_move
@@ -1218,6 +1270,13 @@ class GaiaState:
 
     def describe_action(self, action: int) -> str:
         if BUILD_OFFSET <= action < GAIA_OFFSET:
+            if self.is_starting_placement:
+                structure = (
+                    "planetary institute"
+                    if FACTIONS[self.players[self.player_to_move].faction].starts_with_pi
+                    else "mine"
+                )
+                return f"place starting {structure} at planet {action - BUILD_OFFSET}"
             return f"build mine at planet {action - BUILD_OFFSET}"
         if GAIA_OFFSET <= action < UPGRADE_TRADING_OFFSET:
             return f"start Gaia Project at planet {action - GAIA_OFFSET}"
@@ -1245,8 +1304,14 @@ class GaiaState:
         return f"unknown action {action}"
 
     def render(self) -> str:
-        lines = [f"Round {min(self.round_number, MAX_ROUNDS)}/{MAX_ROUNDS}"]
-        if not self.is_terminal:
+        if self.is_starting_placement:
+            lines = [
+                f"Starting placement {self.placement_step}/{len(self.placement_order)}"
+            ]
+            lines[0] += f" | player {self.player_to_move} to place"
+        else:
+            lines = [f"Round {min(self.round_number, MAX_ROUNDS)}/{MAX_ROUNDS}"]
+        if not self.is_terminal and not self.is_starting_placement:
             scoring = ROUND_SCORING_TILES[
                 self.round_scoring_tiles[self.round_number - 1]
             ]
@@ -1266,14 +1331,26 @@ class GaiaState:
 
     def snapshot(self) -> dict[str, object]:
         current_scoring = None
-        if not self.is_terminal:
+        if not self.is_terminal and not self.is_starting_placement:
             current_scoring = ROUND_SCORING_TILES[
                 self.round_scoring_tiles[self.round_number - 1]
             ].key
         return {
             "ruleset": "standard-v4",
-            "round": min(self.round_number, MAX_ROUNDS),
+            "round": max(0, min(self.round_number, MAX_ROUNDS)),
             "max_rounds": MAX_ROUNDS,
+            "phase": (
+                "starting_placement"
+                if self.is_starting_placement
+                else "terminal" if self.is_terminal else "round"
+            ),
+            "placement": {
+                "active": self.is_starting_placement,
+                "step": self.placement_step,
+                "total": len(self.placement_order),
+                "order": list(self.placement_order),
+                "remaining": max(0, len(self.placement_order) - self.placement_step),
+            },
             "round_scoring": current_scoring,
             "current_player": None if self.is_terminal else self.player_to_move,
             "first_player": self.first_player,
