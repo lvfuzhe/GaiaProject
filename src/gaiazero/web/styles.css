@@ -664,6 +664,94 @@ main {
   outline: 2px solid #dbe8f4;
 }
 
+.planet-position-toolbar {
+  min-height: 48px;
+  padding: 7px 9px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #dce8f4;
+  border: 1px solid #263a4e;
+  border-bottom: 0;
+  background: #0a1421;
+}
+
+.planet-position-selection {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: baseline;
+  gap: 2px 9px;
+}
+
+.planet-position-selection span,
+.planet-position-selection small {
+  color: #8fa6ba;
+  font-size: 8px;
+}
+
+.planet-position-selection strong {
+  font-size: 10px;
+}
+
+.planet-position-selection small {
+  grid-column: 1 / -1;
+}
+
+.planet-position-selection small.error {
+  color: #f2a69b;
+}
+
+.planet-editor-command {
+  min-height: 30px;
+  padding: 5px 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #dce8f4;
+  border: 1px solid #40576d;
+  border-radius: 3px;
+  background: #142235;
+  font-size: 9px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.planet-editor-command:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.planet-position-frame {
+  height: 540px;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid #263a4e;
+  background: #050b14;
+}
+
+#setup-planet-editor-canvas {
+  cursor: crosshair;
+  touch-action: manipulation;
+}
+
+#setup-planet-editor-canvas:focus-visible {
+  outline: 2px solid #6aa4d8;
+  outline-offset: -2px;
+}
+
+.planet-position-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #8fa6ba;
+  background: #050b14;
+  font-size: 10px;
+  pointer-events: none;
+}
+
 .setup-tile-controls {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2859,6 +2947,19 @@ footer {
   .setup-sector-control img {
     width: 44px;
     height: 44px;
+  }
+
+  .planet-position-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .planet-editor-command {
+    justify-content: center;
+  }
+
+  .planet-position-frame {
+    height: 410px;
   }
 
   .setup-tile-controls,

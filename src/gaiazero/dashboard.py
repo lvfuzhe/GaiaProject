@@ -311,7 +311,12 @@ def _normalize_random_setup(value: object) -> dict[str, Any] | None:
         "standard_tech_tiles",
         "advanced_tech_tiles",
     )
-    allowed_fields = {*array_fields, "terraforming_federation_tile", "map_mode"}
+    allowed_fields = {
+        *array_fields,
+        "planet_positions",
+        "terraforming_federation_tile",
+        "map_mode",
+    }
     unknown = set(value) - allowed_fields
     if unknown:
         raise ValueError(f"unknown random_setup field: {sorted(unknown)[0]}")
@@ -323,6 +328,22 @@ def _normalize_random_setup(value: object) -> dict[str, Any] | None:
         if not isinstance(items, list):
             raise TypeError(f"random_setup.{field} must be an array")
         normalized[field] = [int(item) for item in items]
+    if "planet_positions" in value:
+        positions = value["planet_positions"]
+        if not isinstance(positions, list):
+            raise TypeError("random_setup.planet_positions must be an array")
+        normalized_positions: list[dict[str, int]] = []
+        for position in positions:
+            if not isinstance(position, dict):
+                raise TypeError("each planet position must be an object")
+            if set(position) != {"id", "q", "r"}:
+                raise ValueError("each planet position must contain only id, q and r")
+            normalized_positions.append({
+                "id": int(position["id"]),
+                "q": int(position["q"]),
+                "r": int(position["r"]),
+            })
+        normalized["planet_positions"] = normalized_positions
     if "terraforming_federation_tile" in value:
         normalized["terraforming_federation_tile"] = int(
             value["terraforming_federation_tile"]
@@ -359,6 +380,11 @@ def _manual_initial_state(config: dict[str, Any]) -> GaiaState:
         ]
     if "map_mode" in random_setup:
         overrides["map_mode"] = random_setup["map_mode"]
+    if "planet_positions" in random_setup:
+        overrides["planet_positions"] = tuple(
+            (position["id"], position["q"], position["r"])
+            for position in random_setup["planet_positions"]
+        )
     return GaiaState.initial(
         config["players"],
         config["seed"],
@@ -374,7 +400,7 @@ def _resolved_random_setup(state: GaiaState) -> dict[str, Any]:
         for booster, owner in enumerate(state.booster_owner)
         if owner != -2
     ]
-    return {
+    resolved = {
         "map_mode": state.map_mode,
         "sector_tiles": list(state.sector_tiles),
         "sector_rotations": list(state.sector_rotations),
@@ -385,6 +411,13 @@ def _resolved_random_setup(state: GaiaState) -> dict[str, Any]:
         "advanced_tech_tiles": list(state.advanced_tech_tiles),
         "terraforming_federation_tile": state.terraforming_federation_tile,
     }
+    if state.map_mode == "manual":
+        resolved["planet_positions"] = [
+            {"id": planet, "q": state.planet_q[planet], "r": state.planet_r[planet]}
+            for planet, active in enumerate(state.active_planets)
+            if active
+        ]
+    return resolved
 
 
 def _public_setup_snapshot(state: GaiaState) -> dict[str, object]:

@@ -68,6 +68,8 @@ class GaiaSetup:
     active_planets: tuple[bool, ...]
     planet_q: tuple[int, ...]
     planet_r: tuple[int, ...]
+    planet_source_q: tuple[int, ...]
+    planet_source_r: tuple[int, ...]
     terrains: tuple[int, ...]
     planet_sectors: tuple[int, ...]
     sector_tiles: tuple[int, ...]
@@ -93,6 +95,7 @@ def generate_setup(
     first_player: int | None = None,
     sector_tiles: tuple[int, ...] | None = None,
     sector_rotations: tuple[int, ...] | None = None,
+    planet_positions: tuple[tuple[int, int, int], ...] | None = None,
     booster_tiles: tuple[int, ...] | None = None,
     round_scoring_tiles: tuple[int, ...] | None = None,
     final_scoring_tiles: tuple[int, ...] | None = None,
@@ -139,6 +142,21 @@ def generate_setup(
             raise ValueError(
                 "sector arrangement is illegal: equal home planet types may not be adjacent"
             )
+
+    planet_source_q = map_data[1]
+    planet_source_r = map_data[2]
+    if planet_positions is not None:
+        if map_mode != "manual":
+            raise ValueError("planet positions require manual map_mode")
+        planet_q, planet_r = _apply_planet_positions(
+            map_data[0],
+            map_data[1],
+            map_data[2],
+            map_data[3],
+            centers,
+            planet_positions,
+        )
+        map_data = (map_data[0], planet_q, planet_r, *map_data[3:])
 
     if faction_indices is None:
         board_choices = rng.choice(len(faction_boards), size=num_players, replace=False)
@@ -268,6 +286,8 @@ def generate_setup(
         active_planets=map_data[0],
         planet_q=map_data[1],
         planet_r=map_data[2],
+        planet_source_q=planet_source_q,
+        planet_source_r=planet_source_r,
         terrains=map_data[3],
         planet_sectors=map_data[4],
         sector_tiles=map_data[5],
@@ -420,6 +440,55 @@ def _map_is_valid(
         for offset, left in enumerate(active_indices)
         for right in active_indices[offset + 1 :]
     )
+
+
+def _apply_planet_positions(
+    active: tuple[bool, ...],
+    planet_q: tuple[int, ...],
+    planet_r: tuple[int, ...],
+    terrains: tuple[int, ...],
+    centers: tuple[tuple[int, int], ...],
+    positions: tuple[tuple[int, int, int], ...],
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    active_ids = {index for index, is_active in enumerate(active) if is_active}
+    try:
+        normalized = tuple(
+            (int(position[0]), int(position[1]), int(position[2]))
+            for position in positions
+        )
+    except (IndexError, TypeError, ValueError) as error:
+        raise ValueError("each planet position must contain id, q and r") from error
+    ids = [planet for planet, _q, _r in normalized]
+    if len(ids) != len(active_ids) or set(ids) != active_ids:
+        raise ValueError("planet positions must contain every active planet exactly once")
+    if len(set(ids)) != len(ids):
+        raise ValueError("planet positions must not contain duplicate ids")
+
+    board_spaces = {
+        (center_q + local_q, center_r + local_r)
+        for center_q, center_r in centers
+        for local_q in range(-2, 3)
+        for local_r in range(-2, 3)
+        if max(abs(local_q), abs(local_r), abs(local_q + local_r)) <= 2
+    }
+    destinations = [(q, r) for _planet, q, r in normalized]
+    if any(destination not in board_spaces for destination in destinations):
+        raise ValueError("planet position is outside the assembled map")
+    if len(set(destinations)) != len(destinations):
+        raise ValueError("planet positions must not overlap")
+
+    updated_q = list(planet_q)
+    updated_r = list(planet_r)
+    for planet, q, r in normalized:
+        updated_q[planet] = q
+        updated_r[planet] = r
+    result_q = tuple(updated_q)
+    result_r = tuple(updated_r)
+    if not _map_is_valid(active, result_q, result_r, terrains):
+        raise ValueError(
+            "planet arrangement is illegal: equal home planet types may not be adjacent"
+        )
+    return result_q, result_r
 
 
 def _choose_starting_planets(

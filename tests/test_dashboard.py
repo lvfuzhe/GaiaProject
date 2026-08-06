@@ -107,11 +107,15 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("setup-editor-run", page)
             self.assertIn("setup-random-editor", page)
             self.assertIn("setup-editor-sectors", page)
+            self.assertIn("setup-planet-editor-canvas", page)
+            self.assertIn("setup-planet-editor-reset", page)
             self.assertIn("setup-editor-standard-tech", page)
             self.assertIn("setup-editor-boosters", page)
             self.assertIn("setup-editor-map-mode", page)
             self.assertIn("function drawStarfield", app_script)
             self.assertIn("function drawPlanetArtwork", app_script)
+            self.assertIn("function handlePlanetEditorClick", app_script)
+            self.assertIn("function resetPlanetPositions", app_script)
             self.assertIn("planetArtwork: true", app_script)
             self.assertEqual(random_setup_page, page)
             self.assertEqual(manual_setup_page, page)
@@ -191,6 +195,14 @@ class DashboardTests(unittest.TestCase):
                 "random_setup": {
                     **random_setup,
                     "map_mode": "manual",
+                    "planet_positions": [
+                        {
+                            "id": planet["id"],
+                            "q": -planet["r"],
+                            "r": planet["q"] + planet["r"],
+                        }
+                        for planet in preview["state"]["planets"]
+                    ],
                     "standard_tech_tiles": list(reversed(random_setup["standard_tech_tiles"])),
                     "advanced_tech_tiles": list(reversed(random_setup["advanced_tech_tiles"])),
                     "terraforming_federation_tile": (
@@ -217,6 +229,23 @@ class DashboardTests(unittest.TestCase):
                 customized["random_setup"]["terraforming_federation_tile"],
             )
             self.assertEqual(custom_setup["map"]["method"], "manual")
+            expected_positions = {
+                position["id"]: (position["q"], position["r"])
+                for position in customized["random_setup"]["planet_positions"]
+            }
+            self.assertEqual(
+                {
+                    planet["id"]: (planet["q"], planet["r"])
+                    for planet in custom_preview["state"]["planets"]
+                },
+                expected_positions,
+            )
+            self.assertTrue(all(
+                (planet["source_q"], planet["source_r"])
+                != (planet["q"], planet["r"])
+                for planet in custom_preview["state"]["planets"]
+                if (planet["q"], planet["r"]) != (0, 0)
+            ))
 
             missing_manual_map = {
                 **payload,

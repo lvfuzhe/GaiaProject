@@ -251,6 +251,60 @@ class StandardGaiaRulesTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "requires sector tiles"):
             GaiaState.initial(2, map_mode="manual")
 
+    def test_manual_map_can_position_every_planet_on_the_full_board(self) -> None:
+        donor = GaiaState.initial(2, seed=31)
+        positions = tuple(
+            (planet, -donor.planet_r[planet], donor.planet_q[planet] + donor.planet_r[planet])
+            for planet, active in enumerate(donor.active_planets)
+            if active
+        )
+
+        state = GaiaState.initial(
+            2,
+            seed=31,
+            sector_tiles=donor.sector_tiles,
+            sector_rotations=donor.sector_rotations,
+            planet_positions=positions,
+            map_mode="manual",
+        )
+
+        expected = {planet: (q, r) for planet, q, r in positions}
+        self.assertTrue(all(
+            (state.planet_q[planet], state.planet_r[planet]) == expected[planet]
+            for planet in expected
+        ))
+        self.assertEqual(state.planet_source_q, donor.planet_q)
+        self.assertEqual(state.planet_source_r, donor.planet_r)
+
+    def test_manual_planet_positions_reject_overlap_and_outside_cells(self) -> None:
+        donor = GaiaState.initial(2, seed=31)
+        positions = [
+            (planet, donor.planet_q[planet], donor.planet_r[planet])
+            for planet, active in enumerate(donor.active_planets)
+            if active
+        ]
+        positions[1] = (positions[1][0], positions[0][1], positions[0][2])
+        with self.assertRaisesRegex(ValueError, "must not overlap"):
+            GaiaState.initial(
+                2,
+                seed=31,
+                sector_tiles=donor.sector_tiles,
+                sector_rotations=donor.sector_rotations,
+                planet_positions=tuple(positions),
+                map_mode="manual",
+            )
+
+        positions[1] = (positions[1][0], 100, 100)
+        with self.assertRaisesRegex(ValueError, "outside the assembled map"):
+            GaiaState.initial(
+                2,
+                seed=31,
+                sector_tiles=donor.sector_tiles,
+                sector_rotations=donor.sector_rotations,
+                planet_positions=tuple(positions),
+                map_mode="manual",
+            )
+
     def test_sector_artwork_footprints_do_not_overlap(self) -> None:
         local_spaces = {
             (q, r)

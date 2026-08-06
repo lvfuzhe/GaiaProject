@@ -178,6 +178,24 @@
               <div id="setup-manual-sector-editor" hidden>
                 <div class="setup-config-heading"><strong>星区位置与方向</strong><span>板块不可重复，旋转以 60° 为一步</span></div>
                 <div id="setup-editor-sectors" class="setup-sector-controls"></div>
+                <div class="setup-config-heading secondary">
+                  <strong>单颗星球位置</strong>
+                  <span id="setup-planet-editor-count">等待地图预览</span>
+                </div>
+                <div class="planet-position-toolbar">
+                  <div class="planet-position-selection">
+                    <span>当前星球</span>
+                    <strong id="setup-planet-editor-selected">未选择</strong>
+                    <small id="setup-planet-editor-coordinate">--</small>
+                  </div>
+                  <button id="setup-planet-editor-reset" class="planet-editor-command" type="button" title="恢复当前星区板块的星球位置" disabled>
+                    <span aria-hidden="true">↶</span><span>恢复板块位置</span>
+                  </button>
+                </div>
+                <div class="planet-position-frame">
+                  <canvas id="setup-planet-editor-canvas" tabindex="0" aria-label="单颗星球位置编辑器；选择星球后点击空六角格移动"></canvas>
+                  <div id="setup-planet-editor-empty" class="planet-position-empty">应用一次预览以载入星球</div>
+                </div>
               </div>
             </section>
             <section id="setup-config-scoring" class="setup-config-panel" data-setup-config-panel="scoring" role="tabpanel" hidden>
