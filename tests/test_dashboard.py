@@ -116,6 +116,11 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("setup-editor-map-mode", page)
             self.assertIn("function drawStarfield", app_script)
             self.assertIn("function drawPlanetArtwork", app_script)
+            self.assertIn("function drawStarMapBoard", app_script)
+            self.assertIn(
+                'drawStarMapBoard(byId("history-board-canvas"), snapshot, true)',
+                app_script,
+            )
             self.assertIn("function handlePlanetEditorClick", app_script)
             self.assertIn("function resetPlanetLayout", app_script)
             self.assertIn("function addPlanetAt", app_script)
@@ -127,6 +132,7 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(manual_setup_page, page)
             self.assertIn("player-board-grid", page)
             self.assertIn("history-player-board-grid", page)
+            self.assertIn("history-star-map-frame", page)
             self.assertEqual(sector_content_type, "image/gif")
             self.assertTrue(sector_image.startswith(b"GIF"))
             self.assertTrue(outlined_sector_image.startswith(b"GIF"))

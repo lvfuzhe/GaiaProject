@@ -440,6 +440,7 @@ function queueSectorArtworkRender() {
     sectorArtworkRenderQueued = false;
     renderSetup(state.manualSetup.preview || latestState());
     renderPlanetPositionEditor();
+    renderHistory();
   });
 }
 
@@ -618,12 +619,7 @@ function renderSetup(snapshot) {
     ? "手动星区 · 原图裁切 · 合法性校验"
     : "BGA 随机 · 原图裁切 · 同色母星不相邻";
   byId("setup-sector-count").textContent = `${map.sector_count} 块`;
-  drawBoard(byId("setup-map-canvas"), snapshot, {
-    showSectors: true,
-    planetArtwork: true,
-    starfield: true,
-    showPlayerPieces: false,
-  });
+  drawStarMapBoard(byId("setup-map-canvas"), snapshot, false);
   byId("setup-sector-table").innerHTML = map.sectors.map((sector) => `<tr>
     <td>${sector.position + 1}</td>
     <td class="mono">S${String(sector.tile).padStart(2, "0")}</td>
@@ -1792,7 +1788,7 @@ function renderHistory() {
   state.history.step = Math.max(0, Math.min(state.history.step, steps.length - 1));
   const step = steps[state.history.step];
   const snapshot = step.state;
-  drawBoard(byId("history-board-canvas"), snapshot);
+  drawStarMapBoard(byId("history-board-canvas"), snapshot, true);
   byId("history-board-empty").hidden = Boolean(snapshot);
   byId("history-board-round").textContent = snapshotRoundLabel(snapshot);
   const summary = trace.summary || {};
@@ -2022,6 +2018,15 @@ function drawPlanetArtwork(context, x, y, size, cellScale, planet, snapshot) {
   context.stroke();
   context.restore();
   return true;
+}
+
+function drawStarMapBoard(canvas, snapshot, showPlayerPieces) {
+  drawBoard(canvas, snapshot, {
+    showSectors: true,
+    planetArtwork: true,
+    starfield: true,
+    showPlayerPieces,
+  });
 }
 
 function drawBoard(canvas, snapshot, options = {}) {

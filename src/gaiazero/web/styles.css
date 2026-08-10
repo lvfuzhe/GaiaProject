@@ -2028,6 +2028,13 @@ h3 {
   border: 1px solid #e5e9e5;
 }
 
+.history-star-map-frame {
+  height: 520px;
+  overflow: hidden;
+  background: #050b14;
+  border-color: #24364a;
+}
+
 canvas {
   width: 100%;
   height: 100%;
@@ -3204,6 +3211,10 @@ footer {
 
   .board-frame {
     height: 280px;
+  }
+
+  .history-star-map-frame {
+    height: 360px;
   }
 
   .config-list div,
