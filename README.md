@@ -51,8 +51,29 @@ gaiazero train `
 gaiazero evaluate runs/gaia-standard.pt --ruleset standard --players 2 --games 20 --simulations 128
 ```
 
+按人数分别训练三个独立模型（顺序执行 2、3、4 人训练）：
+
+```powershell
+gaiazero train-all `
+  --iterations 5 `
+  --games-per-iteration 8 `
+  --simulations 64 `
+  --output-dir runs/models `
+  --metrics-dir runs/metrics-by-players
+```
+
+输出文件为 `runs/models/gaia-standard-2p.pt`、`gaia-standard-3p.pt`、
+`gaia-standard-4p.pt`，对应指标分别写入 `runs/metrics-by-players/metrics-standard-2p.jsonl`、
+`metrics-standard-3p.jsonl` 和 `metrics-standard-4p.jsonl`。评测时必须使用匹配人数的检查点：
+
+```powershell
+gaiazero evaluate runs/models/gaia-standard-4p.pt --players 4 --games 20 --simulations 128
+```
+
 `standard` 是 `demo`、`train` 和 `evaluate` 的默认规则集。需要运行旧版快速模型时使用
 `--ruleset mini`；两个规则集的观察维度和动作维度不同，检查点不能混用。
+标准规则的 2、3、4 人局也使用独立检查点：地图尺寸、观察维度和价值头输出人数不同，
+不能将一个人数的检查点直接用于另一个人数。
 
 ## 训练监控台
 

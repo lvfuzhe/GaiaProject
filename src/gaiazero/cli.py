@@ -242,6 +242,8 @@ def command_train(args: argparse.Namespace) -> None:
                     "iteration": iteration,
                     "self_play_games": total_games,
                     "replay_positions": len(replay),
+                    "player_count": args.players,
+                    "model_id": f"{args.ruleset}-{args.players}p",
                     "ruleset": template.snapshot()["ruleset"],
                 },
             )
@@ -277,6 +279,31 @@ def command_train(args: argparse.Namespace) -> None:
         raise
     print(f"checkpoint={Path(args.output).resolve()}")
     print(f"metrics={Path(args.metrics).resolve()}")
+
+
+def command_train_all(args: argparse.Namespace) -> None:
+    """Train one independent checkpoint for each requested player count."""
+    output_dir = Path(args.output_dir)
+    metrics_dir = Path(args.metrics_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+    player_counts = tuple(sorted(set(args.player_counts)))
+    if player_counts != (2, 3, 4):
+        raise ValueError("train-all requires player counts 2, 3 and 4")
+
+    for index, players in enumerate(player_counts):
+        child = argparse.Namespace(**vars(args))
+        child.command = "train"
+        child.handler = command_train
+        child.players = players
+        child.seed = args.seed + index * 1_000_003
+        child.output = str(output_dir / f"gaia-{args.ruleset}-{players}p.pt")
+        child.metrics = str(metrics_dir / f"metrics-{args.ruleset}-{players}p.jsonl")
+        print(
+            f"[train-all] players={players} output={child.output} "
+            f"metrics={child.metrics} seed={child.seed}"
+        )
+        command_train(child)
 
 
 def command_dashboard(args: argparse.Namespace) -> None:
@@ -320,6 +347,37 @@ def _add_ruleset_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--ruleset", choices=("standard", "mini"), default="standard")
 
 
+def _add_training_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    include_players: bool,
+    include_output_paths: bool,
+) -> None:
+    if include_players:
+        parser.add_argument("--players", type=int, choices=(2, 3, 4), default=2)
+    parser.add_argument("--iterations", type=int, default=5)
+    parser.add_argument("--games-per-iteration", type=int, default=8)
+    parser.add_argument("--updates-per-iteration", type=int, default=50)
+    parser.add_argument("--eval-games", type=int, default=2)
+    parser.add_argument("--temperature-moves", type=int, default=24)
+    parser.add_argument("--replay-capacity", type=int, default=200_000)
+    parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument("--learning-rate", type=float, default=1e-3)
+    parser.add_argument("--weight-decay", type=float, default=1e-4)
+    parser.add_argument("--hidden-size", type=int, default=256)
+    parser.add_argument("--residual-blocks", type=int, default=4)
+    parser.add_argument("--device", default="auto")
+    if include_output_paths:
+        parser.add_argument("--output", default="runs/gaia-standard.pt")
+        parser.add_argument("--metrics", default="runs/metrics.jsonl")
+    parser.add_argument(
+        "--metrics-move-interval",
+        type=int,
+        default=4,
+        help="sample search candidates every N moves; rule states are recorded every move",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="gaiazero", description="AlphaZero + PIMCTS for Gaia")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -332,30 +390,21 @@ def build_parser() -> argparse.ArgumentParser:
     demo.set_defaults(handler=command_demo)
 
     train = subparsers.add_parser("train", help="run neural self-play training")
-    train.add_argument("--players", type=int, choices=(2, 3, 4), default=2)
-    train.add_argument("--iterations", type=int, default=5)
-    train.add_argument("--games-per-iteration", type=int, default=8)
-    train.add_argument("--updates-per-iteration", type=int, default=50)
-    train.add_argument("--eval-games", type=int, default=2)
-    train.add_argument("--temperature-moves", type=int, default=24)
-    train.add_argument("--replay-capacity", type=int, default=200_000)
-    train.add_argument("--batch-size", type=int, default=256)
-    train.add_argument("--learning-rate", type=float, default=1e-3)
-    train.add_argument("--weight-decay", type=float, default=1e-4)
-    train.add_argument("--hidden-size", type=int, default=256)
-    train.add_argument("--residual-blocks", type=int, default=4)
-    train.add_argument("--device", default="auto")
-    train.add_argument("--output", default="runs/gaia-standard.pt")
-    train.add_argument("--metrics", default="runs/metrics.jsonl")
-    train.add_argument(
-        "--metrics-move-interval",
-        type=int,
-        default=4,
-        help="sample search candidates every N moves; rule states are recorded every move",
-    )
+    _add_training_arguments(train, include_players=True, include_output_paths=True)
     _add_ruleset_argument(train)
     _add_search_arguments(train)
     train.set_defaults(handler=command_train)
+
+    train_all = subparsers.add_parser(
+        "train-all",
+        help="train independent neural models for 2, 3 and 4 players",
+    )
+    train_all.add_argument("--output-dir", default="runs/models")
+    train_all.add_argument("--metrics-dir", default="runs/metrics-by-players")
+    _add_training_arguments(train_all, include_players=False, include_output_paths=False)
+    _add_ruleset_argument(train_all)
+    _add_search_arguments(train_all)
+    train_all.set_defaults(handler=command_train_all, player_counts=(2, 3, 4))
 
     evaluate = subparsers.add_parser("evaluate", help="evaluate a checkpoint against heuristic PIMCTS")
     evaluate.add_argument("checkpoint")
