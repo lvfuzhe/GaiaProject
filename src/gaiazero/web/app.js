@@ -198,8 +198,6 @@ const state = {
     planetEditorMode: "move",
     planetEditorTerrain: 0,
     busy: false,
-    runId: null,
-    simulation: { status: "idle" },
     message: "就绪",
   },
   history: {
@@ -212,6 +210,21 @@ const state = {
     loading: false,
     playing: false,
     timer: null
+  },
+  play: {
+    workspace: "setup",
+    session: null,
+    players: 2,
+    factions: [0, 2],
+    roles: ["human", "ai"],
+    selectedPlanetId: null,
+    requestBusy: false,
+    requestEpoch: 0,
+    polling: false,
+    autoAi: true,
+    aiTimer: null,
+    message: "就绪",
+    messageStatus: "ready"
   }
 };
 
@@ -268,7 +281,6 @@ async function pollEvents(force = false) {
       }
       if (event.type === "run_started") {
         state.runId = event.run_id;
-        if (event.run_id === state.manualSetup.runId) state.manualSetup.preview = null;
       }
       if (!state.runId || event.run_id === state.runId) state.events.push(event);
       state.lastSequence = Math.max(state.lastSequence, Number(event.sequence) || 0);
@@ -292,7 +304,8 @@ function render() {
   renderProgress();
   renderLossChart();
   renderIterations();
-  renderSetup(state.manualSetup.preview || latestState());
+  renderSetup(state.manualSetup.preview);
+  renderPlay();
   renderSelfPlay();
   renderHistory();
   renderDiagnostics();
@@ -438,8 +451,9 @@ function queueSectorArtworkRender() {
   sectorArtworkRenderQueued = true;
   requestAnimationFrame(() => {
     sectorArtworkRenderQueued = false;
-    renderSetup(state.manualSetup.preview || latestState());
+    renderSetup(state.manualSetup.preview);
     renderPlanetPositionEditor();
+    renderPlay();
     renderHistory();
   });
 }
@@ -598,21 +612,14 @@ function renderSetup(snapshot) {
   initializeSetupEditor(snapshot);
   const setup = snapshot?.setup;
   const available = Boolean(setup?.map?.sectors?.length);
-  empty.hidden = available;
+  empty.hidden = true;
   content.hidden = !available;
   if (!available) return;
 
   const map = setup.map;
   byId("setup-seed").textContent = setup.seed;
   byId("setup-map-summary").textContent = `${snapshot.planets.length} 个星球 · ${map.sector_count} 个来源星区`;
-  const runStart = [...state.events].reverse().find((event) =>
-    event.type === "run_started" && event.run_id === state.runId,
-  );
-  const initialFirstPlayer = snapshot === state.manualSetup.preview
-    ? snapshot.first_player
-    : runStart?.payload?.config?.first_player
-      ?? runStart?.payload?.state?.first_player
-      ?? snapshot.first_player;
+  const initialFirstPlayer = snapshot.first_player;
   byId("setup-first-player").textContent = `P${initialFirstPlayer}`;
   byId("setup-ruleset").textContent = snapshot.ruleset || "--";
   byId("setup-map-method").textContent = map.method === "manual"
@@ -769,11 +776,8 @@ function initializeSetupEditor(snapshot) {
   if (state.manualSetup.initialized && (
     !snapshot || state.manualSetup.hydrated || state.manualSetup.edited
   )) return;
-  const runStart = [...state.events].reverse().find((event) =>
-    event.type === "run_started" && event.payload?.state?.setup,
-  );
-  const setupSnapshot = runStart?.payload?.state || snapshot;
-  const runConfig = runStart?.payload?.config || {};
+  const setupSnapshot = snapshot;
+  const runConfig = {};
   const players = Math.min(4, Math.max(2, Number(
     runConfig.players || setupSnapshot?.players?.length || 2,
   )));
@@ -948,6 +952,7 @@ function renderRandomElementEditor() {
     button.setAttribute("aria-pressed", String(active));
   });
   byId("setup-manual-sector-editor").hidden = elements.map_mode !== "manual";
+  byId("setup-config-map").classList.toggle("compact", elements.map_mode !== "manual");
   const sectorCount = players === 2 ? 7 : 10;
   byId("setup-editor-sectors").innerHTML = Array.from({ length: sectorCount }, (_, index) => {
     const selected = elements.sector_tiles[index];
@@ -1381,24 +1386,10 @@ function setSetupEditorMessage(message, status = "ready") {
 }
 
 function renderManualSetupStatus() {
-  const status = state.manualSetup.simulation || { status: "idle" };
   const element = byId("setup-editor-status");
-  const running = status.status === "running";
-  let label = state.manualSetup.message || "就绪";
-  let className = state.manualSetup.messageStatus || "ready";
-  if (running) {
-    label = `模拟运行中 · ${formatNumber(status.move || 0)} 步${status.last_action ? ` · ${status.last_action}` : ""}`;
-    className = "running";
-  } else if (status.status === "complete") {
-    label = `模拟完成 · ${formatNumber(status.move)} 步 · ${(status.scores || []).map((score) => formatNumber(score, 1)).join(" / ")} VP`;
-    className = "complete";
-  } else if (status.status === "failed") {
-    label = status.error || "模拟失败";
-    className = "failed";
-  }
-  element.textContent = label;
-  element.className = `setup-editor-status ${className}`;
-  const disabled = running || state.manualSetup.busy;
+  element.textContent = state.manualSetup.message || "就绪";
+  element.className = `setup-editor-status ${state.manualSetup.messageStatus || "ready"}`;
+  const disabled = state.manualSetup.busy;
   byId("setup-editor-run").disabled = disabled;
   byId("setup-editor-preview").disabled = disabled;
   byId("setup-editor-randomize").disabled = disabled;
@@ -1431,48 +1422,6 @@ async function previewManualSetup({ quiet = false } = {}) {
   } finally {
     state.manualSetup.busy = false;
     renderManualSetupStatus();
-  }
-}
-
-async function runManualSimulation() {
-  try {
-    const config = await previewManualSetup({ quiet: true });
-    state.manualSetup.busy = true;
-    setSetupEditorMessage("正在启动单局模拟", "running");
-    const response = await fetch("/api/simulation", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(config),
-    });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-    state.manualSetup.simulation = data;
-    state.manualSetup.runId = data.run_id;
-    state.live = true;
-    byId("live-toggle").checked = true;
-    renderManualSetupStatus();
-    await pollEvents(true);
-  } catch (error) {
-    setSetupEditorMessage(error.message || String(error), "failed");
-  } finally {
-    state.manualSetup.busy = false;
-    renderManualSetupStatus();
-  }
-}
-
-async function pollSimulationStatus() {
-  try {
-    const response = await fetch("/api/simulation", { cache: "no-store" });
-    if (!response.ok) return;
-    const previous = state.manualSetup.simulation?.status;
-    state.manualSetup.simulation = await response.json();
-    renderManualSetupStatus();
-    if (previous === "running" && state.manualSetup.simulation.status !== "running") {
-      await pollEvents(true);
-      await refreshHistoryIndex();
-    }
-  } catch (_error) {
-    // The main connection indicator already reports dashboard availability.
   }
 }
 
@@ -2020,12 +1969,13 @@ function drawPlanetArtwork(context, x, y, size, cellScale, planet, snapshot) {
   return true;
 }
 
-function drawStarMapBoard(canvas, snapshot, showPlayerPieces) {
+function drawStarMapBoard(canvas, snapshot, showPlayerPieces, extraOptions = {}) {
   drawBoard(canvas, snapshot, {
     showSectors: true,
     planetArtwork: true,
     starfield: true,
     showPlayerPieces,
+    ...extraOptions,
   });
 }
 
@@ -2048,6 +1998,7 @@ function drawBoard(canvas, snapshot, options = {}) {
   }));
   const geometry = boardGeometry(width, height, snapshot, showSectors);
   const { compactMap, scale, size, offsetX, offsetY } = geometry;
+  const legalPlanetIds = new Set((options.legalPlanetIds || []).map(Number));
 
   if (showSectors) {
     const sectors = snapshot.setup?.map?.sectors || [];
@@ -2093,6 +2044,16 @@ function drawBoard(canvas, snapshot, options = {}) {
       context.font = `700 ${compactMap ? 6 : 7}px Segoe UI`;
       context.textAlign = "center";
       context.fillText(String(planet.id), badgeX, badgeY + 2.4);
+    }
+    if (legalPlanetIds.has(Number(planet.id))) {
+      context.save();
+      context.strokeStyle = "rgba(117, 202, 255, 0.9)";
+      context.lineWidth = compactMap ? 1.7 : 2.4;
+      context.setLineDash(compactMap ? [3, 2] : [5, 3]);
+      context.beginPath();
+      context.arc(x, y, size * 1.18, 0, Math.PI * 2);
+      context.stroke();
+      context.restore();
     }
     if (
       options.selectedPlanetId !== null
@@ -2437,6 +2398,416 @@ function renderPersonalBoards(containerId, snapshot) {
   container.dataset.signature = signature;
 }
 
+const PLAY_ACTION_LABELS = {
+  starting_placement: "放置起始基地",
+  build: "建造矿场",
+  gaia: "启动盖亚计划",
+  upgrade_trading: "升级贸易站",
+  upgrade_lab: "升级研究所",
+  upgrade_pi: "升级行星研究院",
+  upgrade_academy: "升级学院",
+  research: "推进科研轨",
+  power: "执行能量行动",
+  technology: "获取科技板块",
+  federation: "组建联邦",
+  pass_booster: "过轮并选择助推板块",
+  pass_final: "最终过轮",
+  other: "执行动作",
+};
+
+function ensurePlaySeats(players = state.play.players) {
+  state.play.players = players;
+  const defaults = [0, 2, 4, 6];
+  state.play.factions = Array.from({ length: players }, (_, index) =>
+    Number.isInteger(state.play.factions[index]) ? state.play.factions[index] : defaults[index]
+  );
+  state.play.roles = Array.from({ length: players }, (_, index) =>
+    ["human", "ai"].includes(state.play.roles[index])
+      ? state.play.roles[index]
+      : (index === 0 ? "human" : "ai")
+  );
+}
+
+function playRoleSegment(role, player, live = false, disabled = false) {
+  const scope = live ? "live" : "config";
+  return `<div class="play-role-segment" role="group" aria-label="P${player} 控制方式">
+    <button type="button" data-${scope}-role="human" data-player="${player}" class="${role === "human" ? "active" : ""}" ${disabled ? "disabled" : ""}>人工</button>
+    <button type="button" data-${scope}-role="ai" data-player="${player}" class="${role === "ai" ? "active" : ""}" ${disabled ? "disabled" : ""}>AI</button>
+  </div>`;
+}
+
+function renderPlayConfig() {
+  const players = Number(byId("setup-editor-players").value || 2);
+  ensurePlaySeats(players);
+  state.play.factions = Array.from(
+    { length: players },
+    (_, player) => Number(state.manualSetup.factions?.[player] ?? [0, 2, 4, 6][player]),
+  );
+  const seed = Number(byId("setup-editor-seed").value || 0);
+  const firstPlayer = Number(byId("setup-editor-first-player").value || 0);
+  byId("play-config-players-summary").textContent = `${players} 人`;
+  byId("play-config-seed-summary").textContent = String(seed);
+  byId("play-config-first-player-summary").textContent = `P${firstPlayer}`;
+  byId("play-config-seats").innerHTML = state.play.factions.map((selected, player) => {
+    const faction = BASE_FACTIONS.find((item) => item.id === selected) || BASE_FACTIONS[0];
+    return `<article class="play-seat-config">
+      <div class="play-seat-heading"><strong><i class="player-color p${player}"></i>P${player}</strong><span>版图 ${faction.board}${faction.side}</span></div>
+      <div class="play-seat-faction-summary"><span>种族</span><strong>${escapeHtml(faction.name)}</strong></div>
+      ${playRoleSegment(state.play.roles[player], player)}
+    </article>`;
+  }).join("");
+  const message = byId("play-config-message");
+  message.textContent = state.play.message;
+  message.className = `play-message ${state.play.messageStatus}`;
+  const disabled = state.play.requestBusy || Boolean(state.play.session?.busy);
+  byId("play-start").disabled = disabled;
+  byId("play-back-to-setup").disabled = disabled;
+  byId("play-config-form").setAttribute("aria-busy", String(disabled));
+}
+
+function playConfigPayload() {
+  const config = manualSetupPayload();
+  const simulations = Number(byId("play-config-simulations").value);
+  if (!Number.isInteger(simulations) || simulations < 1 || simulations > 128) {
+    throw new Error("AI 每步搜索次数必须是 1–128 的整数");
+  }
+  return {
+    ...config,
+    simulations,
+    roles: [...state.play.roles],
+  };
+}
+
+function setPlayMessage(message, status = "ready") {
+  state.play.message = message;
+  state.play.messageStatus = status;
+  const element = byId("play-config-message");
+  if (element) {
+    element.textContent = message;
+    element.className = `play-message ${status}`;
+  }
+}
+
+function switchPlayWorkspace(workspace) {
+  state.play.workspace = workspace === "match" ? "match" : "setup";
+  byId("play-setup-workspace").hidden = state.play.workspace !== "setup";
+  byId("play-match-workspace").hidden = state.play.workspace !== "match";
+  document.querySelectorAll("[data-play-workspace]").forEach((button) => {
+    const active = button.dataset.playWorkspace === state.play.workspace;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  requestAnimationFrame(() => {
+    if (state.play.workspace === "setup") {
+      renderSetup(state.manualSetup.preview);
+      renderPlanetPositionEditor();
+    } else {
+      renderPlay();
+    }
+  });
+}
+
+async function prepareInteractiveMatch() {
+  state.manualSetup.busy = true;
+  setSetupEditorMessage("正在验证人工对局初始设置", "running");
+  try {
+    await previewManualSetup({ quiet: true });
+    ensurePlaySeats(Number(byId("setup-editor-players").value));
+    setSetupEditorMessage("初始设置已确认，可配置人工与 AI 角色", "complete");
+    setPlayMessage("初始盘面已载入", "ready");
+    switchPlayWorkspace("match");
+  } catch (error) {
+    setSetupEditorMessage(error.message || String(error), "failed");
+  } finally {
+    state.manualSetup.busy = false;
+    renderManualSetupStatus();
+  }
+}
+
+async function postPlay(path, payload = {}) {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  return data;
+}
+
+function acceptPlaySession(session) {
+  state.play.session = session?.status === "idle" ? null : session;
+  if (state.play.session) state.play.workspace = "match";
+  const legalTargets = new Set(
+    (state.play.session?.legal_actions || [])
+      .filter((action) => action.target !== null && action.target !== undefined)
+      .map((action) => Number(action.target)),
+  );
+  if (state.play.selectedPlanetId !== null && !legalTargets.has(state.play.selectedPlanetId)) {
+    state.play.selectedPlanetId = null;
+  }
+  renderPlay();
+}
+
+async function startInteractiveGame() {
+  state.play.requestEpoch += 1;
+  state.play.requestBusy = true;
+  setPlayMessage("正在创建初始盘面", "running");
+  renderPlay();
+  try {
+    const session = await postPlay("/api/play/start", playConfigPayload());
+    state.play.selectedPlanetId = null;
+    setPlayMessage("对局已开始", "complete");
+    acceptPlaySession(session);
+  } catch (error) {
+    setPlayMessage(error.message || String(error), "failed");
+  } finally {
+    state.play.requestBusy = false;
+    renderPlay();
+  }
+}
+
+async function submitHumanAction(action) {
+  if (state.play.requestBusy) return;
+  state.play.requestEpoch += 1;
+  state.play.requestBusy = true;
+  setPlayMessage("正在提交人工动作", "running");
+  renderPlay();
+  try {
+    const session = await postPlay("/api/play/action", { action: Number(action) });
+    setPlayMessage("人工动作已执行", "complete");
+    acceptPlaySession(session);
+  } catch (error) {
+    setPlayMessage(error.message || String(error), "failed");
+  } finally {
+    state.play.requestBusy = false;
+    renderPlay();
+  }
+}
+
+async function runInteractiveAiTurn() {
+  if (state.play.requestBusy || state.play.session?.busy) return;
+  state.play.requestEpoch += 1;
+  state.play.requestBusy = true;
+  setPlayMessage("AI 正在运行 PIMCTS 搜索", "running");
+  renderPlay();
+  try {
+    const session = await postPlay("/api/play/ai");
+    setPlayMessage("AI 动作已执行", "complete");
+    acceptPlaySession(session);
+  } catch (error) {
+    state.play.autoAi = false;
+    byId("play-auto-ai").checked = false;
+    setPlayMessage(error.message || String(error), "failed");
+  } finally {
+    state.play.requestBusy = false;
+    renderPlay();
+  }
+}
+
+async function updateLivePlayRole(player, role) {
+  const session = state.play.session;
+  if (!session || state.play.requestBusy || session.busy) return;
+  const roles = [...session.roles];
+  roles[player] = role;
+  state.play.requestEpoch += 1;
+  state.play.requestBusy = true;
+  setPlayMessage(`正在将 P${player} 切换为${role === "human" ? "人工" : "AI"}`, "running");
+  renderPlay();
+  try {
+    const updated = await postPlay("/api/play/roles", { roles });
+    setPlayMessage(`P${player} 已切换为${role === "human" ? "人工" : "AI"}`, "complete");
+    acceptPlaySession(updated);
+  } catch (error) {
+    setPlayMessage(error.message || String(error), "failed");
+  } finally {
+    state.play.requestBusy = false;
+    renderPlay();
+  }
+}
+
+async function pollInteractiveGame() {
+  if (state.play.polling || state.play.requestBusy) return;
+  state.play.polling = true;
+  const requestEpoch = state.play.requestEpoch;
+  try {
+    const response = await fetch("/api/play", { cache: "no-store" });
+    if (!response.ok) return;
+    const session = await response.json();
+    if (requestEpoch !== state.play.requestEpoch) return;
+    const current = state.play.session;
+    if (
+      current
+      && session.session_id === current.session_id
+      && Number(session.revision) < Number(current.revision)
+    ) return;
+    const changed = session.status !== "idle" && (
+      !current
+      || session.session_id !== current.session_id
+      || session.revision !== current.revision
+      || session.busy !== current.busy
+    );
+    if (changed || (session.status === "idle" && state.play.session)) acceptPlaySession(session);
+  } catch (_error) {
+    // Training telemetry owns the global connectivity indicator.
+  } finally {
+    state.play.polling = false;
+  }
+}
+
+function scheduleInteractiveAi() {
+  const session = state.play.session;
+  const shouldRun = state.play.autoAi
+    && session?.status === "active"
+    && session.current_role === "ai"
+    && !session.busy
+    && !state.play.requestBusy;
+  if (!shouldRun) {
+    if (state.play.aiTimer) window.clearTimeout(state.play.aiTimer);
+    state.play.aiTimer = null;
+    return;
+  }
+  if (state.play.aiTimer) return;
+  state.play.aiTimer = window.setTimeout(() => {
+    state.play.aiTimer = null;
+    runInteractiveAiTurn();
+  }, 350);
+}
+
+function playPhaseLabel(snapshot) {
+  if (!snapshot) return "--";
+  if (snapshot.terminal) return "对局结束";
+  if (snapshot.phase === "starting_placement") {
+    return `起始基地 ${snapshot.placement.step + 1}/${snapshot.placement.total}`;
+  }
+  return `第 ${snapshot.round}/${snapshot.max_rounds} 轮`;
+}
+
+function renderPlayActions(session) {
+  const actions = session.legal_actions || [];
+  const humanTurn = session.current_role === "human" && session.status === "active";
+  const disabled = !humanTurn || state.play.requestBusy || session.busy;
+  const targeted = actions.filter((action) => action.target !== null && action.target !== undefined);
+  const visibleTargeted = state.play.selectedPlanetId === null
+    ? targeted
+    : targeted.filter((action) => Number(action.target) === state.play.selectedPlanetId);
+  const general = actions.filter((action) => action.target === null || action.target === undefined);
+  const actionButton = (action) => `<button type="button" class="play-action-command" data-play-action="${action.id}" ${disabled ? "disabled" : ""}>
+    <strong>${escapeHtml(PLAY_ACTION_LABELS[action.kind] || PLAY_ACTION_LABELS.other)}${action.target === null || action.target === undefined ? "" : ` · #${action.target}`}</strong>
+    <small>${escapeHtml(action.label)}</small>
+  </button>`;
+  byId("play-planet-actions").innerHTML = visibleTargeted.length
+    ? visibleTargeted.map(actionButton).join("")
+    : `<div class="play-action-empty">${state.play.selectedPlanetId === null ? "当前没有星球动作" : "所选星球当前没有合法动作"}</div>`;
+  byId("play-general-actions").innerHTML = general.length
+    ? general.map(actionButton).join("")
+    : '<div class="play-action-empty">当前没有其他动作</div>';
+  byId("play-legal-count").textContent = `${actions.length} 项`;
+  byId("play-selected-planet").textContent = state.play.selectedPlanetId === null
+    ? "未选择（显示全部合法目标）"
+    : `#${state.play.selectedPlanetId}`;
+  const notice = byId("play-turn-notice");
+  if (session.status === "complete") {
+    notice.textContent = `对局结束 · ${session.state.scores.map((score) => formatNumber(score, 1)).join(" / ")} VP`;
+    notice.className = "play-turn-notice";
+  } else if (session.busy || state.play.requestBusy) {
+    notice.textContent = "正在处理当前动作…";
+    notice.className = "play-turn-notice ai";
+  } else if (humanTurn) {
+    notice.textContent = `P${session.state.current_player} 由人工操作：点击星图筛选目标，再选择合法动作`;
+    notice.className = "play-turn-notice human";
+  } else {
+    notice.textContent = `P${session.state.current_player} 由 AI 操作${state.play.autoAi ? "，将自动执行" : "，可手动单步"}`;
+    notice.className = "play-turn-notice ai";
+  }
+}
+
+function renderPlaySearch(session) {
+  const search = session.last_search;
+  const candidates = search?.candidates || [];
+  byId("play-search-candidates").innerHTML = candidates.length
+    ? candidates.map((candidate) => `<div class="candidate-row">
+        <div><strong>${escapeHtml(candidate.label)}</strong><small>${formatNumber(candidate.visits)} visits</small><progress class="mini-track" max="1" value="${Number(candidate.probability)}"></progress></div>
+        <div class="candidate-probability">${formatNumber(Number(candidate.probability) * 100, 1)}%</div>
+      </div>`).join("")
+    : '<div class="candidate-empty">暂无 AI 搜索</div>';
+  byId("play-root-values").innerHTML = search?.root_value
+    ? search.root_value.map((value, player) => `<span class="value-pill">P${player} ${formatNumber(value, 2)}</span>`).join("")
+    : "--";
+}
+
+function renderPlay() {
+  byId("play-setup-workspace").hidden = state.play.workspace !== "setup";
+  byId("play-match-workspace").hidden = state.play.workspace !== "match";
+  document.querySelectorAll("[data-play-workspace]").forEach((button) => {
+    const active = button.dataset.playWorkspace === state.play.workspace;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  renderPlayConfig();
+  const session = state.play.session;
+  byId("play-empty").hidden = Boolean(session);
+  byId("play-content").hidden = !session;
+  if (!session) {
+    scheduleInteractiveAi();
+    return;
+  }
+  const snapshot = session.state;
+  const legalPlanetIds = (session.legal_actions || [])
+    .filter((action) => action.target !== null && action.target !== undefined)
+    .map((action) => Number(action.target));
+  drawStarMapBoard(byId("play-board-canvas"), snapshot, true, {
+    legalPlanetIds,
+    selectedPlanetId: state.play.selectedPlanetId,
+    showPlanetIds: true,
+  });
+  byId("play-board-empty").hidden = Boolean(snapshot?.planets?.length);
+  byId("play-board-round").textContent = playPhaseLabel(snapshot);
+  byId("play-phase").textContent = playPhaseLabel(snapshot);
+  byId("play-current-player").textContent = snapshot.current_player === null ? "--" : `P${snapshot.current_player}`;
+  byId("play-current-role").textContent = session.current_role === "human" ? "人工" : session.current_role === "ai" ? "AI" : "--";
+  byId("play-move-count").textContent = formatNumber(session.move);
+  byId("play-ai-engine").textContent = session.ai_engine || "--";
+  byId("play-live-roles").innerHTML = session.roles.map((role, player) => {
+    const faction = snapshot.players?.[player]?.faction || `P${player}`;
+    return `<article class="play-live-role ${player === snapshot.current_player ? "current" : ""}">
+      <div class="play-live-role-heading"><strong><i class="player-color p${player}"></i>P${player}</strong><span>${escapeHtml(faction)}</span></div>
+      ${playRoleSegment(role, player, true, state.play.requestBusy || session.busy)}
+    </article>`;
+  }).join("");
+  byId("play-auto-ai").checked = state.play.autoAi;
+  byId("play-ai-step").disabled = session.status !== "active"
+    || session.current_role !== "ai"
+    || state.play.requestBusy
+    || session.busy;
+  renderPlayActions(session);
+  renderPlaySearch(session);
+  renderPlayerRows("play-players-table", snapshot, "play-active-player");
+  renderPersonalBoards("play-player-board-grid", snapshot);
+  const history = session.history || [];
+  byId("play-action-log-count").textContent = `${history.length} 步`;
+  byId("play-action-log").innerHTML = history.length
+    ? [...history].reverse().map((item) => `<tr><td>${item.move}</td><td><span class="player-label"><i class="player-color p${item.player}"></i>P${item.player}</span></td><td>${item.role === "human" ? "人工" : "AI"}</td><td>${escapeHtml(PLAY_ACTION_LABELS[item.kind] || item.label)}${item.target === null || item.target === undefined ? "" : ` · #${item.target}`}</td></tr>`).join("")
+    : '<tr><td colspan="4" class="empty-cell">暂无动作</td></tr>';
+  scheduleInteractiveAi();
+}
+
+function planetAtPlayEvent(event) {
+  const snapshot = state.play.session?.state;
+  const canvas = byId("play-board-canvas");
+  if (!snapshot?.planets?.length || !canvas) return null;
+  const rect = canvas.getBoundingClientRect();
+  const clickX = event.clientX - rect.left;
+  const clickY = event.clientY - rect.top;
+  const geometry = boardGeometry(rect.width, rect.height, snapshot, true);
+  const nearest = snapshot.planets.map((planet) => {
+    const x = geometry.offsetX + Math.sqrt(3) * (Number(planet.q) + Number(planet.r) / 2) * geometry.scale;
+    const y = geometry.offsetY + 1.5 * Number(planet.r) * geometry.scale;
+    return { id: Number(planet.id), distance: Math.hypot(clickX - x, clickY - y) };
+  }).sort((left, right) => left.distance - right.distance)[0];
+  return nearest && nearest.distance <= Math.max(14, geometry.size * 1.35) ? nearest.id : null;
+}
+
 function renderLatestAction() {
   const event = latest("self_play_step");
   const item = payload(event);
@@ -2567,7 +2938,7 @@ function toggleHistoryPlayback() {
 }
 
 function selectView(name) {
-  const selected = ["overview", "setup", "selfplay", "history", "diagnostics"].includes(name) ? name : "overview";
+  const selected = ["overview", "play", "selfplay", "history", "diagnostics"].includes(name) ? name : "overview";
   document.querySelectorAll(".view").forEach((view) => {
     const active = view.id === selected;
     view.classList.toggle("active", active);
@@ -2581,7 +2952,8 @@ function selectView(name) {
   window.location.hash = selected;
   requestAnimationFrame(() => {
     renderLossChart();
-    renderSetup(state.manualSetup.preview || latestState());
+    renderSetup(state.manualSetup.preview);
+    renderPlay();
     renderBoard(latestState());
     renderHistory();
   });
@@ -2595,6 +2967,45 @@ byId("live-toggle").addEventListener("change", (event) => {
   if (state.live) pollEvents(true);
 });
 byId("refresh-button").addEventListener("click", () => pollEvents(true));
+document.querySelectorAll("[data-play-workspace]").forEach((button) => {
+  button.addEventListener("click", () => switchPlayWorkspace(button.dataset.playWorkspace));
+});
+byId("play-config-seats").addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-config-role]");
+  if (!button) return;
+  state.play.roles[Number(button.dataset.player)] = button.dataset.configRole;
+  setPlayMessage("座位控制方式已更新", "ready");
+  renderPlayConfig();
+});
+byId("play-config-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  startInteractiveGame();
+});
+byId("play-back-to-setup").addEventListener("click", () => switchPlayWorkspace("setup"));
+byId("play-board-canvas").addEventListener("click", (event) => {
+  const planetId = planetAtPlayEvent(event);
+  if (planetId === null) return;
+  state.play.selectedPlanetId = state.play.selectedPlanetId === planetId ? null : planetId;
+  renderPlay();
+});
+byId("play-planet-actions").addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-play-action]");
+  if (button) submitHumanAction(button.dataset.playAction);
+});
+byId("play-general-actions").addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-play-action]");
+  if (button) submitHumanAction(button.dataset.playAction);
+});
+byId("play-live-roles").addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-live-role]");
+  if (button) updateLivePlayRole(Number(button.dataset.player), button.dataset.liveRole);
+});
+byId("play-auto-ai").addEventListener("change", (event) => {
+  state.play.autoAi = event.target.checked;
+  setPlayMessage(state.play.autoAi ? "AI 自动行动已开启" : "AI 自动行动已暂停", "ready");
+  renderPlay();
+});
+byId("play-ai-step").addEventListener("click", runInteractiveAiTurn);
 byId("setup-editor-players").addEventListener("change", () => {
   state.manualSetup.edited = true;
   state.manualSetup.preview = null;
@@ -2607,10 +3018,12 @@ byId("setup-editor-players").addEventListener("change", () => {
   );
   renderRandomElementEditor();
   setSetupEditorMessage("玩家人数已修改，随机元素已按合法模板重置", "ready");
+  renderPlayConfig();
 });
 byId("setup-editor-first-player").addEventListener("change", () => {
   captureRandomElements();
   renderRandomElementEditor();
+  renderPlayConfig();
 });
 byId("setup-editor-map-mode").addEventListener("click", (event) => {
   const button = event.target.closest("button[data-map-mode]");
@@ -2633,6 +3046,7 @@ byId("setup-editor-factions").addEventListener("change", (event) => {
   state.manualSetup.edited = true;
   state.manualSetup.factions[Number(select.dataset.player)] = Number(select.value);
   setSetupEditorMessage("设置已修改", "ready");
+  renderPlayConfig();
 });
 byId("setup-editor-form").addEventListener("input", (event) => {
   const randomSelect = event.target.closest("select[data-random-field]");
@@ -2659,6 +3073,7 @@ byId("setup-editor-form").addEventListener("input", (event) => {
   if (!event.target.closest("select[data-player]")) {
     state.manualSetup.edited = true;
     setSetupEditorMessage("设置已修改", "ready");
+    renderPlayConfig();
   }
 });
 byId("setup-editor-form").addEventListener("submit", async (event) => {
@@ -2670,7 +3085,7 @@ byId("setup-editor-form").addEventListener("submit", async (event) => {
   }
 });
 byId("setup-editor-randomize").addEventListener("click", randomizeManualSetup);
-byId("setup-editor-run").addEventListener("click", runManualSimulation);
+byId("setup-editor-run").addEventListener("click", prepareInteractiveMatch);
 byId("setup-planet-editor-canvas").addEventListener("click", handlePlanetEditorClick);
 byId("setup-planet-editor-add").addEventListener("click", toggleAddPlanetMode);
 byId("setup-planet-editor-delete").addEventListener("click", deleteSelectedPlanet);
@@ -2732,18 +3147,23 @@ byId("history-action-table").addEventListener("click", (event) => {
 });
 window.addEventListener("resize", () => {
   renderLossChart();
-  renderSetup(state.manualSetup.preview || latestState());
+  renderSetup(state.manualSetup.preview);
   renderBoard(latestState());
+  renderPlay();
   renderHistory();
   renderPlanetPositionEditor();
 });
 
-const pathView = window.location.pathname.startsWith("/setup/") ? "setup" : "";
-selectView(window.location.hash.replace("#", "") || pathView || "overview");
+const initialHash = window.location.hash.replace("#", "");
+if (window.location.pathname.startsWith("/setup/") || initialHash === "setup") state.play.workspace = "setup";
+const pathView = window.location.pathname.startsWith("/setup/")
+  ? "play"
+  : window.location.pathname === "/play" ? "play" : "";
+selectView((initialHash === "setup" ? "play" : initialHash) || pathView || "overview");
 pollEvents(true);
-pollSimulationStatus();
+pollInteractiveGame();
 setInterval(() => pollEvents(false), POLL_INTERVAL_MS);
-setInterval(pollSimulationStatus, POLL_INTERVAL_MS);
+setInterval(pollInteractiveGame, 1200);
 setInterval(() => {
   renderStatus();
   renderMetrics();

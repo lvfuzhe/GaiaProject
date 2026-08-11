@@ -67,6 +67,8 @@ class DashboardTests(unittest.TestCase):
                 random_setup_page = response.read().decode("utf-8")
             with urlopen(f"{base}/setup/manual", timeout=5) as response:
                 manual_setup_page = response.read().decode("utf-8")
+            with urlopen(f"{base}/play", timeout=5) as response:
+                play_page = response.read().decode("utf-8")
             with urlopen(f"{base}/assets/sectors/sector-01-solid.gif", timeout=5) as response:
                 sector_image = response.read()
                 sector_content_type = response.headers.get_content_type()
@@ -114,6 +116,14 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("setup-editor-standard-tech", page)
             self.assertIn("setup-editor-boosters", page)
             self.assertIn("setup-editor-map-mode", page)
+            self.assertIn("play-config-form", page)
+            self.assertIn("play-board-canvas", page)
+            self.assertIn("play-live-roles", page)
+            self.assertIn("play-auto-ai", page)
+            self.assertIn("play-setup-workspace", page)
+            self.assertIn("play-match-workspace", page)
+            self.assertIn('data-play-workspace="setup"', page)
+            self.assertNotIn('data-view="setup"', page)
             self.assertIn("function drawStarfield", app_script)
             self.assertIn("function drawPlanetArtwork", app_script)
             self.assertIn("function drawStarMapBoard", app_script)
@@ -126,10 +136,18 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("function addPlanetAt", app_script)
             self.assertIn("function deleteSelectedPlanet", app_script)
             self.assertIn("function snapshotRoundLabel", app_script)
+            self.assertIn("function startInteractiveGame", app_script)
+            self.assertIn("function prepareInteractiveMatch", app_script)
+            self.assertIn("function submitHumanAction", app_script)
+            self.assertIn("function runInteractiveAiTurn", app_script)
+            self.assertIn("function updateLivePlayRole", app_script)
+            self.assertIn("function planetAtPlayEvent", app_script)
+            self.assertNotIn("function runManualSimulation", app_script)
             self.assertIn("开局基地按蛇形顺位放置", app_script)
             self.assertIn("planetArtwork: true", app_script)
             self.assertEqual(random_setup_page, page)
             self.assertEqual(manual_setup_page, page)
+            self.assertEqual(play_page, page)
             self.assertIn("player-board-grid", page)
             self.assertIn("history-player-board-grid", page)
             self.assertIn("history-star-map-frame", page)
@@ -364,6 +382,90 @@ class DashboardTests(unittest.TestCase):
             )
             self.assertEqual(trace["steps"][1]["state"]["placement"]["step"], 1)
             self.assertTrue(trace["steps"][-1]["state"]["terminal"])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    def test_interactive_game_supports_human_ai_and_role_switching(self) -> None:
+        server = create_dashboard_server(self.metrics, port=0, quiet=True)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            base = f"http://127.0.0.1:{server.server_port}"
+            setup_payload = {
+                "players": 2,
+                "seed": 13,
+                "first_player": 0,
+                "factions": [0, 2],
+                "simulations": 1,
+            }
+            _, preview = self.post_json(
+                f"{base}/api/setup/preview",
+                setup_payload,
+            )
+            random_setup = preview["config"]["random_setup"]
+            random_setup["round_scoring_tiles"] = list(reversed(
+                random_setup["round_scoring_tiles"]
+            ))
+            status, game = self.post_json(
+                f"{base}/api/play/start",
+                {
+                    **setup_payload,
+                    "random_setup": random_setup,
+                    "roles": ["human", "ai"],
+                },
+            )
+
+            self.assertEqual(status, 201)
+            self.assertEqual(game["status"], "active")
+            self.assertEqual(game["roles"], ["human", "ai"])
+            self.assertEqual(game["current_role"], "human")
+            self.assertEqual(game["config"]["random_setup"], random_setup)
+            self.assertEqual(
+                [tile["id"] for tile in game["state"]["setup"]["round_scoring"]],
+                random_setup["round_scoring_tiles"],
+            )
+            self.assertEqual(game["state"]["phase"], "starting_placement")
+            self.assertTrue(game["legal_actions"])
+            self.assertTrue(all(
+                action["kind"] == "starting_placement"
+                and isinstance(action["target"], int)
+                for action in game["legal_actions"]
+            ))
+
+            human_action = game["legal_actions"][0]["id"]
+            _, game = self.post_json(
+                f"{base}/api/play/action",
+                {"action": human_action},
+            )
+            self.assertEqual(game["move"], 1)
+            self.assertEqual(game["history"][0]["role"], "human")
+            self.assertEqual(game["current_role"], "ai")
+
+            _, game = self.post_json(
+                f"{base}/api/play/roles",
+                {"roles": ["human", "human"]},
+            )
+            self.assertEqual(game["current_role"], "human")
+            with self.assertRaises(HTTPError) as raised:
+                self.post_json(f"{base}/api/play/ai", {})
+            self.assertEqual(raised.exception.code, 409)
+
+            _, game = self.post_json(
+                f"{base}/api/play/roles",
+                {"roles": ["human", "ai"]},
+            )
+            _, game = self.post_json(f"{base}/api/play/ai", {})
+            self.assertEqual(game["move"], 2)
+            self.assertEqual(game["history"][-1]["role"], "ai")
+            self.assertEqual(game["last_action"]["player"], 1)
+            self.assertTrue(game["last_search"]["candidates"])
+
+            with urlopen(f"{base}/api/play", timeout=5) as response:
+                restored = json.loads(response.read())
+            self.assertEqual(restored["session_id"], game["session_id"])
+            self.assertEqual(restored["move"], 2)
         finally:
             server.shutdown()
             server.server_close()

@@ -527,6 +527,10 @@ main {
   padding-top: 12px;
 }
 
+.setup-config-panel.compact {
+  min-height: 0;
+}
+
 .setup-config-panel[hidden] {
   display: none;
 }
@@ -2035,6 +2039,445 @@ h3 {
   border-color: #24364a;
 }
 
+.play-workspace-tabs {
+  margin-bottom: 12px;
+  padding: 3px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-soft);
+}
+
+.play-workspace-tabs button {
+  min-height: 38px;
+  padding: 7px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--muted);
+  border: 0;
+  background: transparent;
+  font-size: 10px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.play-workspace-tabs button span {
+  color: var(--green);
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 8px;
+}
+
+.play-workspace-tabs button.active {
+  color: #fff;
+  background: var(--ink);
+}
+
+.play-workspace-tabs button.active span {
+  color: #83d3b4;
+}
+
+.play-config-panel {
+  padding: 18px 20px;
+  border-left: 4px solid var(--green);
+}
+
+.play-message {
+  max-width: min(48vw, 560px);
+  overflow: hidden;
+  padding: 5px 8px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  background: var(--surface-soft);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.play-message.running {
+  color: var(--blue);
+  border-color: #b8cde2;
+  background: #f1f6fb;
+}
+
+.play-message.complete {
+  color: var(--green);
+  border-color: #b9d6ca;
+  background: var(--green-soft);
+}
+
+.play-message.failed {
+  color: var(--red);
+  border-color: #e5c1b8;
+  background: #fbf2f0;
+}
+
+.play-config-fields {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(130px, 1fr));
+  gap: 10px;
+}
+
+.play-config-fields label,
+.play-config-fields > div,
+.play-seat-faction {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.play-config-fields label > span,
+.play-config-fields > div > span,
+.play-seat-faction > span {
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.play-config-fields > div > strong {
+  height: 34px;
+  padding: 0 9px;
+  display: flex;
+  align-items: center;
+  border-bottom: 2px solid var(--line-strong);
+  background: var(--surface-soft);
+  font-size: 11px;
+}
+
+.play-config-fields input,
+.play-config-fields select,
+.play-seat-faction select {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 0 9px;
+  color: var(--ink);
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  background: #fff;
+  font-size: 10px;
+}
+
+.play-config-subheading {
+  margin-top: 16px;
+  padding-top: 12px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.play-config-subheading strong {
+  font-size: 10px;
+}
+
+.play-config-subheading span {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.play-config-seats {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.play-seat-config,
+.play-live-role {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--player-color, var(--line-strong));
+  background: var(--surface-soft);
+}
+
+.play-seat-heading,
+.play-live-role-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.play-seat-heading strong,
+.play-live-role-heading strong {
+  font-size: 11px;
+}
+
+.play-seat-heading span,
+.play-live-role-heading span {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.play-seat-faction {
+  margin-top: 8px;
+}
+
+.play-seat-faction-summary {
+  margin-top: 8px;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.play-seat-faction-summary span {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.play-seat-faction-summary strong {
+  overflow: hidden;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.play-role-segment {
+  margin-top: 8px;
+  padding: 2px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+
+.play-role-segment button {
+  min-height: 28px;
+  padding: 4px 6px;
+  color: var(--muted);
+  border: 0;
+  background: transparent;
+  font-size: 9px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.play-role-segment button.active {
+  color: #fff;
+  background: var(--blue);
+}
+
+.play-role-segment button[data-config-role="ai"].active,
+.play-role-segment button[data-live-role="ai"].active {
+  background: var(--green);
+}
+
+.play-role-segment button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.play-config-actions {
+  margin-top: 14px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.play-status-strip {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  border-top: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line-strong);
+  background: var(--surface);
+}
+
+.play-status-strip > div {
+  min-width: 0;
+  padding: 12px 16px;
+  border-left: 1px solid var(--line);
+}
+
+.play-status-strip > div:first-child {
+  border-left: 0;
+}
+
+.play-status-strip span,
+.play-status-strip strong {
+  display: block;
+}
+
+.play-status-strip span {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.play-status-strip strong {
+  margin-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.play-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(320px, 0.65fr);
+  align-items: start;
+  gap: 18px;
+}
+
+.play-board-panel,
+.play-role-panel,
+.play-action-panel,
+.play-search-panel {
+  padding: 20px;
+}
+
+.play-star-map-frame {
+  height: 560px;
+  overflow: hidden;
+  background: #050b14;
+  border-color: #24364a;
+}
+
+#play-board-canvas {
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+#play-board-canvas:focus-visible {
+  outline: 2px solid #6aa4d8;
+  outline-offset: -2px;
+}
+
+.play-control-column {
+  display: grid;
+  gap: 14px;
+}
+
+.play-live-roles {
+  margin-top: 10px;
+  display: grid;
+  gap: 7px;
+}
+
+.play-live-role.current {
+  border-color: var(--player-color, var(--green));
+  background: #f4f8f6;
+}
+
+.play-live-role .play-role-segment {
+  margin-top: 6px;
+}
+
+.play-ai-step {
+  width: 100%;
+  margin-top: 10px;
+  justify-content: center;
+}
+
+.play-turn-notice {
+  margin-top: 10px;
+  padding: 9px 10px;
+  color: var(--muted);
+  border-left: 3px solid var(--line-strong);
+  background: var(--surface-soft);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.play-turn-notice.human {
+  color: var(--blue);
+  border-left-color: var(--blue);
+}
+
+.play-turn-notice.ai {
+  color: var(--green);
+  border-left-color: var(--green);
+}
+
+.play-selected-planet {
+  margin-top: 10px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.play-selected-planet span,
+.play-action-group > span {
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.play-selected-planet strong {
+  font-size: 10px;
+}
+
+.play-action-group {
+  margin-top: 12px;
+}
+
+.play-action-list {
+  max-height: 210px;
+  margin-top: 6px;
+  display: grid;
+  gap: 5px;
+  overflow-y: auto;
+}
+
+.play-action-command {
+  min-height: 34px;
+  padding: 7px 9px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--blue);
+  background: #fff;
+  text-align: left;
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.play-action-command:hover,
+.play-action-command:focus-visible {
+  border-color: var(--green);
+  outline: none;
+}
+
+.play-action-command:disabled {
+  opacity: 0.48;
+  cursor: default;
+}
+
+.play-action-command small {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-family: Consolas, monospace;
+  font-size: 8px;
+}
+
+.play-action-empty {
+  padding: 9px;
+  color: var(--muted);
+  border: 1px dashed var(--line);
+  font-size: 9px;
+}
+
+.play-search-panel .candidate-list {
+  max-height: 210px;
+  overflow-y: auto;
+}
+
+.play-action-log-scroll {
+  max-height: 360px;
+}
+
 canvas {
   width: 100%;
   height: 100%;
@@ -2840,6 +3283,7 @@ footer {
   .overview-grid,
   .selfplay-grid,
   .history-grid,
+  .play-grid,
   .diagnostics-grid {
     grid-template-columns: 1fr;
   }
@@ -2865,7 +3309,9 @@ footer {
   }
 
   .setup-editor-fields,
-  .setup-editor-factions {
+  .setup-editor-factions,
+  .play-config-fields,
+  .play-config-seats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -2960,8 +3406,51 @@ footer {
   }
 
   .setup-editor-fields,
-  .setup-editor-factions {
+  .setup-editor-factions,
+  .play-config-fields,
+  .play-config-seats {
     grid-template-columns: 1fr;
+  }
+
+  .play-config-panel,
+  .play-board-panel,
+  .play-role-panel,
+  .play-action-panel,
+  .play-search-panel {
+    padding: 14px;
+  }
+
+  .play-config-panel .panel-heading,
+  .play-config-subheading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .play-message {
+    max-width: 100%;
+  }
+
+  .play-config-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .play-status-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .play-status-strip > div:nth-child(odd) {
+    border-left: 0;
+  }
+
+  .play-status-strip > div:last-child {
+    grid-column: 1 / -1;
+    border-top: 1px solid var(--line);
+  }
+
+  .play-star-map-frame {
+    height: 410px;
   }
 
   .setup-config-tabs {

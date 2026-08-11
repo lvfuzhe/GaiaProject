@@ -13,7 +13,22 @@ from urllib.parse import parse_qs, urlparse
 import numpy as np
 
 from gaiazero.game import GaiaHeuristicEvaluator, GaiaState
+from gaiazero.game.gaia_state import (
+    BUILD_OFFSET,
+    FEDERATION_ACTION,
+    GAIA_OFFSET,
+    PASS_BOOSTER_OFFSET,
+    PASS_FINAL_ACTION,
+    POWER_OFFSET,
+    RESEARCH_OFFSET,
+    TECH_OFFSET,
+    UPGRADE_ACADEMY_OFFSET,
+    UPGRADE_LAB_OFFSET,
+    UPGRADE_PI_OFFSET,
+    UPGRADE_TRADING_OFFSET,
+)
 from gaiazero.mcts import PUCTSearch, SearchConfig
+from gaiazero.model import NetworkEvaluator, load_checkpoint
 from gaiazero.telemetry import (
     JsonlTelemetry,
     build_history_index,
@@ -27,6 +42,7 @@ ASSETS = {
     "/index.html": ("index.html", "text/html; charset=utf-8"),
     "/setup/random": ("index.html", "text/html; charset=utf-8"),
     "/setup/manual": ("index.html", "text/html; charset=utf-8"),
+    "/play": ("index.html", "text/html; charset=utf-8"),
     "/styles.css": ("styles.css", "text/css; charset=utf-8"),
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
 }
@@ -75,6 +91,8 @@ class DashboardServer(ThreadingHTTPServer):
         self.quiet = quiet
         self.simulation_lock = threading.Lock()
         self.simulation: dict[str, Any] = {"status": "idle"}
+        self.play_lock = threading.Lock()
+        self.play_session: dict[str, Any] = {"status": "idle"}
         super().__init__(address, DashboardRequestHandler)
 
 
@@ -98,6 +116,10 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         if request.path == "/api/simulation":
             self._send_json(self._simulation_status())
             return
+        if request.path == "/api/play":
+            with self.server.play_lock:
+                self._send_json(_interactive_session_snapshot(self.server.play_session))
+            return
         asset = ASSETS.get(request.path)
         if asset is None:
             self.send_error(HTTPStatus.NOT_FOUND)
@@ -111,6 +133,9 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         request = urlparse(self.path)
+        if request.path.startswith("/api/play/"):
+            self._handle_play_request(request.path)
+            return
         if request.path not in ("/api/setup/preview", "/api/simulation"):
             self.send_error(HTTPStatus.NOT_FOUND)
             return
@@ -158,6 +183,131 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         )
         worker.start()
         self._send_json(self._simulation_status(), HTTPStatus.ACCEPTED)
+
+    def _handle_play_request(self, path: str) -> None:
+        try:
+            payload = self._read_json_body()
+            if path == "/api/play/start":
+                config = _normalize_manual_config(payload)
+                roles = _normalize_player_roles(payload.get("roles"), config["players"])
+                initial = _manual_initial_state(config)
+                session = _create_interactive_session(initial, config, roles)
+                with self.server.play_lock:
+                    if self.server.play_session.get("busy"):
+                        self._send_json(
+                            {"error": "the current AI move is still running"},
+                            HTTPStatus.CONFLICT,
+                        )
+                        return
+                    self.server.play_session = session
+                    response = _interactive_session_snapshot(session)
+                self._send_json(response, HTTPStatus.CREATED)
+                return
+            if path == "/api/play/action":
+                self._handle_human_action(payload)
+                return
+            if path == "/api/play/ai":
+                self._handle_ai_action()
+                return
+            if path == "/api/play/roles":
+                self._handle_role_change(payload)
+                return
+            self.send_error(HTTPStatus.NOT_FOUND)
+        except (json.JSONDecodeError, TypeError, ValueError) as error:
+            self._send_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+
+    def _handle_human_action(self, payload: dict[str, Any]) -> None:
+        action = int(payload.get("action", -1))
+        with self.server.play_lock:
+            session = self.server.play_session
+            state = _active_interactive_state(session)
+            if session.get("busy"):
+                self._send_json({"error": "AI move is running"}, HTTPStatus.CONFLICT)
+                return
+            if session["roles"][state.current_player] != "human":
+                self._send_json(
+                    {"error": "the current player is controlled by AI"},
+                    HTTPStatus.CONFLICT,
+                )
+                return
+            if action not in state.legal_actions():
+                raise ValueError(f"illegal action {action}")
+            _apply_interactive_action(session, action, "human")
+            response = _interactive_session_snapshot(session)
+        self._send_json(response)
+
+    def _handle_role_change(self, payload: dict[str, Any]) -> None:
+        with self.server.play_lock:
+            session = self.server.play_session
+            state = session.get("state")
+            if not isinstance(state, GaiaState):
+                raise ValueError("no interactive game has been started")
+            if session.get("busy"):
+                self._send_json({"error": "AI move is running"}, HTTPStatus.CONFLICT)
+                return
+            session["roles"] = _normalize_player_roles(
+                payload.get("roles"),
+                state.num_players,
+            )
+            session["revision"] += 1
+            response = _interactive_session_snapshot(session)
+        self._send_json(response)
+
+    def _handle_ai_action(self) -> None:
+        with self.server.play_lock:
+            session = self.server.play_session
+            state = _active_interactive_state(session)
+            if session.get("busy"):
+                self._send_json({"error": "AI move is already running"}, HTTPStatus.CONFLICT)
+                return
+            if session["roles"][state.current_player] != "ai":
+                self._send_json(
+                    {"error": "the current player is controlled by a human"},
+                    HTTPStatus.CONFLICT,
+                )
+                return
+            session["busy"] = True
+            session_id = session["session_id"]
+            player = state.current_player
+            search = session["searches"][player]
+
+        try:
+            result = search.run(state, add_root_noise=False, temperature=0.0)
+            action = int(np.argmax(result.policy))
+            top_actions = np.argsort(result.policy)[-3:][::-1]
+            search_summary = {
+                "root_value": result.root_value.tolist(),
+                "candidates": [
+                    {
+                        **_interactive_action_snapshot(state, int(candidate)),
+                        "probability": float(result.policy[candidate]),
+                        "visits": int(result.visits[candidate]),
+                    }
+                    for candidate in top_actions
+                    if result.policy[candidate] > 0
+                ],
+            }
+        except Exception as error:
+            with self.server.play_lock:
+                if self.server.play_session.get("session_id") == session_id:
+                    self.server.play_session["busy"] = False
+                    self.server.play_session["error"] = f"{type(error).__name__}: {error}"
+            self._send_json(
+                {"error": f"{type(error).__name__}: {error}"},
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
+            return
+
+        with self.server.play_lock:
+            session = self.server.play_session
+            if session.get("session_id") != session_id or session.get("state") is not state:
+                session["busy"] = False
+                self._send_json({"error": "game state changed during AI search"}, HTTPStatus.CONFLICT)
+                return
+            _apply_interactive_action(session, action, "ai", search_summary)
+            session["busy"] = False
+            response = _interactive_session_snapshot(session)
+        self._send_json(response)
 
     def _serve_events(self, query: dict[str, list[str]]) -> None:
         try:
@@ -478,6 +628,177 @@ def _public_setup_snapshot(state: GaiaState) -> dict[str, object]:
         booster["owner"] = -1
     snapshot["setup"]["player_choices_resolved"] = False
     return snapshot
+
+
+def _normalize_player_roles(value: object, players: int) -> list[str]:
+    if value is None:
+        return ["human", *(["ai"] * (players - 1))]
+    if not isinstance(value, list) or len(value) != players:
+        raise ValueError("roles must contain one human or ai entry per player")
+    roles = [str(role).lower() for role in value]
+    if any(role not in ("human", "ai") for role in roles):
+        raise ValueError("roles may only contain human or ai")
+    return roles
+
+
+def _interactive_action_snapshot(state: GaiaState, action: int) -> dict[str, Any]:
+    target: int | None = None
+    if BUILD_OFFSET <= action < GAIA_OFFSET:
+        kind = "starting_placement" if state.is_starting_placement else "build"
+        target = action - BUILD_OFFSET
+    elif GAIA_OFFSET <= action < UPGRADE_TRADING_OFFSET:
+        kind, target = "gaia", action - GAIA_OFFSET
+    elif UPGRADE_TRADING_OFFSET <= action < UPGRADE_LAB_OFFSET:
+        kind, target = "upgrade_trading", action - UPGRADE_TRADING_OFFSET
+    elif UPGRADE_LAB_OFFSET <= action < UPGRADE_PI_OFFSET:
+        kind, target = "upgrade_lab", action - UPGRADE_LAB_OFFSET
+    elif UPGRADE_PI_OFFSET <= action < UPGRADE_ACADEMY_OFFSET:
+        kind, target = "upgrade_pi", action - UPGRADE_PI_OFFSET
+    elif UPGRADE_ACADEMY_OFFSET <= action < RESEARCH_OFFSET:
+        kind, target = "upgrade_academy", action - UPGRADE_ACADEMY_OFFSET
+    elif RESEARCH_OFFSET <= action < POWER_OFFSET:
+        kind = "research"
+    elif POWER_OFFSET <= action < TECH_OFFSET:
+        kind = "power"
+    elif TECH_OFFSET <= action < FEDERATION_ACTION:
+        kind = "technology"
+    elif action == FEDERATION_ACTION:
+        kind = "federation"
+    elif PASS_BOOSTER_OFFSET <= action < PASS_FINAL_ACTION:
+        kind = "pass_booster"
+    elif action == PASS_FINAL_ACTION:
+        kind = "pass_final"
+    else:
+        kind = "other"
+    return {
+        "id": int(action),
+        "label": state.describe_action(action),
+        "kind": kind,
+        "target": target,
+    }
+
+
+def _interactive_ai_components(
+    state: GaiaState,
+) -> tuple[object, str]:
+    checkpoint = Path.cwd() / "runs" / "models" / f"gaia-standard-{state.num_players}p.pt"
+    if checkpoint.is_file():
+        try:
+            model, _metadata = load_checkpoint(checkpoint, "cpu")
+            expected = (state.observation_size, state.action_size, state.num_players)
+            actual = (
+                model.config.observation_size,
+                model.config.action_size,
+                model.config.num_players,
+            )
+            if actual == expected:
+                return NetworkEvaluator(model, "cpu"), "AlphaZero + PIMCTS"
+        except Exception:
+            pass
+    return GaiaHeuristicEvaluator(), "Heuristic PIMCTS"
+
+
+def _create_interactive_session(
+    initial: GaiaState,
+    config: dict[str, Any],
+    roles: list[str],
+) -> dict[str, Any]:
+    evaluator, engine = _interactive_ai_components(initial)
+    searches = [
+        PUCTSearch(
+            evaluator,
+            SearchConfig(
+                simulations=config["simulations"],
+                c_puct=1.5,
+                root_noise_fraction=0.0,
+                seed=config["seed"] + player,
+            ),
+        )
+        for player in range(initial.num_players)
+    ]
+    return {
+        "status": "active",
+        "session_id": f"play-{uuid.uuid4().hex[:10]}",
+        "config": dict(config),
+        "roles": roles,
+        "state": initial,
+        "searches": searches,
+        "engine": engine,
+        "move": 0,
+        "history": [],
+        "last_action": None,
+        "last_search": None,
+        "busy": False,
+        "error": None,
+        "revision": 0,
+    }
+
+
+def _active_interactive_state(session: dict[str, Any]) -> GaiaState:
+    state = session.get("state")
+    if not isinstance(state, GaiaState):
+        raise ValueError("no interactive game has been started")
+    if state.is_terminal:
+        raise ValueError("the interactive game is already complete")
+    return state
+
+
+def _apply_interactive_action(
+    session: dict[str, Any],
+    action: int,
+    role: str,
+    search_summary: dict[str, Any] | None = None,
+) -> None:
+    before = _active_interactive_state(session)
+    player = before.current_player
+    if action not in before.legal_actions():
+        raise ValueError(f"illegal action {action}")
+    after = before.apply(action)
+    session["state"] = after
+    session["move"] += 1
+    session["revision"] += 1
+    session["last_action"] = {
+        "move": session["move"],
+        "player": player,
+        "role": role,
+        **_interactive_action_snapshot(before, action),
+    }
+    session["last_search"] = search_summary
+    session["history"].append(session["last_action"])
+    session["error"] = None
+    if after.is_terminal:
+        session["status"] = "complete"
+
+
+def _interactive_session_snapshot(session: dict[str, Any]) -> dict[str, Any]:
+    if session.get("status") == "idle":
+        return {"status": "idle"}
+    state = session["state"]
+    state_snapshot = state.snapshot()
+    current_player = None if state.is_terminal else state.current_player
+    legal_actions = [] if state.is_terminal else [
+        _interactive_action_snapshot(state, action)
+        for action in state.legal_actions()
+    ]
+    config = dict(session["config"])
+    config["random_setup"] = _resolved_random_setup(state)
+    return {
+        "status": session["status"],
+        "session_id": session["session_id"],
+        "move": session["move"],
+        "revision": session["revision"],
+        "busy": bool(session.get("busy")),
+        "error": session.get("error"),
+        "roles": list(session["roles"]),
+        "current_role": None if current_player is None else session["roles"][current_player],
+        "ai_engine": session["engine"],
+        "config": config,
+        "state": state_snapshot,
+        "legal_actions": legal_actions,
+        "last_action": session.get("last_action"),
+        "last_search": session.get("last_search"),
+        "history": list(session["history"]),
+    }
 
 
 def _run_single_simulation(

@@ -32,7 +32,7 @@
 
   <nav class="tabs" aria-label="监控视图">
     <button class="tab active" type="button" data-view="overview" aria-selected="true">概览</button>
-    <button class="tab" type="button" data-view="setup" aria-selected="false">初始设置</button>
+    <button class="tab" type="button" data-view="play" aria-selected="false">人工对战</button>
     <button class="tab" type="button" data-view="selfplay" aria-selected="false">自博弈</button>
     <button class="tab" type="button" data-view="history" aria-selected="false">历史回放</button>
     <button class="tab" type="button" data-view="diagnostics" aria-selected="false">诊断</button>
@@ -142,12 +142,20 @@
       </section>
     </section>
 
-    <section id="setup" class="view" aria-labelledby="setup-title" hidden>
-      <h2 id="setup-title" class="sr-only">初始设置</h2>
+    <section id="play" class="view" aria-labelledby="play-title" hidden>
+      <h2 id="play-title" class="sr-only">人工玩家与 AI 对战</h2>
+      <div class="play-workspace-tabs content-band" role="tablist" aria-label="人工对战步骤">
+        <button class="active" type="button" role="tab" aria-selected="true" data-play-workspace="setup"><span>01</span>初始设置</button>
+        <button type="button" role="tab" aria-selected="false" data-play-workspace="match"><span>02</span>角色与对局</button>
+      </div>
+
+      <div id="play-setup-workspace">
+      <section id="setup" aria-labelledby="setup-title">
+      <h2 id="setup-title" class="sr-only">人工对局初始设置</h2>
       <div id="setup-empty" class="history-empty panel">当前规则快照没有初始设置数据</div>
       <section class="setup-editor content-band" aria-labelledby="setup-editor-title">
         <div class="setup-editor-heading">
-          <div><p class="eyebrow">Manual configuration</p><h3 id="setup-editor-title">手动设置与单局模拟</h3></div>
+          <div><p class="eyebrow">Match configuration</p><h3 id="setup-editor-title">人工对局初始设置</h3></div>
           <span id="setup-editor-status" class="setup-editor-status ready" role="status" aria-live="polite">就绪</span>
         </div>
         <form id="setup-editor-form">
@@ -155,7 +163,7 @@
             <label><span>玩家人数</span><select id="setup-editor-players"><option value="2">2 人</option><option value="3">3 人</option><option value="4">4 人</option></select></label>
             <label><span>随机种子</span><input id="setup-editor-seed" type="number" min="0" max="2147483647" step="1" value="0"></label>
             <label><span>首位玩家</span><select id="setup-editor-first-player"></select></label>
-            <label><span>PIMCTS 搜索/步</span><input id="setup-editor-simulations" type="number" min="1" max="128" step="1" value="8"></label>
+            <input id="setup-editor-simulations" type="hidden" value="8">
           </div>
           <div class="setup-editor-subheading"><strong>座位与种族</strong><span>同一张双面板仅可选择一面</span></div>
           <div id="setup-editor-factions" class="setup-editor-factions"></div>
@@ -233,7 +241,7 @@
           <div class="setup-editor-actions">
             <button id="setup-editor-randomize" class="secondary-command" type="button">随机配置</button>
             <button id="setup-editor-preview" class="secondary-command" type="submit">应用预览</button>
-            <button id="setup-editor-run" class="primary-command" type="button"><span aria-hidden="true">▶</span>运行单局</button>
+            <button id="setup-editor-run" class="primary-command" type="button"><span aria-hidden="true">→</span>确认并配置角色</button>
           </div>
         </form>
       </section>
@@ -335,6 +343,124 @@
           </div>
           <div id="setup-booster-grid" class="booster-setup-grid"></div>
         </section>
+      </div>
+    </section>
+      </div>
+
+      <div id="play-match-workspace" hidden>
+      <section class="panel play-config-panel content-band">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Interactive match</p>
+            <h3>角色与对局控制</h3>
+          </div>
+          <span id="play-config-message" class="play-message ready" role="status" aria-live="polite">就绪</span>
+        </div>
+        <form id="play-config-form">
+          <div class="play-config-fields">
+            <div><span>玩家人数</span><strong id="play-config-players-summary">2 人</strong></div>
+            <div><span>随机种子</span><strong id="play-config-seed-summary">0</strong></div>
+            <div><span>首位玩家</span><strong id="play-config-first-player-summary">P0</strong></div>
+            <label><span>AI 搜索/步</span><input id="play-config-simulations" type="number" min="1" max="128" step="1" value="8"></label>
+          </div>
+          <div class="play-config-subheading"><strong>玩家控制方式</strong><span>种族来自初始设置；对局开始后仍可切换人工 / AI</span></div>
+          <div id="play-config-seats" class="play-config-seats"></div>
+          <div class="play-config-actions">
+            <button id="play-back-to-setup" class="secondary-command" type="button"><span aria-hidden="true">←</span>修改初始设置</button>
+            <button id="play-start" class="primary-command" type="submit"><span aria-hidden="true">▶</span>开始新对局</button>
+          </div>
+        </form>
+      </section>
+
+      <div id="play-empty" class="history-empty panel content-band">创建一局对战后，星图和合法动作会显示在这里</div>
+
+      <div id="play-content" hidden>
+        <section class="play-status-strip content-band" aria-label="当前对局状态">
+          <div><span>阶段</span><strong id="play-phase">--</strong></div>
+          <div><span>当前行动</span><strong id="play-current-player">P--</strong></div>
+          <div><span>控制方式</span><strong id="play-current-role">--</strong></div>
+          <div><span>行动数</span><strong id="play-move-count">0</strong></div>
+          <div><span>AI 引擎</span><strong id="play-ai-engine">--</strong></div>
+        </section>
+
+        <div class="play-grid content-band">
+          <section class="panel board-panel play-board-panel">
+            <div class="panel-heading">
+              <div><p class="eyebrow">Live board</p><h3>交互星图</h3></div>
+              <span id="play-board-round" class="compact-value">第 -- 轮</span>
+            </div>
+            <div class="board-frame play-star-map-frame">
+              <canvas id="play-board-canvas" tabindex="0" aria-label="可点击的玩家与 AI 对战星图"></canvas>
+              <div id="play-board-empty" class="canvas-empty">等待对局状态</div>
+            </div>
+            <div class="terrain-legend" aria-label="星球图例">
+              <span><i class="terrain t0"></i>地球型</span><span><i class="terrain t1"></i>沙漠</span>
+              <span><i class="terrain t2"></i>沼泽</span><span><i class="terrain t3"></i>火山</span>
+              <span><i class="terrain t4"></i>氧化</span><span><i class="terrain t5"></i>钛金</span>
+              <span><i class="terrain t6"></i>冰冻</span><span><i class="terrain t7"></i>跨维</span>
+              <span><i class="terrain t8"></i>盖亚</span>
+            </div>
+          </section>
+
+          <div class="play-control-column">
+            <section class="panel play-role-panel">
+              <div class="panel-heading">
+                <div><p class="eyebrow">Seat control</p><h3>玩家控制</h3></div>
+                <label class="toggle"><input id="play-auto-ai" type="checkbox" checked><span>AI 自动行动</span></label>
+              </div>
+              <div id="play-live-roles" class="play-live-roles"></div>
+              <button id="play-ai-step" class="secondary-command play-ai-step" type="button"><span aria-hidden="true">▶</span>AI 执行一步</button>
+            </section>
+
+            <section class="panel play-action-panel">
+              <div class="panel-heading">
+                <div><p class="eyebrow">Legal actions</p><h3>人工操作</h3></div>
+                <span id="play-legal-count" class="muted">0 项</span>
+              </div>
+              <div id="play-turn-notice" class="play-turn-notice">等待对局</div>
+              <div class="play-selected-planet"><span>选中星球</span><strong id="play-selected-planet">未选择</strong></div>
+              <div class="play-action-group"><span>星球动作</span><div id="play-planet-actions" class="play-action-list"></div></div>
+              <div class="play-action-group"><span>其他动作</span><div id="play-general-actions" class="play-action-list"></div></div>
+            </section>
+
+            <section class="panel play-search-panel">
+              <div class="panel-heading"><div><p class="eyebrow">AI search</p><h3>最近搜索</h3></div></div>
+              <div id="play-search-candidates" class="candidate-list"><div class="candidate-empty">暂无 AI 搜索</div></div>
+              <div class="value-vector"><span>根价值</span><div id="play-root-values">--</div></div>
+            </section>
+          </div>
+        </div>
+
+        <section class="panel content-band players-panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow">Players</p><h3>玩家状态</h3></div>
+            <span id="play-active-player" class="muted">当前行动 --</span>
+          </div>
+          <div class="table-scroll"><table>
+            <thead><tr><th>玩家</th><th>分数</th><th>信用点</th><th>矿石</th><th>知识</th><th>QIC</th><th>能量 I/II/III</th><th>研究轨</th><th>联盟</th><th>状态</th></tr></thead>
+            <tbody id="play-players-table"><tr><td colspan="10" class="empty-cell">暂无玩家状态</td></tr></tbody>
+          </table></div>
+        </section>
+
+        <section class="content-band player-boards-panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow">Personal boards</p><h3>个人主版图</h3></div>
+            <span class="muted">随对局状态更新</span>
+          </div>
+          <div id="play-player-board-grid" class="player-board-grid"></div>
+        </section>
+
+        <section class="panel content-band history-log-panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow">Action log</p><h3>本局行动</h3></div>
+            <span id="play-action-log-count" class="muted">0 步</span>
+          </div>
+          <div class="table-scroll play-action-log-scroll"><table>
+            <thead><tr><th>步</th><th>玩家</th><th>控制</th><th>动作</th></tr></thead>
+            <tbody id="play-action-log"><tr><td colspan="4" class="empty-cell">暂无动作</td></tr></tbody>
+          </table></div>
+        </section>
+      </div>
       </div>
     </section>
 
