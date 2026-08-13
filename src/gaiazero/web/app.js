@@ -2443,6 +2443,80 @@ function renderPersonalBoards(containerId, snapshot) {
   container.dataset.signature = signature;
 }
 
+function renderLiveResearchBoard(snapshot) {
+  const stage = byId("play-research-stage");
+  const techLayer = byId("play-research-tech");
+  const markerLayer = byId("play-research-markers");
+  const legend = byId("play-research-player-legend");
+  const playersContainer = byId("play-research-players");
+  const status = byId("play-research-status");
+  if (!stage || !techLayer || !markerLayer || !legend || !playersContainer || !status) return;
+
+  const setup = snapshot?.setup;
+  const players = snapshot?.players || [];
+  if (!setup?.standard_tech || !setup?.advanced_tech || !players.length) {
+    status.textContent = "等待科研轨数据";
+    techLayer.innerHTML = "";
+    markerLayer.innerHTML = "";
+    legend.innerHTML = "";
+    playersContainer.innerHTML = '<div class="play-research-empty">暂无科研轨状态</div>';
+    return;
+  }
+
+  const standardByTrack = new Map(setup.standard_tech.filter((tile) => tile.track).map((tile) => [tile.track, tile]));
+  const advancedByTrack = new Map(setup.advanced_tech.map((tile) => [tile.track, tile]));
+  const freeStandardTech = setup.standard_tech.filter((tile) => !tile.track);
+  const techSignature = [
+    ...setup.standard_tech.map((tile) => `s${tile.space}:${tile.id}`),
+    ...setup.advanced_tech.map((tile, index) => `a${index}:${tile.id}`),
+  ].join("|");
+  if (techLayer.dataset.signature !== techSignature) {
+    const trackTechSlots = Object.entries(TRACK_LABELS).flatMap(([track, label], trackIndex) => {
+      const standard = standardByTrack.get(track);
+      const advanced = advancedByTrack.get(track);
+      const standardName = setupLabel(standard);
+      const advancedName = ADVANCED_TECH_NAMES[advanced?.id] || advanced?.label || "--";
+      return [
+        `<span class="research-tech-slot advanced track-${trackIndex}" role="img" tabindex="0" aria-label="${escapeHtml(label)}高级科技：${escapeHtml(advancedName)}" title="${escapeHtml(label)}高级科技 · ${escapeHtml(advancedName)}"><img src="${tileAsset("advanced", advanced?.id, advanced?.key)}" alt="" aria-hidden="true"></span>`,
+        `<span class="research-tech-slot standard track-${trackIndex}" role="img" tabindex="0" aria-label="${escapeHtml(label)}基础科技：${escapeHtml(standardName)}" title="${escapeHtml(label)}基础科技 · ${escapeHtml(standardName)}"><img src="${tileAsset("standard", standard?.id, standard?.key)}" alt="" aria-hidden="true"></span>`,
+      ];
+    });
+    const freeTechSlots = freeStandardTech.map((tile, index) => {
+      const name = setupLabel(tile);
+      return `<span class="research-tech-slot standard free-${index}" role="img" tabindex="0" aria-label="通用基础科技 ${index + 1}：${escapeHtml(name)}" title="通用基础科技 ${index + 1} · ${escapeHtml(name)}"><img src="${tileAsset("standard", tile.id, tile.key)}" alt="" aria-hidden="true"></span>`;
+    });
+    techLayer.innerHTML = [...trackTechSlots, ...freeTechSlots].join("");
+    techLayer.dataset.signature = techSignature;
+  }
+
+  markerLayer.innerHTML = Object.entries(TRACK_LABELS).flatMap(([track, label], trackIndex) =>
+    Array.from({ length: 6 }, (_, level) => {
+      const atLevel = players.filter((player) => Number(player.tracks?.[trackIndex] || 0) === level);
+      if (!atLevel.length) return "";
+      const names = atLevel.map((player) => `P${player.id} ${player.faction || ""}`).join("、");
+      return `<div class="research-board-position track-${trackIndex} level-${level}" aria-label="${escapeHtml(label)}等级 ${level}：${escapeHtml(names)}">${atLevel.map((player) => `<span class="research-marker p${player.id}" title="P${player.id} ${escapeHtml(player.faction || "")}">P${player.id}</span>`).join("")}</div>`;
+    })
+  ).join("");
+  legend.innerHTML = players.map((player) => `<span><i class="player-mini p${player.id}"></i>P${player.id} ${escapeHtml(player.faction || "")}</span>`).join("");
+  playersContainer.innerHTML = players.map((player) => {
+    const tracks = Array.isArray(player.tracks) ? player.tracks : [];
+    const highest = Math.max(0, ...tracks.map((value) => Number(value || 0)));
+    const trackRows = Object.entries(TRACK_LABELS).map(([track, label], index) => {
+      const level = Number(tracks[index] || 0);
+      return `<div class="play-research-track"><span>${escapeHtml(label)}</span><strong>L${level}</strong><i><b style="width:${Math.min(100, level / 5 * 100)}%"></b></i></div>`;
+    }).join("");
+    const playerColor = PLAYER_COLORS[player.id] || PLAYER_COLORS[0];
+    return `<article class="play-research-player ${player.id === snapshot.current_player ? "current" : ""}" style="--research-player-color:${playerColor}">
+      <div class="play-research-player-heading"><strong><i class="player-color p${player.id}"></i>P${player.id} ${escapeHtml(player.faction || "")}</strong><span>最高 L${highest}</span></div>
+      <div class="play-research-track-list">${trackRows}</div>
+    </article>`;
+  }).join("");
+  const active = snapshot.current_player === null || snapshot.current_player === undefined
+    ? "对局已结束"
+    : `当前行动 P${snapshot.current_player}`;
+  status.textContent = `${active} · ${players.length} 位玩家`;
+}
+
 const PLAY_ACTION_LABELS = {
   starting_placement: "放置起始基地",
   select_booster: "选择起始助推板块",
@@ -2874,6 +2948,7 @@ function renderPlay() {
     : "撤销最近一次人工操作";
   renderPlayActions(session);
   renderPlaySearch(session);
+  renderLiveResearchBoard(snapshot);
   renderPlayerRows("play-players-table", snapshot, "play-active-player");
   renderPersonalBoards("play-player-board-grid", snapshot);
   const history = session.history || [];
