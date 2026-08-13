@@ -143,6 +143,7 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("function prepareInteractiveMatch", app_script)
             self.assertIn("function submitHumanAction", app_script)
             self.assertIn("function runInteractiveAiTurn", app_script)
+            self.assertIn("function undoInteractiveTurn", app_script)
             self.assertIn("function updateLivePlayRole", app_script)
             self.assertIn("function planetAtPlayEvent", app_script)
             self.assertNotIn("function runManualSimulation", app_script)
@@ -433,6 +434,8 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(game["status"], "active")
             self.assertEqual(game["roles"], ["human", "ai"])
             self.assertEqual(game["current_role"], "human")
+            self.assertFalse(game["can_undo"])
+            initial_state = game["state"]
             self.assertEqual(game["config"]["random_setup"], random_setup)
             self.assertEqual(
                 [tile["id"] for tile in game["state"]["setup"]["round_scoring"]],
@@ -454,6 +457,8 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(game["move"], 1)
             self.assertEqual(game["history"][0]["role"], "human")
             self.assertEqual(game["current_role"], "ai")
+            self.assertTrue(game["can_undo"])
+            self.assertEqual(game["undo_count"], 1)
 
             _, game = self.post_json(
                 f"{base}/api/play/roles",
@@ -473,11 +478,23 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(game["history"][-1]["role"], "ai")
             self.assertEqual(game["last_action"]["player"], 1)
             self.assertTrue(game["last_search"]["candidates"])
+            self.assertTrue(game["can_undo"])
+            self.assertEqual(game["undo_count"], 2)
+
+            _, game = self.post_json(f"{base}/api/play/undo", {})
+            self.assertEqual(game["undone_actions"], 2)
+            self.assertEqual(game["move"], 0)
+            self.assertEqual(game["history"], [])
+            self.assertIsNone(game["last_action"])
+            self.assertIsNone(game["last_search"])
+            self.assertFalse(game["can_undo"])
+            self.assertEqual(game["current_role"], "human")
+            self.assertEqual(game["state"], initial_state)
 
             with urlopen(f"{base}/api/play", timeout=5) as response:
                 restored = json.loads(response.read())
             self.assertEqual(restored["session_id"], game["session_id"])
-            self.assertEqual(restored["move"], 2)
+            self.assertEqual(restored["move"], 0)
         finally:
             server.shutdown()
             server.server_close()

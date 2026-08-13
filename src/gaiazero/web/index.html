@@ -409,7 +409,10 @@
                 <label class="toggle"><input id="play-auto-ai" type="checkbox" checked><span>AI 自动行动</span></label>
               </div>
               <div id="play-live-roles" class="play-live-roles"></div>
-              <button id="play-ai-step" class="secondary-command play-ai-step" type="button"><span aria-hidden="true">▶</span>AI 执行一步</button>
+              <div class="play-turn-controls">
+                <button id="play-undo" class="secondary-command play-undo" type="button" title="撤销最近一次人工操作"><span aria-hidden="true">↶</span>撤销</button>
+                <button id="play-ai-step" class="secondary-command play-ai-step" type="button"><span aria-hidden="true">▶</span>AI 执行一步</button>
+              </div>
             </section>
 
             <section class="panel play-action-panel">

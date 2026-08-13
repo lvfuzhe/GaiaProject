@@ -214,6 +214,9 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             if path == "/api/play/ai":
                 self._handle_ai_action()
                 return
+            if path == "/api/play/undo":
+                self._handle_play_undo()
+                return
             if path == "/api/play/roles":
                 self._handle_role_change(payload)
                 return
@@ -256,6 +259,19 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             )
             session["revision"] += 1
             response = _interactive_session_snapshot(session)
+        self._send_json(response)
+
+    def _handle_play_undo(self) -> None:
+        with self.server.play_lock:
+            session = self.server.play_session
+            state = session.get("state")
+            if not isinstance(state, GaiaState):
+                raise ValueError("no interactive game has been started")
+            if session.get("busy"):
+                self._send_json({"error": "AI move is running"}, HTTPStatus.CONFLICT)
+                return
+            undone = _undo_interactive_action(session)
+            response = {**_interactive_session_snapshot(session), "undone_actions": undone}
         self._send_json(response)
 
     def _handle_ai_action(self) -> None:
@@ -731,6 +747,7 @@ def _create_interactive_session(
         "engine": engine,
         "move": 0,
         "history": [],
+        "undo_stack": [],
         "last_action": None,
         "last_search": None,
         "busy": False,
@@ -758,6 +775,13 @@ def _apply_interactive_action(
     player = before.current_player
     if action not in before.legal_actions():
         raise ValueError(f"illegal action {action}")
+    session["undo_stack"].append(
+        {
+            "state": before,
+            "status": session["status"],
+            "last_search": session.get("last_search"),
+        }
+    )
     after = before.apply(action)
     session["state"] = after
     session["move"] += 1
@@ -775,6 +799,42 @@ def _apply_interactive_action(
         session["status"] = "complete"
 
 
+def _undo_interactive_action(session: dict[str, Any]) -> int:
+    history = session.get("history", [])
+    undo_stack = session.get("undo_stack", [])
+    human_index = next(
+        (index for index in range(len(history) - 1, -1, -1) if history[index]["role"] == "human"),
+        None,
+    )
+    if human_index is None:
+        raise ValueError("no human action is available to undo")
+    if len(undo_stack) != len(history):
+        raise ValueError("interactive undo history is inconsistent")
+
+    frame = undo_stack[human_index]
+    undone = len(history) - human_index
+    del history[human_index:]
+    del undo_stack[human_index:]
+    session["state"] = frame["state"]
+    session["status"] = frame["status"]
+    session["move"] = len(history)
+    session["last_action"] = history[-1] if history else None
+    session["last_search"] = frame["last_search"]
+    session["busy"] = False
+    session["error"] = None
+    session["revision"] += 1
+    return undone
+
+
+def _interactive_undo_count(session: dict[str, Any]) -> int:
+    history = session.get("history", [])
+    human_index = next(
+        (index for index in range(len(history) - 1, -1, -1) if history[index]["role"] == "human"),
+        None,
+    )
+    return 0 if human_index is None else len(history) - human_index
+
+
 def _interactive_session_snapshot(session: dict[str, Any]) -> dict[str, Any]:
     if session.get("status") == "idle":
         return {"status": "idle"}
@@ -787,6 +847,7 @@ def _interactive_session_snapshot(session: dict[str, Any]) -> dict[str, Any]:
     ]
     config = dict(session["config"])
     config["random_setup"] = _resolved_random_setup(state)
+    undo_count = _interactive_undo_count(session)
     return {
         "status": session["status"],
         "session_id": session["session_id"],
@@ -803,6 +864,8 @@ def _interactive_session_snapshot(session: dict[str, Any]) -> dict[str, Any]:
         "last_action": session.get("last_action"),
         "last_search": session.get("last_search"),
         "history": list(session["history"]),
+        "can_undo": undo_count > 0 and not session.get("busy"),
+        "undo_count": undo_count,
     }
 
 

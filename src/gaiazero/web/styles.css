@@ -2288,6 +2288,18 @@ h3 {
   gap: 8px;
 }
 
+.play-turn-controls {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr);
+  gap: 7px;
+}
+
+.play-turn-controls .secondary-command {
+  width: 100%;
+  margin: 0;
+}
+
 .play-status-strip {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));

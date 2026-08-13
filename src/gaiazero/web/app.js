@@ -2613,6 +2613,29 @@ async function runInteractiveAiTurn() {
   }
 }
 
+async function undoInteractiveTurn() {
+  const session = state.play.session;
+  if (!session?.can_undo || state.play.requestBusy || session.busy) return;
+  state.play.requestEpoch += 1;
+  state.play.requestBusy = true;
+  state.play.autoAi = false;
+  byId("play-auto-ai").checked = false;
+  setPlayMessage("正在撤销最近一次人工操作", "running");
+  renderPlay();
+  try {
+    const updated = await postPlay("/api/play/undo");
+    state.play.selectedPlanetId = null;
+    const count = Number(updated.undone_actions || 1);
+    setPlayMessage(`已撤销 ${count} 步${count > 1 ? "（含后续 AI 动作）" : ""}`, "complete");
+    acceptPlaySession(updated);
+  } catch (error) {
+    setPlayMessage(error.message || String(error), "failed");
+  } finally {
+    state.play.requestBusy = false;
+    renderPlay();
+  }
+}
+
 async function updateLivePlayRole(player, role) {
   const session = state.play.session;
   if (!session || state.play.requestBusy || session.busy) return;
@@ -2788,6 +2811,12 @@ function renderPlay() {
     || session.current_role !== "ai"
     || state.play.requestBusy
     || session.busy;
+  byId("play-undo").disabled = !session.can_undo
+    || state.play.requestBusy
+    || session.busy;
+  byId("play-undo").title = session.undo_count > 1
+    ? `撤销最近一次人工操作及其后的 ${session.undo_count - 1} 步 AI 动作`
+    : "撤销最近一次人工操作";
   renderPlayActions(session);
   renderPlaySearch(session);
   renderPlayerRows("play-players-table", snapshot, "play-active-player");
@@ -3014,6 +3043,7 @@ byId("play-auto-ai").addEventListener("change", (event) => {
   renderPlay();
 });
 byId("play-ai-step").addEventListener("click", runInteractiveAiTurn);
+byId("play-undo").addEventListener("click", undoInteractiveTurn);
 byId("setup-editor-players").addEventListener("change", () => {
   state.manualSetup.edited = true;
   state.manualSetup.preview = null;
