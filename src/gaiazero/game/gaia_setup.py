@@ -94,6 +94,7 @@ def generate_setup(
     faction_boards: tuple[tuple[int, int], ...],
     faction_homes: tuple[int, ...],
     faction_starting_structures: tuple[int, ...],
+    faction_places_last: tuple[bool, ...],
     faction_indices: tuple[int, ...] | None = None,
     first_player: int | None = None,
     sector_tiles: tuple[int, ...] | None = None,
@@ -229,6 +230,7 @@ def generate_setup(
         selected_first_player,
         selected_factions,
         faction_starting_structures,
+        faction_places_last,
         num_players,
     )
     random_boosters = tuple(
@@ -623,12 +625,27 @@ def _starting_placement_order(
     first_player: int,
     faction_indices: tuple[int, ...],
     faction_starting_structures: tuple[int, ...],
+    faction_places_last: tuple[bool, ...],
     num_players: int,
 ) -> tuple[int, ...]:
-    """Return the player sequence for the snake-shaped starting placement."""
+    """Return snake placement followed by factions whose setup rule places last."""
     forward = tuple((first_player + offset) % num_players for offset in range(num_players))
+    regular_players = tuple(
+        player
+        for player in forward
+        if not faction_places_last[faction_indices[player]]
+    )
+    last_players = tuple(
+        player
+        for player in forward
+        if faction_places_last[faction_indices[player]]
+    )
     max_structures = max(
-        faction_starting_structures[faction] for faction in faction_indices
+        (
+            faction_starting_structures[faction_indices[player]]
+            for player in regular_players
+        ),
+        default=0,
     )
     order: list[int] = []
     for layer in range(max_structures):
@@ -636,8 +653,10 @@ def _starting_placement_order(
         order.extend(
             player
             for player in sequence
+            if player in regular_players
             if faction_starting_structures[faction_indices[player]] > layer
         )
+    order.extend(last_players)
     return tuple(order)
 
 

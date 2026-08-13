@@ -86,7 +86,7 @@ const FACTION_ABILITIES = {
   Taklons: "脑石强化能量循环",
   Ambas: "行星研究院可与矿场交换",
   "Hadsch Hallas": "信用点可执行扩展自由行动",
-  Ivits: "以行星研究院作为起始建筑",
+  Ivits: "所有玩家放完起始矿场后，最后放置行星研究院",
   Geodens: "殖民新星球类型时获得知识",
   "Bal T'aks": "盖亚塑形者可转换为 Q.I.C.",
   Firaks: "可降级研究所并推进科研",
@@ -102,7 +102,7 @@ const BASE_FACTIONS = [
   { id: 4, board: 3, side: "A", name: "Taklons", home_terrain: 2, start_track: "economy", starting_power: [2, 4, 0], starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
   { id: 5, board: 3, side: "B", name: "Ambas", home_terrain: 2, start_track: "navigation", starting_power: [4, 4, 0], starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
   { id: 6, board: 4, side: "A", name: "Hadsch Hallas", home_terrain: 4, start_track: "economy", starting_power: [2, 4, 0], starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
-  { id: 7, board: 4, side: "B", name: "Ivits", home_terrain: 4, start_track: "navigation", starting_power: [4, 4, 0], starting_qic: 1, starting_structures: 1, starts_with_pi: true, federation_threshold: 7 },
+  { id: 7, board: 4, side: "B", name: "Ivits", home_terrain: 4, start_track: "navigation", starting_power: [4, 4, 0], starting_qic: 1, starting_structures: 1, starts_with_pi: true, places_last: true, federation_threshold: 7 },
   { id: 8, board: 5, side: "A", name: "Geodens", home_terrain: 3, start_track: "terraforming", starting_power: [2, 4, 0], starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
   { id: 9, board: 5, side: "B", name: "Bal T'aks", home_terrain: 3, start_track: "gaia_project", starting_power: [4, 4, 0], starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
   { id: 10, board: 6, side: "A", name: "Firaks", home_terrain: 5, start_track: "science", starting_power: [2, 4, 0], starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
@@ -639,8 +639,8 @@ function renderSetup(snapshot) {
   const factionCard = (faction, assignment = null) => {
     const startingPower = faction.starting_power || [];
     const startBuilding = faction.starts_with_pi
-      ? "行星研究院"
-      : `${faction.starting_structures ?? 2} 座矿场`;
+      ? (faction.places_last ? "最后放置行星研究院" : "起始行星研究院")
+      : `起始 ${faction.starting_structures ?? 2} 座矿场`;
     const seat = assignment
       ? `P${assignment.player}${assignment.player === snapshot.first_player ? " · 首位" : ""}`
       : `个人版图 ${faction.board}${faction.side}`;
@@ -654,7 +654,7 @@ function renderSetup(snapshot) {
         <div class="faction-setup-meta">
           <span class="setup-tag">${TERRAIN_LABELS[faction.home_terrain]}</span>
           <span class="setup-tag">${TRACK_LABELS[faction.start_track] || faction.start_track} +1</span>
-          <span class="setup-tag">起始 ${startBuilding}</span>
+          <span class="setup-tag">${startBuilding}</span>
           ${startingPower.length ? `<span class="setup-tag">能量 ${startingPower.join(" / ")}</span>` : ""}
           <span class="setup-tag">Q.I.C. ${faction.starting_qic ?? 1}</span>
           ${faction.federation_threshold === 6 ? `<span class="setup-tag">联邦强度 6</span>` : ""}

@@ -63,6 +63,7 @@ class FactionSpec:
     starting_qic: int = 1
     starting_structures: int = 2
     starts_with_pi: bool = False
+    places_last: bool = False
     federation_threshold: int = 7
     gaia_to_bowl_two: bool = False
     passive_power_token: bool = False
@@ -77,7 +78,7 @@ FACTIONS: tuple[FactionSpec, ...] = (
     FactionSpec("Taklons", Terrain.SWAMP, Track.ECONOMY, (2, 4, 0), 2, "Brainstone strengthens the power cycle", passive_power_token=True),
     FactionSpec("Ambas", Terrain.SWAMP, Track.NAVIGATION, (4, 4, 0), 2, "Planetary institute can swap with a mine"),
     FactionSpec("Hadsch Hallas", Terrain.OXIDE, Track.ECONOMY, (2, 4, 0), 3, "Credits unlock expanded free actions"),
-    FactionSpec("Ivits", Terrain.OXIDE, Track.NAVIGATION, (4, 4, 0), 3, "Starts with its planetary institute", starting_structures=1, starts_with_pi=True),
+    FactionSpec("Ivits", Terrain.OXIDE, Track.NAVIGATION, (4, 4, 0), 3, "Places its starting planetary institute after all starting mines", starting_structures=1, starts_with_pi=True, places_last=True),
     FactionSpec("Geodens", Terrain.VOLCANIC, Track.TERRAFORMING, (2, 4, 0), 4, "Knowledge for newly colonized planet types", knowledge_for_new_type=True),
     FactionSpec("Bal T'aks", Terrain.VOLCANIC, Track.GAIA_PROJECT, (4, 4, 0), 4, "Gaiaformers can be converted to Q.I.C."),
     FactionSpec("Firaks", Terrain.TITANIUM, Track.SCIENCE, (2, 4, 0), 5, "May downgrade a research lab to research"),
@@ -353,6 +354,7 @@ class GaiaState:
             faction_starting_structures=tuple(
                 faction.starting_structures for faction in FACTIONS
             ),
+            faction_places_last=tuple(faction.places_last for faction in FACTIONS),
             faction_indices=faction_indices,
             first_player=first_player,
             sector_tiles=sector_tiles,
@@ -1455,6 +1457,9 @@ class GaiaState:
                         "home_terrain": int(FACTIONS[info.faction].home),
                         "start_track": FACTIONS[info.faction].start_track.name.lower(),
                         "ability": FACTIONS[info.faction].ability,
+                        "starting_structures": FACTIONS[info.faction].starting_structures,
+                        "starts_with_pi": FACTIONS[info.faction].starts_with_pi,
+                        "places_last": FACTIONS[info.faction].places_last,
                         "starting_planets": list(self.starting_planets[player]),
                     }
                     for player, info in enumerate(self.players)
@@ -1472,6 +1477,7 @@ class GaiaState:
                         "starting_qic": faction.starting_qic,
                         "starting_structures": faction.starting_structures,
                         "starts_with_pi": faction.starts_with_pi,
+                        "places_last": faction.places_last,
                         "federation_threshold": faction.federation_threshold,
                     }
                     for faction_id, faction in enumerate(FACTIONS)

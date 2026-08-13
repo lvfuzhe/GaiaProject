@@ -34,7 +34,8 @@ class StandardGaiaRulesTests(unittest.TestCase):
 
         self.assertEqual(state.action_size, 447)
         self.assertEqual(len(state.players[0].tracks), 6)
-        self.assertEqual(state.current_player, 3)
+        self.assertEqual(state.first_player, 3)
+        self.assertEqual(state.current_player, state.placement_order[0])
         self.assertEqual(sum(state.active_planets), 61)
         self.assertEqual(len(state.sector_tiles), 10)
         self.assertEqual(sum(owner >= 0 for owner in state.owners), 0)
@@ -87,6 +88,11 @@ class StandardGaiaRulesTests(unittest.TestCase):
             faction["side"] in ("A", "B")
             for faction in setup["factions"]
         ))
+        ivits = next(
+            faction for faction in setup["faction_catalog"] if faction["name"] == "Ivits"
+        )
+        self.assertTrue(ivits["starts_with_pi"])
+        self.assertTrue(ivits["places_last"])
         self.assertEqual(len(setup["boosters"]), 6)
         self.assertEqual(len(setup["round_scoring"]), 6)
         self.assertEqual(len(setup["final_scoring"]), 2)
@@ -200,11 +206,35 @@ class StandardGaiaRulesTests(unittest.TestCase):
             first_player=0,
         )
 
-        self.assertEqual(state.placement_order, (0, 1, 1))
+        self.assertEqual(state.placement_order, (1, 1, 0))
+        self.assertEqual(state.current_player, 1)
+        state = state.apply(state.legal_actions()[0])
+        self.assertEqual(state.current_player, 1)
+        state = state.apply(state.legal_actions()[0])
+        self.assertEqual(state.current_player, 0)
+        self.assertIn("planetary institute", state.describe_action(state.legal_actions()[0]))
         state = state.apply(state.legal_actions()[0])
         planet = state.starting_planets[0][0]
         self.assertEqual(state.buildings[planet], Building.PLANETARY_INSTITUTE)
-        self.assertTrue(state.describe_action(state.legal_actions()[0]).startswith("place starting"))
+        self.assertFalse(state.is_starting_placement)
+
+    def test_ivits_places_after_xenos_third_starting_mine(self) -> None:
+        state = GaiaState.initial(
+            3,
+            seed=12,
+            faction_indices=(7, 2, 4),
+            first_player=0,
+        )
+
+        self.assertEqual(state.placement_order, (1, 2, 2, 1, 1, 0))
+        self.assertEqual(state.placement_order[-1], 0)
+        for expected_player in state.placement_order[:-1]:
+            self.assertEqual(state.current_player, expected_player)
+            action = state.legal_actions()[0]
+            self.assertIn("mine", state.describe_action(action))
+            state = state.apply(action)
+        self.assertEqual(state.current_player, 0)
+        self.assertIn("planetary institute", state.describe_action(state.legal_actions()[0]))
 
     def test_manual_setup_rejects_two_sides_of_the_same_faction_board(self) -> None:
         with self.assertRaisesRegex(ValueError, "different double-sided boards"):
