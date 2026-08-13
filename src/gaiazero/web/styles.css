@@ -982,9 +982,9 @@ main {
 .faction-board-art {
   display: block;
   width: 100%;
-  aspect-ratio: 980 / 641;
-  object-fit: cover;
-  background: #e6e4d6;
+  aspect-ratio: 1638 / 934;
+  object-fit: contain;
+  background: #11131a;
   border-bottom: 1px solid var(--line);
 }
 
@@ -3078,11 +3078,11 @@ tbody tr:hover {
 .personal-board-faction-art {
   display: block;
   width: 100%;
-  aspect-ratio: 980 / 641;
-  object-fit: cover;
+  aspect-ratio: 1638 / 934;
+  object-fit: contain;
   border: 1px solid var(--line-strong);
   border-radius: 3px;
-  background: #e6e4d6;
+  background: #11131a;
 }
 
 .personal-board-faction-art.asset-fallback {

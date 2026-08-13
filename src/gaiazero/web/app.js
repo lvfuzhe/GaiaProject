@@ -571,7 +571,7 @@ function factionBoardAsset(id) {
 }
 
 function factionPlayerBoardAsset(id) {
-  return `/assets/factions/player-board-${String(Number(id) + 1).padStart(2, "0")}.jpg`;
+  return `/assets/factions/player-board-${String(Number(id) + 1).padStart(2, "0")}.jpg?source=bga-260630-1810`;
 }
 
 function finalMetric(snapshot, key, playerId) {
@@ -649,7 +649,7 @@ function renderSetup(snapshot) {
       ? `P${assignment.player}${assignment.player === snapshot.first_player ? " · 首位" : ""}`
       : `个人版图 ${faction.board}${faction.side}`;
     return `<article class="faction-setup-item ${assignment ? "assigned" : ""}">
-      <img class="faction-board-art" src="${factionPlayerBoardAsset(faction.id)}" data-faction-board="${faction.id}" alt="${escapeHtml(faction.name)} 完整个人主板组合图">
+      <img class="faction-board-art" src="${factionPlayerBoardAsset(faction.id)}" data-faction-board="${faction.id}" alt="${escapeHtml(faction.name)} BGA 完整个人主板">
       <div class="faction-card-body">
         <div class="faction-setup-head">
           <div><span class="faction-seat">${seat}</span><strong>${escapeHtml(faction.name)}</strong></div>
@@ -2412,8 +2412,8 @@ function renderPersonalBoards(containerId, snapshot) {
           </header>
           <div class="personal-board-overview">
             <figure class="personal-board-artwork">
-              <img class="personal-board-faction-art" src="${factionPlayerBoardAsset(factionId)}" data-faction-board="${factionId}" alt="${escapeHtml(player.faction || "种族")}完整个人主板组合图">
-              <figcaption>版图 ${faction.board}${faction.side} · 主板组合预览</figcaption>
+              <img class="personal-board-faction-art" src="${factionPlayerBoardAsset(factionId)}" data-faction-board="${factionId}" alt="${escapeHtml(player.faction || "种族")} BGA 完整个人主板">
+              <figcaption>版图 ${faction.board}${faction.side} · BGA 完整主板</figcaption>
             </figure>
             <div class="personal-board-resources">
               <div class="personal-resource-grid">${resources}</div>
@@ -3320,7 +3320,7 @@ document.addEventListener("error", (event) => {
   image.dataset.fallbackApplied = "true";
   image.classList.add("asset-fallback");
   image.src = factionBoardAsset(Number(image.dataset.factionBoard));
-  image.alt = image.alt.replace("完整个人主板组合图", "种族板图片");
+  image.alt = image.alt.replace("BGA 完整个人主板", "种族板图片");
 }, true);
 window.addEventListener("resize", () => {
   renderLossChart();

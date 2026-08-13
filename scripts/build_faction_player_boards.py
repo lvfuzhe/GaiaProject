@@ -1,78 +1,55 @@
-"""Build the 14 complete player-board previews from the shared board and faction strips."""
+"""Download the 14 verified player boards used by Board Game Arena."""
 
 from __future__ import annotations
 
+from hashlib import sha256
 from pathlib import Path
-
-from PIL import Image
-
+from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSET_DIR = ROOT / "src" / "gaiazero" / "web" / "assets" / "factions"
-TEMPLATE = ASSET_DIR / "player-board-template.jpg"
-TEMPLATE_CROP = (10, 58, 990, 699)
-FACTION_PANEL = (520, 78, 980, 274)
-COMMON_BOARD_START_Y = 276
-
-FACTION_COLORS = (
-    "#4d78b8",  # Terrans
-    "#4d78b8",  # Lantids
-    "#d7a93e",  # Xenos
-    "#d7a93e",  # Gleens
-    "#967248",  # Taklons
-    "#967248",  # Ambas
-    "#ba5640",  # Hadsch Hallas
-    "#ba5640",  # Ivits
-    "#d86b39",  # Geodens
-    "#d86b39",  # Bal T'aks
-    "#8b8f96",  # Firaks
-    "#8b8f96",  # Bescods
-    "#b7d8e7",  # Nevlas
-    "#b7d8e7",  # Itars
+BGA_ASSET_ROOT = (
+    "https://x.boardgamearena.net/data/themereleases/260812-1015/"
+    "games/gaiaproject/260630-1810/img"
+)
+PLAYER_BOARDS = (
+    ("Terrans", "B8C804C4CD83E4CA52183B771EB221D9761592169E62B6FF15D906522F1E1CE6"),
+    ("Lantids", "EFFE0E9DF5A5611CD325381D2332B10E6C719D4E0A91D0DBF70050EDD83C7691"),
+    ("Xenos", "9615BC9FD6CDD9D882CFFAFF969F42807B358E9027272F008F011FB676FB7D90"),
+    ("Gleens", "5925510A5C0D64EF1FA070DFF4B01F7D75789971C3C41ACDB2A57FB2A5842C52"),
+    ("Taklons", "C2A729135041A8D9E6D57A44995917856299B8333279AC19EA27F7B6FFEAAF43"),
+    ("Ambas", "FE9FFE039C2DFB1A11488A5E42451560894D90391879FF2119AA6B76DD096869"),
+    ("Hadsch Hallas", "AA267C6020E1CF80C3ACC1F451EE30FB4DC600B8AAF3D79013C37603CB0F6676"),
+    ("Ivits", "141EBCEFE4A26D9FA0F96DE7A1080B1E994145FCC04EA435B661D860784A0385"),
+    ("Geodens", "AC61AA9C4F7A5E7076A2ABD02811A5E13F9E675CCE704C9F79E8C7BE921A8B52"),
+    ("Bal T'aks", "FC106493FADEFC60F19B6583DDA59BB6F6017E6F7D27AE18D86D5695B6D4197D"),
+    ("Firaks", "4D96FF535EE50B529ABF662AB847F3F9BB6938CFDC8AEBFFFB4FD855757E5C36"),
+    ("Bescods", "ED328DFD860A9D0428100D299E8A9BB66FD88E789A0D6D883216CFF457C50CC1"),
+    ("Nevlas", "A8AD6A1F676C5712F2650979260A7333507EC4367AC8E2C070CE6B9AC42F58A1"),
+    ("Itars", "38A05D18A67CDBD9FD11E5BA8F13398AF0B4DA294449359B5760DC7D782B33CF"),
 )
 
 
-def _tint_common_board(image: Image.Image, color: str) -> Image.Image:
-    """Retint only the printed player-color regions while preserving icon colors."""
-    hsv = image.convert("HSV")
-    pixels = hsv.load()
-    target_h, target_s, _target_v = Image.new("RGB", (1, 1), color).convert("HSV").getpixel((0, 0))
-
-    for y in range(COMMON_BOARD_START_Y, hsv.height):
-        for x in range(hsv.width):
-            hue, saturation, value = pixels[x, y]
-            is_red_print = saturation >= 52 and (hue <= 18 or hue >= 238)
-            if not is_red_print:
-                continue
-            if target_s < 45:
-                saturation = max(10, int(saturation * 0.18))
-            else:
-                saturation = max(38, min(255, int(saturation * 0.72 + target_s * 0.28)))
-            pixels[x, y] = (target_h, saturation, value)
-    return hsv.convert("RGB")
-
-
 def build() -> list[Path]:
-    if not TEMPLATE.is_file():
-        raise FileNotFoundError(f"missing shared player-board template: {TEMPLATE}")
-
-    template = Image.open(TEMPLATE).convert("RGB").crop(TEMPLATE_CROP)
-    panel_width = FACTION_PANEL[2] - FACTION_PANEL[0]
-    panel_height = FACTION_PANEL[3] - FACTION_PANEL[1]
+    ASSET_DIR.mkdir(parents=True, exist_ok=True)
     outputs: list[Path] = []
 
-    for number, color in enumerate(FACTION_COLORS, start=1):
-        strip_path = ASSET_DIR / f"faction-{number:02d}.jpg"
-        if not strip_path.is_file():
-            raise FileNotFoundError(f"missing faction strip: {strip_path}")
-        strip = Image.open(strip_path).convert("RGB").resize(
-            (panel_width, panel_height),
-            Image.Resampling.LANCZOS,
+    for number, (faction, expected_hash) in enumerate(PLAYER_BOARDS, start=1):
+        request = Request(
+            f"{BGA_ASSET_ROOT}/race{number}.jpg",
+            headers={"User-Agent": "GaiaProject asset updater"},
         )
-        board = _tint_common_board(template.copy(), color)
-        board.paste(strip, FACTION_PANEL[:2])
+        with urlopen(request, timeout=60) as response:
+            content = response.read()
+        digest = sha256(content).hexdigest().upper()
+        if not content.startswith(b"\xff\xd8\xff") or digest != expected_hash:
+            raise ValueError(
+                f"BGA race{number} ({faction}) failed validation: {digest}"
+            )
         output = ASSET_DIR / f"player-board-{number:02d}.jpg"
-        board.save(output, "JPEG", quality=94, subsampling=1, optimize=True, progressive=True)
+        temporary = output.with_suffix(".jpg.tmp")
+        temporary.write_bytes(content)
+        temporary.replace(output)
         outputs.append(output)
 
     return outputs
