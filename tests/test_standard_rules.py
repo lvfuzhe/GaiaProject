@@ -70,6 +70,19 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(sum(owner != -2 for owner in first.booster_owner), first.num_players + 3)
         self.assertEqual(len(first.booster_owner), BOOSTER_COUNT)
 
+    def test_faction_starting_qic_matches_initial_setup_rules(self) -> None:
+        state = GaiaState.initial(
+            2,
+            faction_indices=(13, 9),
+            first_player=0,
+        )
+
+        self.assertEqual(state.players[0].qic, 1)  # Itars
+        self.assertEqual(state.players[1].qic, 0)  # Bal T'aks
+        catalog = state.snapshot()["setup"]["faction_catalog"]
+        self.assertEqual(next(f["starting_qic"] for f in catalog if f["name"] == "Itars"), 1)
+        self.assertEqual(next(f["starting_qic"] for f in catalog if f["name"] == "Bal T'aks"), 0)
+
     def test_snapshot_preserves_complete_initial_setup(self) -> None:
         snapshot = GaiaState.initial(3, seed=41).snapshot()
         setup = snapshot["setup"]

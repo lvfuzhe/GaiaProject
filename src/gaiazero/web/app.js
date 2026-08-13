@@ -104,11 +104,11 @@ const BASE_FACTIONS = [
   { id: 6, board: 4, side: "A", name: "Hadsch Hallas", home_terrain: 4, start_track: "economy", starting_power: [2, 4, 0], starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
   { id: 7, board: 4, side: "B", name: "Ivits", home_terrain: 4, start_track: "navigation", starting_power: [4, 4, 0], starting_qic: 1, starting_structures: 1, starts_with_pi: true, places_last: true, federation_threshold: 7 },
   { id: 8, board: 5, side: "A", name: "Geodens", home_terrain: 3, start_track: "terraforming", starting_power: [2, 4, 0], starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
-  { id: 9, board: 5, side: "B", name: "Bal T'aks", home_terrain: 3, start_track: "gaia_project", starting_power: [4, 4, 0], starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
+  { id: 9, board: 5, side: "B", name: "Bal T'aks", home_terrain: 3, start_track: "gaia_project", starting_power: [4, 4, 0], starting_qic: 0, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
   { id: 10, board: 6, side: "A", name: "Firaks", home_terrain: 5, start_track: "science", starting_power: [2, 4, 0], starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
   { id: 11, board: 6, side: "B", name: "Bescods", home_terrain: 5, start_track: "economy", starting_power: [2, 4, 0], starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
   { id: 12, board: 7, side: "B", name: "Nevlas", home_terrain: 6, start_track: "science", starting_power: [2, 4, 0], starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
-  { id: 13, board: 7, side: "A", name: "Itars", home_terrain: 6, start_track: "gaia_project", starting_power: [4, 4, 0], starting_qic: 0, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
+  { id: 13, board: 7, side: "A", name: "Itars", home_terrain: 6, start_track: "gaia_project", starting_power: [4, 4, 0], starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
 ];
 const STANDARD_TECH_KEYS = [
   "ore-income", "knowledge-income", "credits-income", "gaia-vp", "power-income",

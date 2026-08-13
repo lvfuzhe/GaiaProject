@@ -80,11 +80,11 @@ FACTIONS: tuple[FactionSpec, ...] = (
     FactionSpec("Hadsch Hallas", Terrain.OXIDE, Track.ECONOMY, (2, 4, 0), 3, "Credits unlock expanded free actions"),
     FactionSpec("Ivits", Terrain.OXIDE, Track.NAVIGATION, (4, 4, 0), 3, "Places its starting planetary institute after all starting mines", starting_structures=1, starts_with_pi=True, places_last=True),
     FactionSpec("Geodens", Terrain.VOLCANIC, Track.TERRAFORMING, (2, 4, 0), 4, "Knowledge for newly colonized planet types", knowledge_for_new_type=True),
-    FactionSpec("Bal T'aks", Terrain.VOLCANIC, Track.GAIA_PROJECT, (4, 4, 0), 4, "Gaiaformers can be converted to Q.I.C."),
+    FactionSpec("Bal T'aks", Terrain.VOLCANIC, Track.GAIA_PROJECT, (4, 4, 0), 4, "Gaiaformers can be converted to Q.I.C.", starting_qic=0),
     FactionSpec("Firaks", Terrain.TITANIUM, Track.SCIENCE, (2, 4, 0), 5, "May downgrade a research lab to research"),
     FactionSpec("Bescods", Terrain.TITANIUM, Track.ECONOMY, (2, 4, 0), 5, "Lowest research areas advance together"),
     FactionSpec("Nevlas", Terrain.ICE, Track.SCIENCE, (2, 4, 0), 6, "Bowl III power counts double for free actions"),
-    FactionSpec("Itars", Terrain.ICE, Track.GAIA_PROJECT, (4, 4, 0), 6, "Gaia power can buy technology", starting_qic=0),
+    FactionSpec("Itars", Terrain.ICE, Track.GAIA_PROJECT, (4, 4, 0), 6, "Gaia power can buy technology", starting_qic=1),
 )
 
 FACTION_BOARDS: tuple[tuple[int, int], ...] = (
