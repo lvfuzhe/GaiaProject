@@ -982,10 +982,14 @@ main {
 .faction-board-art {
   display: block;
   width: 100%;
-  aspect-ratio: 392 / 167;
+  aspect-ratio: 980 / 641;
   object-fit: cover;
   background: #e6e4d6;
   border-bottom: 1px solid var(--line);
+}
+
+.faction-board-art.asset-fallback {
+  aspect-ratio: 392 / 167;
 }
 
 .faction-card-body {
@@ -2866,19 +2870,45 @@ tbody tr:hover {
 .personal-board-overview {
   margin-top: 12px;
   display: grid;
-  grid-template-columns: minmax(280px, 392px) minmax(260px, 1fr);
+  grid-template-columns: minmax(320px, 490px) minmax(260px, 1fr);
   align-items: stretch;
   gap: 16px;
+}
+
+.personal-board-artwork {
+  min-width: 0;
+  margin: 0;
+  position: relative;
 }
 
 .personal-board-faction-art {
   display: block;
   width: 100%;
-  aspect-ratio: 392 / 167;
+  aspect-ratio: 980 / 641;
   object-fit: cover;
   border: 1px solid var(--line-strong);
   border-radius: 3px;
   background: #e6e4d6;
+}
+
+.personal-board-faction-art.asset-fallback {
+  aspect-ratio: 392 / 167;
+}
+
+.personal-board-artwork figcaption {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  max-width: calc(100% - 12px);
+  padding: 4px 6px;
+  overflow: hidden;
+  color: #f5f7f6;
+  background: rgb(11 19 26 / 82%);
+  border-radius: 2px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 7px;
+  font-weight: 700;
 }
 
 .personal-board-resources {
@@ -3352,7 +3382,7 @@ footer {
   }
 
   .personal-board-overview {
-    grid-template-columns: minmax(260px, 360px) minmax(240px, 1fr);
+    grid-template-columns: minmax(300px, 440px) minmax(240px, 1fr);
   }
 }
 

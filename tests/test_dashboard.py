@@ -78,9 +78,12 @@ class DashboardTests(unittest.TestCase):
                 research_board_image = response.read()
                 research_board_content_type = response.headers.get_content_type()
             faction_assets = []
+            player_board_assets = []
             for number in range(1, 15):
                 with urlopen(f"{base}/assets/factions/faction-{number:02d}.jpg", timeout=5) as response:
                     faction_assets.append((response.headers.get_content_type(), response.read()))
+                with urlopen(f"{base}/assets/factions/player-board-{number:02d}.jpg", timeout=5) as response:
+                    player_board_assets.append((response.headers.get_content_type(), response.read()))
             tile_assets = {}
             for path in (
                 "tech-standard-01.jpg",
@@ -160,6 +163,15 @@ class DashboardTests(unittest.TestCase):
                 content_type == "image/jpeg" and content.startswith(b"\xff\xd8")
                 for content_type, content in faction_assets
             ))
+            self.assertTrue(all(
+                content_type == "image/jpeg"
+                and content.startswith(b"\xff\xd8")
+                and len(content) > 100_000
+                for content_type, content in player_board_assets
+            ))
+            self.assertEqual(len({content for _content_type, content in player_board_assets}), 14)
+            self.assertIn("function factionPlayerBoardAsset", app_script)
+            self.assertIn("完整个人主板组合图", app_script)
             for name, (content_type, content) in tile_assets.items():
                 expected_type = "image/gif" if name.endswith(".gif") else "image/jpeg"
                 self.assertEqual(content_type, expected_type)

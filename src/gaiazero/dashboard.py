@@ -70,6 +70,11 @@ for number in range(1, 11):
 for number in range(1, 15):
     name = f"faction-{number:02d}.jpg"
     ASSETS[f"/assets/factions/{name}"] = (f"assets/factions/{name}", "image/jpeg")
+    board_name = f"player-board-{number:02d}.jpg"
+    ASSETS[f"/assets/factions/{board_name}"] = (
+        f"assets/factions/{board_name}",
+        "image/jpeg",
+    )
 ASSETS["/assets/boards/research-board.png"] = (
     "assets/boards/research-board.png",
     "image/png",

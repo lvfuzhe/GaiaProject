@@ -1,4 +1,4 @@
-# Faction board artwork
+# Faction and player-board artwork
 
 The 14 faction board scans in this directory were downloaded from the
 [BoardGameHelpers Gaia Project setup tool](https://www.boardgamehelpers.com/GaiaProject/LoadGame.aspx).
@@ -25,3 +25,11 @@ Source-to-local mapping:
 
 Gaia Project and its artwork are the property of their respective copyright
 holders. These files are not represented as original project artwork.
+
+The shared player-board reference in `player-board-template.jpg` comes from
+the [Ivits player-board image on Ludopedia](https://ludopedia.com.br/jogo/gaia-project/imagens/131851).
+The `player-board-01.jpg` through `player-board-14.jpg` previews are generated
+locally by `scripts/build_faction_player_boards.py`: each combines that shared
+board with the matching faction strip above and retints only the common printed
+player-color regions. They are setup/reference previews; live resources and
+structure inventory remain rendered from game state by the dashboard.
