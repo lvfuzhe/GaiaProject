@@ -1,29 +1,4 @@
-# Faction and player-board artwork
-
-The 14 faction board scans in this directory were downloaded from the
-[BoardGameHelpers Gaia Project setup tool](https://www.boardgamehelpers.com/GaiaProject/LoadGame.aspx).
-They are used only to visualize the corresponding physical player-board faces.
-
-Source-to-local mapping:
-
-| Local file | Source face | Faction |
-| --- | --- | --- |
-| `faction-01.jpg` | `Faction_TL_A.jpg` | Terrans |
-| `faction-02.jpg` | `Faction_TL_B.jpg` | Lantids |
-| `faction-03.jpg` | `Faction_XG_A.jpg` | Xenos |
-| `faction-04.jpg` | `Faction_XG_B.jpg` | Gleens |
-| `faction-05.jpg` | `Faction_TA_A.jpg` | Taklons |
-| `faction-06.jpg` | `Faction_TA_B.jpg` | Ambas |
-| `faction-07.jpg` | `Faction_HI_A.jpg` | Hadsch Hallas |
-| `faction-08.jpg` | `Faction_HI_B.jpg` | Ivits |
-| `faction-09.jpg` | `Faction_GB_A.jpg` | Geodens |
-| `faction-10.jpg` | `Faction_GB_B.jpg` | Bal T'aks |
-| `faction-11.jpg` | `Faction_FB_A.jpg` | Firaks |
-| `faction-12.jpg` | `Faction_FB_B.jpg` | Bescods |
-| `faction-13.jpg` | `Faction_IN_B.jpg` | Nevlas |
-| `faction-14.jpg` | `Faction_IN_A.jpg` | Itars |
-
-The complete `player-board-01.jpg` through `player-board-14.jpg` files are the
+The `player-board-01.jpg` through `player-board-14.jpg` files are the
 actual full faction-board backgrounds published by Board Game Arena for Gaia
 Project. They were downloaded on 2026-08-13 from BGA game release
 `260630-1810` under theme release `260812-1015`:

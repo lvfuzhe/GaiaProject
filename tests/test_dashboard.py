@@ -97,11 +97,8 @@ class DashboardTests(unittest.TestCase):
             with urlopen(f"{base}/assets/boards/research-board.png", timeout=5) as response:
                 research_board_image = response.read()
                 research_board_content_type = response.headers.get_content_type()
-            faction_assets = []
             player_board_assets = []
             for number in range(1, 15):
-                with urlopen(f"{base}/assets/factions/faction-{number:02d}.jpg", timeout=5) as response:
-                    faction_assets.append((response.headers.get_content_type(), response.read()))
                 with urlopen(f"{base}/assets/factions/player-board-{number:02d}.jpg", timeout=5) as response:
                     player_board_assets.append((response.headers.get_content_type(), response.read()))
             tile_assets = {}
@@ -186,10 +183,6 @@ class DashboardTests(unittest.TestCase):
             self.assertTrue(research_board_image.startswith(b"\x89PNG\r\n\x1a\n"))
             self.assertEqual(hashlib.sha256(research_board_image).hexdigest().upper(), RESEARCH_BOARD_SHA256)
             self.assertTrue(all(
-                content_type == "image/jpeg" and content.startswith(b"\xff\xd8")
-                for content_type, content in faction_assets
-            ))
-            self.assertTrue(all(
                 content_type == "image/jpeg"
                 and content.startswith(b"\xff\xd8")
                 and len(content) > 600_000
@@ -201,6 +194,8 @@ class DashboardTests(unittest.TestCase):
                 PLAYER_BOARD_SHA256,
             )
             self.assertIn("function factionPlayerBoardAsset", app_script)
+            self.assertNotIn("function factionBoardAsset", app_script)
+            self.assertNotIn("data-faction-board", app_script)
             self.assertIn("source=bga-260630-1810", app_script)
             self.assertNotIn("BGA 完整主板", app_script)
             self.assertIn("starting_credits", app_script)

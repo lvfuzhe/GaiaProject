@@ -988,10 +988,6 @@ main {
   border-bottom: 1px solid var(--line);
 }
 
-.faction-board-art.asset-fallback {
-  aspect-ratio: 392 / 167;
-}
-
 .faction-card-body {
   min-height: 144px;
   padding: 13px 14px 14px;
@@ -3090,10 +3086,6 @@ tbody tr:hover {
   border: 1px solid var(--line-strong);
   border-radius: 3px;
   background: #11131a;
-}
-
-.personal-board-faction-art.asset-fallback {
-  aspect-ratio: 392 / 167;
 }
 
 .personal-board-artwork figcaption {

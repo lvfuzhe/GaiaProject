@@ -566,10 +566,6 @@ function tileAsset(kind, id, key = "") {
   return prefix ? `/assets/tiles/${prefix}-${String(number).padStart(2, "0")}.${extension}` : "";
 }
 
-function factionBoardAsset(id) {
-  return `/assets/factions/faction-${String(Number(id) + 1).padStart(2, "0")}.jpg`;
-}
-
 function factionPlayerBoardAsset(id) {
   return `/assets/factions/player-board-${String(Number(id) + 1).padStart(2, "0")}.jpg?source=bga-260630-1810`;
 }
@@ -649,7 +645,7 @@ function renderSetup(snapshot) {
       ? `P${assignment.player}${assignment.player === snapshot.first_player ? " · 首位" : ""}`
       : `个人版图 ${faction.board}${faction.side}`;
     return `<article class="faction-setup-item ${assignment ? "assigned" : ""}">
-      <img class="faction-board-art" src="${factionPlayerBoardAsset(faction.id)}" data-faction-board="${faction.id}" alt="${escapeHtml(faction.name)}个人主板">
+      <img class="faction-board-art" src="${factionPlayerBoardAsset(faction.id)}" alt="${escapeHtml(faction.name)}个人主板">
       <div class="faction-card-body">
         <div class="faction-setup-head">
           <div><span class="faction-seat">${seat}</span><strong>${escapeHtml(faction.name)}</strong></div>
@@ -2415,7 +2411,7 @@ function renderPersonalBoards(containerId, snapshot) {
           </header>
           <div class="personal-board-overview">
             <figure class="personal-board-artwork">
-              <img class="personal-board-faction-art" src="${factionPlayerBoardAsset(factionId)}" data-faction-board="${factionId}" alt="${escapeHtml(player.faction || "种族")}个人主板">
+              <img class="personal-board-faction-art" src="${factionPlayerBoardAsset(factionId)}" alt="${escapeHtml(player.faction || "种族")}个人主板">
             </figure>
             <div class="personal-board-resources">
               <div class="personal-resource-grid">${resources}</div>
@@ -3315,15 +3311,6 @@ byId("history-action-table").addEventListener("click", (event) => {
     setHistoryStep(row.dataset.step);
   }
 });
-document.addEventListener("error", (event) => {
-  const image = event.target;
-  if (!(image instanceof HTMLImageElement) || !image.matches("img[data-faction-board]")) return;
-  if (image.dataset.fallbackApplied === "true") return;
-  image.dataset.fallbackApplied = "true";
-  image.classList.add("asset-fallback");
-  image.src = factionBoardAsset(Number(image.dataset.factionBoard));
-  image.alt = image.alt.replace("个人主板", "种族板图片");
-}, true);
 window.addEventListener("resize", () => {
   renderLossChart();
   renderSetup(state.manualSetup.preview);
