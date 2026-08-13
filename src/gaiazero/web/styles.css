@@ -2485,6 +2485,57 @@ h3 {
   font-size: 9px;
 }
 
+.play-action-list.booster-choice-grid {
+  max-height: 330px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.play-booster-choice {
+  min-width: 0;
+  padding: 8px 5px;
+  display: grid;
+  grid-template-rows: 118px auto auto;
+  justify-items: center;
+  gap: 4px;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-bottom: 3px solid var(--red);
+  border-radius: 3px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.play-booster-choice:hover,
+.play-booster-choice:focus-visible {
+  border-color: var(--green);
+  outline: none;
+}
+
+.play-booster-choice:disabled {
+  opacity: 0.48;
+  cursor: default;
+}
+
+.play-booster-choice img {
+  width: 38px;
+  height: 118px;
+  object-fit: contain;
+}
+
+.play-booster-choice span {
+  color: var(--muted);
+  font-size: 7px;
+}
+
+.play-booster-choice strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: center;
+  font-size: 7px;
+  line-height: 1.3;
+}
+
 .play-search-panel .candidate-list {
   max-height: 210px;
   overflow-y: auto;
@@ -3156,6 +3207,47 @@ tbody tr:hover {
   padding: 17px 14px;
   border-left: 1px solid var(--line);
   background: var(--surface-soft);
+}
+
+.personal-booster-tile {
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  border-bottom: 1px solid var(--line);
+}
+
+.personal-booster-tile img {
+  width: 38px;
+  height: 120px;
+  object-fit: contain;
+}
+
+.personal-booster-tile span,
+.personal-booster-tile strong {
+  display: block;
+}
+
+.personal-booster-tile span {
+  color: var(--muted);
+  font-size: 7px;
+}
+
+.personal-booster-tile strong {
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+  font-size: 8px;
+  line-height: 1.35;
+}
+
+.personal-booster-empty {
+  margin-bottom: 14px;
+  padding: 9px;
+  color: var(--muted);
+  border: 1px dashed var(--line);
+  font-size: 8px;
 }
 
 .owned-tech-grid {

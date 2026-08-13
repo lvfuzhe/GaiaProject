@@ -664,6 +664,7 @@ def _normalize_player_roles(value: object, players: int) -> list[str]:
 
 def _interactive_action_snapshot(state: GaiaState, action: int) -> dict[str, Any]:
     target: int | None = None
+    booster: int | None = None
     if BUILD_OFFSET <= action < GAIA_OFFSET:
         kind = "starting_placement" if state.is_starting_placement else "build"
         target = action - BUILD_OFFSET
@@ -686,7 +687,8 @@ def _interactive_action_snapshot(state: GaiaState, action: int) -> dict[str, Any
     elif action == FEDERATION_ACTION:
         kind = "federation"
     elif PASS_BOOSTER_OFFSET <= action < PASS_FINAL_ACTION:
-        kind = "pass_booster"
+        kind = "select_booster" if state.is_booster_selection else "pass_booster"
+        booster = action - PASS_BOOSTER_OFFSET
     elif action == PASS_FINAL_ACTION:
         kind = "pass_final"
     else:
@@ -696,6 +698,7 @@ def _interactive_action_snapshot(state: GaiaState, action: int) -> dict[str, Any
         "label": state.describe_action(action),
         "kind": kind,
         "target": target,
+        "booster": booster,
     }
 
 
@@ -858,6 +861,7 @@ def _interactive_session_snapshot(session: dict[str, Any]) -> dict[str, Any]:
         "roles": list(session["roles"]),
         "current_role": None if current_player is None else session["roles"][current_player],
         "ai_engine": session["engine"],
+        "booster_action_offset": PASS_BOOSTER_OFFSET,
         "config": config,
         "state": state_snapshot,
         "legal_actions": legal_actions,

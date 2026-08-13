@@ -1609,6 +1609,11 @@ function snapshotRoundLabel(snapshot, compact = false) {
     const total = Number(snapshot.placement?.total || 0);
     return compact ? `开局 ${step}/${total}` : `开局基地 ${step} / ${total}`;
   }
+  if (snapshot.phase === "booster_selection" || snapshot.booster_selection?.active) {
+    const step = Number(snapshot.booster_selection?.step || 0);
+    const total = Number(snapshot.booster_selection?.total || 0);
+    return compact ? `助推 ${step}/${total}` : `选择助推 ${step} / ${total}`;
+  }
   return compact ? `第 ${snapshot.round} 轮` : `第 ${snapshot.round} / ${snapshot.max_rounds} 轮`;
 }
 
@@ -1634,9 +1639,7 @@ function auditHistoryTrace(trace) {
     title: roundsValid && rounds.length ? "轮次顺序连续" : "轮次顺序异常",
     detail: rounds.length ? `含开局阶段，观测到 ${new Set(rounds).size} 个阶段/轮次` : "没有可验证的状态"
   });
-  const placementStates = states.filter((snapshot) => (
-    snapshot.phase === "starting_placement" || Number(snapshot.round) === 0
-  ));
+  const placementStates = states.filter((snapshot) => snapshot.phase === "starting_placement");
   const placementValid = placementStates.length > 0 && placementStates.every((snapshot) => {
     const placement = snapshot.placement || {};
     const step = Number(placement.step);
@@ -1655,6 +1658,26 @@ function auditHistoryTrace(trace) {
     detail: placementStates.length
       ? `记录了 ${placementStates.length} 个开局状态，顺序与建筑数量一致`
       : "旧日志没有开局放置阶段"
+  });
+  const boosterStates = states.filter((snapshot) => snapshot.phase === "booster_selection");
+  const boosterValid = boosterStates.length > 0 && boosterStates.every((snapshot) => {
+    const selection = snapshot.booster_selection || {};
+    const step = Number(selection.step);
+    const total = Number(selection.total);
+    const order = selection.order || [];
+    const assigned = (snapshot.setup?.boosters || []).filter((booster) => Number(booster.owner) >= 0).length;
+    return Number(snapshot.round) === 0
+      && Number.isInteger(step) && step >= 0 && step < total
+      && order.length === total
+      && Number(snapshot.current_player) === Number(order[step])
+      && assigned === step;
+  });
+  checks.push({
+    status: boosterValid ? "pass" : boosterStates.length ? "fail" : "warn",
+    title: boosterValid ? "助推板块按逆顺位选取" : "助推板块选取流程待验证",
+    detail: boosterStates.length
+      ? `记录了 ${boosterStates.length} 个助推选择状态，顺序与归属数量一致`
+      : "旧日志没有开局助推选择阶段"
   });
   const resourcesValid = states.every((snapshot) => (snapshot.players || []).every((player) => (
     Number(player.credits) >= 0 && Number(player.credits) <= 30
@@ -1715,6 +1738,12 @@ function historyDelta(previous, current, step) {
   }
   if (current.phase === "starting_placement" || current.placement?.active) {
     changes.push(`开局基地 ${current.placement?.step || 0}/${current.placement?.total || 0}`);
+  } else if (current.phase === "booster_selection") {
+    if (previous.phase === "starting_placement") changes.push("开局基地摆放完成");
+    changes.push(`选择助推 ${current.booster_selection?.step || 0}/${current.booster_selection?.total || 0}`);
+  } else if (previous.phase === "booster_selection" && Number(current.round) === 1) {
+    changes.push("助推板块选择完成");
+    changes.push("进入第 1 轮");
   } else if (previous.phase === "starting_placement" && Number(current.round) === 1) {
     changes.push("开局基地摆放完成");
     changes.push("进入第 1 轮");
@@ -2345,6 +2374,13 @@ function renderPersonalBoards(containerId, snapshot) {
       }).join("")
       : '<span class="base-location empty">尚未部署基地</span>';
     const acquiredTech = Array.isArray(player.tech_tiles) ? player.tech_tiles : [];
+    const boosterId = Number(player.booster);
+    const ownedBooster = Number.isInteger(boosterId) && boosterId >= 0
+      ? `<div class="personal-booster-tile">
+          <img src="${tileAsset("booster", boosterId)}" alt="${escapeHtml(BOOSTER_NAMES[boosterId] || `助推 ${boosterId + 1}`)}">
+          <div><span>当前助推</span><strong>${escapeHtml(BOOSTER_NAMES[boosterId] || `助推 ${boosterId + 1}`)}</strong></div>
+        </div>`
+      : '<div class="personal-booster-empty">等待选择助推板块</div>';
     const techTiles = acquiredTech.length
       ? acquiredTech.map((tileId) => {
         const id = Number(tileId);
@@ -2397,6 +2433,7 @@ function renderPersonalBoards(containerId, snapshot) {
           </section>
         </div>
         <aside class="personal-tech-rack">
+          ${ownedBooster}
           <div class="personal-tech-heading"><strong>已获科技</strong><span>${acquiredTech.length} 块</span></div>
           <div class="owned-tech-grid">${techTiles}</div>
         </aside>
@@ -2408,6 +2445,7 @@ function renderPersonalBoards(containerId, snapshot) {
 
 const PLAY_ACTION_LABELS = {
   starting_placement: "放置起始基地",
+  select_booster: "选择起始助推板块",
   build: "建造矿场",
   gaia: "启动盖亚计划",
   upgrade_trading: "升级贸易站",
@@ -2711,6 +2749,9 @@ function playPhaseLabel(snapshot) {
   if (snapshot.phase === "starting_placement") {
     return `起始基地 ${snapshot.placement.step + 1}/${snapshot.placement.total}`;
   }
+  if (snapshot.phase === "booster_selection") {
+    return `选择助推 ${snapshot.booster_selection.step + 1}/${snapshot.booster_selection.total}`;
+  }
   return `第 ${snapshot.round}/${snapshot.max_rounds} 轮`;
 }
 
@@ -2718,11 +2759,13 @@ function renderPlayActions(session) {
   const actions = session.legal_actions || [];
   const humanTurn = session.current_role === "human" && session.status === "active";
   const disabled = !humanTurn || state.play.requestBusy || session.busy;
-  const targeted = actions.filter((action) => action.target !== null && action.target !== undefined);
+  const targeted = actions.filter((action) => action.kind !== "select_booster" && action.target !== null && action.target !== undefined);
   const visibleTargeted = state.play.selectedPlanetId === null
     ? targeted
     : targeted.filter((action) => Number(action.target) === state.play.selectedPlanetId);
-  const general = actions.filter((action) => action.target === null || action.target === undefined);
+  const general = actions.filter((action) => action.kind !== "select_booster" && (action.target === null || action.target === undefined));
+  const boosterActions = actions.filter((action) => action.kind === "select_booster");
+  const otherGeneral = general.filter((action) => action.kind !== "select_booster");
   const actionButton = (action) => `<button type="button" class="play-action-command" data-play-action="${action.id}" ${disabled ? "disabled" : ""}>
     <strong>${escapeHtml(PLAY_ACTION_LABELS[action.kind] || PLAY_ACTION_LABELS.other)}${action.target === null || action.target === undefined ? "" : ` · #${action.target}`}</strong>
     <small>${escapeHtml(action.label)}</small>
@@ -2730,8 +2773,18 @@ function renderPlayActions(session) {
   byId("play-planet-actions").innerHTML = visibleTargeted.length
     ? visibleTargeted.map(actionButton).join("")
     : `<div class="play-action-empty">${state.play.selectedPlanetId === null ? "当前没有星球动作" : "所选星球当前没有合法动作"}</div>`;
-  byId("play-general-actions").innerHTML = general.length
-    ? general.map(actionButton).join("")
+  byId("play-general-actions").classList.toggle("booster-choice-grid", boosterActions.length > 0);
+  byId("play-general-actions").innerHTML = boosterActions.length
+    ? boosterActions.map((action) => {
+        const resolvedBooster = Number(action.booster);
+        const label = BOOSTER_NAMES[resolvedBooster] || action.label;
+        return `<button type="button" class="play-booster-choice" data-play-action="${action.id}" ${disabled ? "disabled" : ""}>
+          <img src="${tileAsset("booster", resolvedBooster)}" alt="${escapeHtml(label)}">
+          <span>助推 ${resolvedBooster + 1}</span><strong>${escapeHtml(label)}</strong>
+        </button>`;
+      }).join("")
+    : otherGeneral.length
+    ? otherGeneral.map(actionButton).join("")
     : '<div class="play-action-empty">当前没有其他动作</div>';
   byId("play-legal-count").textContent = `${actions.length} 项`;
   byId("play-selected-planet").textContent = state.play.selectedPlanetId === null
@@ -2745,7 +2798,9 @@ function renderPlayActions(session) {
     notice.textContent = "正在处理当前动作…";
     notice.className = "play-turn-notice ai";
   } else if (humanTurn) {
-    notice.textContent = `P${session.state.current_player} 由人工操作：点击星图筛选目标，再选择合法动作`;
+    notice.textContent = session.state.phase === "booster_selection"
+      ? `P${session.state.current_player} 由人工选择一块起始助推板块`
+      : `P${session.state.current_player} 由人工操作：点击星图筛选目标，再选择合法动作`;
     notice.className = "play-turn-notice human";
   } else {
     notice.textContent = `P${session.state.current_player} 由 AI 操作${state.play.autoAi ? "，将自动执行" : "，可手动单步"}`;

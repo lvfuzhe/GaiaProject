@@ -246,16 +246,6 @@ def generate_setup(
     booster_owner = [-2] * BOOSTER_COUNT
     for booster in selected_boosters:
         booster_owner[booster] = -1
-    turn_order = [
-        (selected_first_player + offset) % num_players
-        for offset in range(num_players)
-    ]
-    for player, booster in zip(
-        reversed(turn_order),
-        selected_boosters[:num_players],
-        strict=True,
-    ):
-        booster_owner[booster] = player
 
     random_round_scoring = tuple(
         int(value) for value in rng.choice(10, size=6, replace=False)

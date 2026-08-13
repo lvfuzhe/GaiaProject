@@ -25,6 +25,11 @@ def finish_starting_placement(state: GaiaState) -> GaiaState:
         if not legal:
             raise AssertionError("starting placement has no legal home planet")
         state = state.apply(legal[0])
+    while state.is_booster_selection:
+        legal = state.legal_actions()
+        if not legal:
+            raise AssertionError("starting booster selection has no available booster")
+        state = state.apply(legal[0])
     return state
 
 
@@ -42,7 +47,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(sum(len(planets) for planets in state.starting_planets), 0)
         self.assertEqual(state.round_number, 0)
         self.assertTrue(state.is_starting_placement)
-        self.assertEqual(state.snapshot()["ruleset"], "standard-v4")
+        self.assertEqual(state.snapshot()["ruleset"], "standard-v5")
 
     def test_random_setup_is_seeded_and_respects_component_counts(self) -> None:
         first = GaiaState.initial(2, seed=19)
@@ -69,7 +74,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         snapshot = GaiaState.initial(3, seed=41).snapshot()
         setup = snapshot["setup"]
 
-        self.assertEqual(snapshot["ruleset"], "standard-v4")
+        self.assertEqual(snapshot["ruleset"], "standard-v5")
         self.assertEqual(setup["seed"], 41)
         self.assertEqual(setup["map"]["sector_count"], 10)
         self.assertEqual(len(setup["map"]["sectors"]), 10)
@@ -192,11 +197,32 @@ class StandardGaiaRulesTests(unittest.TestCase):
             state = state.apply(legal[0])
 
         self.assertFalse(state.is_starting_placement)
-        self.assertEqual(state.round_number, 1)
-        self.assertEqual(state.current_player, 2)
+        self.assertTrue(state.is_booster_selection)
+        self.assertEqual(state.round_number, 0)
+        self.assertEqual(state.current_player, 1)
         self.assertEqual(tuple(map(len, state.starting_planets)), (2, 3, 2))
         self.assertEqual(sum(owner >= 0 for owner in state.owners), 7)
+        self.assertEqual(state.snapshot()["phase"], "booster_selection")
+
+        self.assertEqual(state.booster_selection_order, (1, 0, 2))
+        selected = []
+        for step, expected_player in enumerate((1, 0, 2)):
+            self.assertTrue(state.is_booster_selection)
+            self.assertEqual(state.current_player, expected_player)
+            self.assertEqual(state.booster_selection_step, step)
+            legal = state.legal_actions()
+            self.assertEqual(len(legal), 6 - step)
+            self.assertTrue(all("starting booster" in state.describe_action(action) for action in legal))
+            booster = legal[-1]
+            selected.append(booster)
+            state = state.apply(booster)
+
+        self.assertFalse(state.is_booster_selection)
+        self.assertEqual(state.round_number, 1)
+        self.assertEqual(state.current_player, 2)
         self.assertEqual(state.snapshot()["phase"], "round")
+        self.assertEqual(sum(owner >= 0 for owner in state.booster_owner), 3)
+        self.assertEqual(len(set(selected)), 3)
 
     def test_ivits_places_one_starting_planetary_institute(self) -> None:
         state = GaiaState.initial(
@@ -266,7 +292,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(state.advanced_tech_tiles, (14, 13, 12, 11, 10, 9))
         self.assertEqual(state.terraforming_federation_tile, 5)
         self.assertEqual(state.map_mode, "manual")
-        self.assertEqual(state.booster_owner[:6], (1, 0, 2, -1, -1, -1))
+        self.assertEqual(state.booster_owner[:6], (-1, -1, -1, -1, -1, -1))
 
     def test_manual_setup_rejects_duplicate_random_tiles(self) -> None:
         with self.assertRaisesRegex(ValueError, "sector tiles must not contain duplicates"):

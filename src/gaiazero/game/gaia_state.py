@@ -316,6 +316,8 @@ class GaiaState:
     gaiaformer_owner: tuple[int, ...]
     federated: tuple[bool, ...]
     booster_owner: tuple[int, ...]
+    booster_selection_order: tuple[int, ...]
+    booster_selection_step: int
     round_scoring_tiles: tuple[int, ...]
     final_scoring_tiles: tuple[int, ...]
     standard_tech_tiles: tuple[int, ...]
@@ -420,6 +422,10 @@ class GaiaState:
             gaiaformer_owner=tuple([-1] * N),
             federated=tuple([False] * N),
             booster_owner=setup.booster_owner,
+            booster_selection_order=tuple(
+                (first - offset - 1) % num_players for offset in range(num_players)
+            ),
+            booster_selection_step=0,
             round_scoring_tiles=setup.round_scoring_tiles,
             final_scoring_tiles=setup.final_scoring_tiles,
             standard_tech_tiles=setup.standard_tech_tiles,
@@ -451,6 +457,14 @@ class GaiaState:
     @property
     def is_starting_placement(self) -> bool:
         return self.round_number == 0 and self.placement_step < len(self.placement_order)
+
+    @property
+    def is_booster_selection(self) -> bool:
+        return (
+            self.round_number == 0
+            and self.placement_step >= len(self.placement_order)
+            and self.booster_selection_step < len(self.booster_selection_order)
+        )
 
     @property
     def pass_action(self) -> int:
@@ -509,6 +523,12 @@ class GaiaState:
                 if self.active_planets[planet]
                 and self.owners[planet] == -1
                 and Terrain(self.terrains[planet]) == home
+            )
+        if self.is_booster_selection:
+            return tuple(
+                self.pass_booster_action(booster)
+                for booster, owner in enumerate(self.booster_owner)
+                if owner == -1
             )
         if self.pending_tech_player >= 0:
             return tuple(
@@ -602,6 +622,8 @@ class GaiaState:
             return self._apply_tech(action - TECH_OFFSET)._advance_turn()
         if self.is_starting_placement and BUILD_OFFSET <= action < GAIA_OFFSET:
             return self._apply_starting_placement(action - BUILD_OFFSET)
+        if self.is_booster_selection and PASS_BOOSTER_OFFSET <= action < PASS_FINAL_ACTION:
+            return self._apply_initial_booster(action - PASS_BOOSTER_OFFSET)
         if action == PASS_FINAL_ACTION or PASS_BOOSTER_OFFSET <= action < PASS_BOOSTER_OFFSET + BOOSTER_COUNT:
             booster = -1 if action == PASS_FINAL_ACTION else action - PASS_BOOSTER_OFFSET
             return self._apply_pass(booster)
@@ -661,6 +683,25 @@ class GaiaState:
         )
         if next_step < len(self.placement_order):
             return replace(state, player_to_move=self.placement_order[next_step])
+        return replace(
+            state,
+            player_to_move=self.booster_selection_order[0],
+        )
+
+    def _apply_initial_booster(self, booster: int) -> GaiaState:
+        player = self.player_to_move
+        boosters = list(self.booster_owner)
+        if boosters[booster] != -1:
+            raise ValueError("starting booster is unavailable")
+        boosters[booster] = player
+        next_step = self.booster_selection_step + 1
+        state = replace(
+            self,
+            booster_owner=tuple(boosters),
+            booster_selection_step=next_step,
+        )
+        if next_step < len(self.booster_selection_order):
+            return replace(state, player_to_move=self.booster_selection_order[next_step])
         return replace(
             state,
             round_number=1,
@@ -1208,7 +1249,13 @@ class GaiaState:
         return np.tanh(centered / scale).astype(np.float32)
 
     def observation(self) -> FloatArray:
-        values: list[float] = [self.round_number / MAX_ROUNDS, self.num_players / 4.0]
+        values: list[float] = [
+            self.round_number / MAX_ROUNDS,
+            self.num_players / 4.0,
+            float(self.is_starting_placement),
+            float(self.is_booster_selection),
+            self.booster_selection_step / max(1, self.num_players),
+        ]
         values.extend(float(self.player_to_move == player) for player in range(self.num_players))
         values.extend(float(self.first_player == player) for player in range(self.num_players))
         values.extend(float(self.used_power_actions & (1 << action) != 0) for action in PowerAction)
@@ -1300,6 +1347,8 @@ class GaiaState:
         if action == FEDERATION_ACTION:
             return "form federation"
         if PASS_BOOSTER_OFFSET <= action < PASS_FINAL_ACTION:
+            if self.is_booster_selection:
+                return f"take starting booster {action - PASS_BOOSTER_OFFSET}"
             return f"pass and take booster {action - PASS_BOOSTER_OFFSET}"
         if action == PASS_FINAL_ACTION:
             return "pass"
@@ -1311,9 +1360,14 @@ class GaiaState:
                 f"Starting placement {self.placement_step}/{len(self.placement_order)}"
             ]
             lines[0] += f" | player {self.player_to_move} to place"
+        elif self.is_booster_selection:
+            lines = [
+                f"Starting booster selection {self.booster_selection_step}/{len(self.booster_selection_order)}"
+            ]
+            lines[0] += f" | player {self.player_to_move} to choose"
         else:
             lines = [f"Round {min(self.round_number, MAX_ROUNDS)}/{MAX_ROUNDS}"]
-        if not self.is_terminal and not self.is_starting_placement:
+        if not self.is_terminal and not self.is_starting_placement and not self.is_booster_selection:
             scoring = ROUND_SCORING_TILES[
                 self.round_scoring_tiles[self.round_number - 1]
             ]
@@ -1333,17 +1387,19 @@ class GaiaState:
 
     def snapshot(self) -> dict[str, object]:
         current_scoring = None
-        if not self.is_terminal and not self.is_starting_placement:
+        if not self.is_terminal and not self.is_starting_placement and not self.is_booster_selection:
             current_scoring = ROUND_SCORING_TILES[
                 self.round_scoring_tiles[self.round_number - 1]
             ].key
         return {
-            "ruleset": "standard-v4",
+            "ruleset": "standard-v5",
             "round": max(0, min(self.round_number, MAX_ROUNDS)),
             "max_rounds": MAX_ROUNDS,
             "phase": (
                 "starting_placement"
                 if self.is_starting_placement
+                else "booster_selection"
+                if self.is_booster_selection
                 else "terminal" if self.is_terminal else "round"
             ),
             "placement": {
@@ -1352,6 +1408,16 @@ class GaiaState:
                 "total": len(self.placement_order),
                 "order": list(self.placement_order),
                 "remaining": max(0, len(self.placement_order) - self.placement_step),
+            },
+            "booster_selection": {
+                "active": self.is_booster_selection,
+                "step": self.booster_selection_step,
+                "total": len(self.booster_selection_order),
+                "order": list(self.booster_selection_order),
+                "remaining": max(
+                    0,
+                    len(self.booster_selection_order) - self.booster_selection_step,
+                ),
             },
             "round_scoring": current_scoring,
             "current_player": None if self.is_terminal else self.player_to_move,

@@ -500,6 +500,75 @@ class DashboardTests(unittest.TestCase):
             server.server_close()
             thread.join(timeout=5)
 
+    def test_interactive_game_selects_starting_boosters_before_round_one(self) -> None:
+        server = create_dashboard_server(self.metrics, port=0, quiet=True)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            base = f"http://127.0.0.1:{server.server_port}"
+            _, game = self.post_json(
+                f"{base}/api/play/start",
+                {
+                    "players": 2,
+                    "seed": 31,
+                    "first_player": 0,
+                    "factions": [0, 2],
+                    "roles": ["human", "human"],
+                    "simulations": 1,
+                },
+            )
+            while game["state"]["phase"] == "starting_placement":
+                _, game = self.post_json(
+                    f"{base}/api/play/action",
+                    {"action": game["legal_actions"][0]["id"]},
+                )
+
+            self.assertEqual(game["state"]["phase"], "booster_selection")
+            self.assertEqual(game["state"]["round"], 0)
+            self.assertEqual(game["state"]["current_player"], 1)
+            self.assertEqual(game["state"]["booster_selection"]["order"], [1, 0])
+            self.assertEqual(len(game["legal_actions"]), 5)
+            self.assertTrue(all(
+                action["kind"] == "select_booster"
+                and action["target"] is None
+                and isinstance(action["booster"], int)
+                for action in game["legal_actions"]
+            ))
+            resources_before = [
+                (player["credits"], player["ore"], player["knowledge"])
+                for player in game["state"]["players"]
+            ]
+
+            selected = []
+            while game["state"]["phase"] == "booster_selection":
+                selected.append(game["legal_actions"][0]["booster"])
+                _, game = self.post_json(
+                    f"{base}/api/play/action",
+                    {"action": game["legal_actions"][0]["id"]},
+                )
+
+            self.assertEqual(game["state"]["phase"], "round")
+            self.assertEqual(game["state"]["round"], 1)
+            self.assertEqual(game["state"]["current_player"], 0)
+            self.assertEqual(len(set(selected)), 2)
+            self.assertEqual(
+                [player["booster"] for player in game["state"]["players"]],
+                [selected[1], selected[0]],
+            )
+            resources_after = [
+                (player["credits"], player["ore"], player["knowledge"])
+                for player in game["state"]["players"]
+            ]
+            self.assertNotEqual(resources_after, resources_before)
+            self.assertEqual(
+                [item["kind"] for item in game["history"][-2:]],
+                ["select_booster", "select_booster"],
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
     def test_history_index_and_complete_game_trace(self) -> None:
         telemetry = JsonlTelemetry(self.metrics, run_id="history-test")
         state = MiniGaiaState.initial(2)
