@@ -649,7 +649,7 @@ function renderSetup(snapshot) {
       ? `P${assignment.player}${assignment.player === snapshot.first_player ? " · 首位" : ""}`
       : `个人版图 ${faction.board}${faction.side}`;
     return `<article class="faction-setup-item ${assignment ? "assigned" : ""}">
-      <img class="faction-board-art" src="${factionPlayerBoardAsset(faction.id)}" data-faction-board="${faction.id}" alt="${escapeHtml(faction.name)} BGA 完整个人主板">
+      <img class="faction-board-art" src="${factionPlayerBoardAsset(faction.id)}" data-faction-board="${faction.id}" alt="${escapeHtml(faction.name)}个人主板">
       <div class="faction-card-body">
         <div class="faction-setup-head">
           <div><span class="faction-seat">${seat}</span><strong>${escapeHtml(faction.name)}</strong></div>
@@ -659,6 +659,9 @@ function renderSetup(snapshot) {
           <span class="setup-tag">${TERRAIN_LABELS[faction.home_terrain]}</span>
           <span class="setup-tag">${TRACK_LABELS[faction.start_track] || faction.start_track} +1</span>
           <span class="setup-tag">${startBuilding}</span>
+          <span class="setup-tag">信用点 ${faction.starting_credits ?? 15}</span>
+          <span class="setup-tag">矿石 ${faction.starting_ore ?? 4}</span>
+          <span class="setup-tag">知识 ${faction.starting_knowledge ?? 3}</span>
           ${startingPower.length ? `<span class="setup-tag">能量 ${startingPower.join(" / ")}</span>` : ""}
           <span class="setup-tag">Q.I.C. ${faction.starting_qic ?? 1}</span>
           ${faction.federation_threshold === 6 ? `<span class="setup-tag">联邦强度 6</span>` : ""}
@@ -2412,8 +2415,7 @@ function renderPersonalBoards(containerId, snapshot) {
           </header>
           <div class="personal-board-overview">
             <figure class="personal-board-artwork">
-              <img class="personal-board-faction-art" src="${factionPlayerBoardAsset(factionId)}" data-faction-board="${factionId}" alt="${escapeHtml(player.faction || "种族")} BGA 完整个人主板">
-              <figcaption>版图 ${faction.board}${faction.side} · BGA 完整主板</figcaption>
+              <img class="personal-board-faction-art" src="${factionPlayerBoardAsset(factionId)}" data-faction-board="${factionId}" alt="${escapeHtml(player.faction || "种族")}个人主板">
             </figure>
             <div class="personal-board-resources">
               <div class="personal-resource-grid">${resources}</div>
@@ -3320,7 +3322,7 @@ document.addEventListener("error", (event) => {
   image.dataset.fallbackApplied = "true";
   image.classList.add("asset-fallback");
   image.src = factionBoardAsset(Number(image.dataset.factionBoard));
-  image.alt = image.alt.replace("BGA 完整个人主板", "种族板图片");
+  image.alt = image.alt.replace("个人主板", "种族板图片");
 }, true);
 window.addEventListener("resize", () => {
   renderLossChart();

@@ -68,6 +68,9 @@ class FactionSpec:
     gaia_to_bowl_two: bool = False
     passive_power_token: bool = False
     knowledge_for_new_type: bool = False
+    starting_credits: int = 15
+    starting_ore: int = 4
+    starting_knowledge: int = 3
 
 
 FACTIONS: tuple[FactionSpec, ...] = (
@@ -382,6 +385,9 @@ class GaiaState:
             gaiaformers = 1 if faction.start_track == Track.GAIA_PROJECT else 0
             info = PlayerState(
                 faction=faction_index,
+                credits=faction.starting_credits,
+                ore=faction.starting_ore,
+                knowledge=faction.starting_knowledge,
                 qic=faction.starting_qic,
                 bowl_one=faction.power[0],
                 bowl_two=faction.power[1],
@@ -1540,6 +1546,9 @@ class GaiaState:
                         "start_track": faction.start_track.name.lower(),
                         "ability": faction.ability,
                         "starting_power": list(faction.power),
+                        "starting_credits": faction.starting_credits,
+                        "starting_ore": faction.starting_ore,
+                        "starting_knowledge": faction.starting_knowledge,
                         "starting_qic": faction.starting_qic,
                         "starting_structures": faction.starting_structures,
                         "starts_with_pi": faction.starts_with_pi,

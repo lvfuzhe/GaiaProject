@@ -28,6 +28,7 @@ PLAYER_BOARD_SHA256 = (
     "A8AD6A1F676C5712F2650979260A7333507EC4367AC8E2C070CE6B9AC42F58A1",
     "38A05D18A67CDBD9FD11E5BA8F13398AF0B4DA294449359B5760DC7D782B33CF",
 )
+RESEARCH_BOARD_SHA256 = "6A9CB95AFD5410927303E56F671206821188FD309FC55E2B268116A67DE44418"
 
 
 class DashboardTests(unittest.TestCase):
@@ -183,6 +184,7 @@ class DashboardTests(unittest.TestCase):
             self.assertTrue(outlined_sector_image.startswith(b"GIF"))
             self.assertEqual(research_board_content_type, "image/png")
             self.assertTrue(research_board_image.startswith(b"\x89PNG\r\n\x1a\n"))
+            self.assertEqual(hashlib.sha256(research_board_image).hexdigest().upper(), RESEARCH_BOARD_SHA256)
             self.assertTrue(all(
                 content_type == "image/jpeg" and content.startswith(b"\xff\xd8")
                 for content_type, content in faction_assets
@@ -200,7 +202,10 @@ class DashboardTests(unittest.TestCase):
             )
             self.assertIn("function factionPlayerBoardAsset", app_script)
             self.assertIn("source=bga-260630-1810", app_script)
-            self.assertIn("BGA 完整个人主板", app_script)
+            self.assertNotIn("BGA 完整主板", app_script)
+            self.assertIn("starting_credits", app_script)
+            self.assertIn("starting_ore", app_script)
+            self.assertIn("starting_knowledge", app_script)
             for name, (content_type, content) in tile_assets.items():
                 expected_type = "image/gif" if name.endswith(".gif") else "image/jpeg"
                 self.assertEqual(content_type, expected_type)

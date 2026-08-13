@@ -83,6 +83,17 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(next(f["starting_qic"] for f in catalog if f["name"] == "Itars"), 1)
         self.assertEqual(next(f["starting_qic"] for f in catalog if f["name"] == "Bal T'aks"), 0)
 
+    def test_faction_catalog_exposes_complete_starting_resources(self) -> None:
+        state = GaiaState.initial(2, faction_indices=(0, 9), first_player=0)
+        catalog = state.snapshot()["setup"]["faction_catalog"]
+
+        for faction in catalog:
+            self.assertEqual(faction["starting_credits"], 15)
+            self.assertEqual(faction["starting_ore"], 4)
+            self.assertEqual(faction["starting_knowledge"], 3)
+        for player in state.players:
+            self.assertEqual((player.credits, player.ore, player.knowledge), (15, 4, 3))
+
     def test_snapshot_preserves_complete_initial_setup(self) -> None:
         snapshot = GaiaState.initial(3, seed=41).snapshot()
         setup = snapshot["setup"]
