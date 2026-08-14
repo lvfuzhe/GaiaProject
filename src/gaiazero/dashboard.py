@@ -14,11 +14,19 @@ import numpy as np
 
 from gaiazero.game import GaiaHeuristicEvaluator, GaiaState
 from gaiazero.game.gaia_state import (
+    ADVANCED_TECH_ACTION_OFFSET,
     BOOSTER_LABELS,
+    BOOSTER_RANGE_ACTION,
+    BOOSTER_TERRAFORM_ACTION,
+    ADVANCED_TECH_TILES,
     BUILD_OFFSET,
     FACTIONS,
     FEDERATION_TILES,
-    FEDERATION_ACTION,
+    FEDERATION_OFFSET,
+    QIC_ACADEMY_ACTION,
+    QIC_FEDERATION_ACTION_OFFSET,
+    QIC_PLANET_TYPES_ACTION,
+    QIC_TECH_ACTION,
     GAIA_OFFSET,
     MAX_ROUNDS,
     PASS_BOOSTER_OFFSET,
@@ -27,8 +35,11 @@ from gaiazero.game.gaia_state import (
     RESEARCH_OFFSET,
     ROUND_SCORING_TILES,
     STANDARD_TECH_TILES,
+    STANDARD_TECH_COUNT,
+    STANDARD_TECH_ACTION,
     TECH_OFFSET,
     UPGRADE_ACADEMY_OFFSET,
+    UPGRADE_QIC_ACADEMY_OFFSET,
     UPGRADE_LAB_OFFSET,
     UPGRADE_PI_OFFSET,
     UPGRADE_TRADING_OFFSET,
@@ -673,7 +684,10 @@ def _interactive_action_snapshot(state: GaiaState, action: int) -> dict[str, Any
     target: int | None = None
     booster: int | None = None
     track: int | None = None
+    tech_space: int | None = None
+    federation_tile: int | None = None
     power_action: int | None = None
+    advanced_action_tile: int | None = None
     if BUILD_OFFSET <= action < GAIA_OFFSET:
         kind = "starting_placement" if state.is_starting_placement else "build"
         target = action - BUILD_OFFSET
@@ -685,19 +699,44 @@ def _interactive_action_snapshot(state: GaiaState, action: int) -> dict[str, Any
         kind, target = "upgrade_lab", action - UPGRADE_LAB_OFFSET
     elif UPGRADE_PI_OFFSET <= action < UPGRADE_ACADEMY_OFFSET:
         kind, target = "upgrade_pi", action - UPGRADE_PI_OFFSET
-    elif UPGRADE_ACADEMY_OFFSET <= action < RESEARCH_OFFSET:
+    elif UPGRADE_ACADEMY_OFFSET <= action < UPGRADE_QIC_ACADEMY_OFFSET:
         kind, target = "upgrade_academy", action - UPGRADE_ACADEMY_OFFSET
+    elif UPGRADE_QIC_ACADEMY_OFFSET <= action < RESEARCH_OFFSET:
+        kind, target = "upgrade_qic_academy", action - UPGRADE_QIC_ACADEMY_OFFSET
     elif RESEARCH_OFFSET <= action < POWER_OFFSET:
         kind = "research"
         track = action - RESEARCH_OFFSET
     elif POWER_OFFSET <= action < TECH_OFFSET:
         kind = "power"
         power_action = action - POWER_OFFSET
-    elif TECH_OFFSET <= action < FEDERATION_ACTION:
+    elif TECH_OFFSET <= action < FEDERATION_OFFSET:
         kind = "technology"
-        track = action - TECH_OFFSET
-    elif action == FEDERATION_ACTION:
+        tech_space = action - TECH_OFFSET
+        if tech_space >= STANDARD_TECH_COUNT:
+            track = tech_space - STANDARD_TECH_COUNT
+        elif tech_space < len(Track):
+            track = tech_space
+    elif FEDERATION_OFFSET <= action < QIC_ACADEMY_ACTION:
         kind = "federation"
+        federation_tile = action - FEDERATION_OFFSET
+    elif action == QIC_ACADEMY_ACTION:
+        kind = "qic_academy_action"
+    elif action == STANDARD_TECH_ACTION:
+        kind = "standard_tech_action"
+    elif action == QIC_TECH_ACTION:
+        kind = "qic_tech_action"
+    elif QIC_FEDERATION_ACTION_OFFSET <= action < QIC_PLANET_TYPES_ACTION:
+        kind = "qic_federation_action"
+        federation_tile = action - QIC_FEDERATION_ACTION_OFFSET
+    elif action == QIC_PLANET_TYPES_ACTION:
+        kind = "qic_planet_types_action"
+    elif action == BOOSTER_TERRAFORM_ACTION:
+        kind = "booster_terraform_action"
+    elif action == BOOSTER_RANGE_ACTION:
+        kind = "booster_range_action"
+    elif ADVANCED_TECH_ACTION_OFFSET <= action < PASS_BOOSTER_OFFSET:
+        kind = "advanced_tech_action"
+        advanced_action_tile = action - ADVANCED_TECH_ACTION_OFFSET
     elif PASS_BOOSTER_OFFSET <= action < PASS_FINAL_ACTION:
         kind = "select_booster" if state.is_booster_selection else "pass_booster"
         booster = action - PASS_BOOSTER_OFFSET
@@ -712,7 +751,10 @@ def _interactive_action_snapshot(state: GaiaState, action: int) -> dict[str, Any
         "target": target,
         "booster": booster,
         "track": track,
+        "tech_space": tech_space,
+        "federation_tile": federation_tile,
         "power_action": power_action,
+        "advanced_action_tile": advanced_action_tile,
     }
 
 
@@ -783,25 +825,24 @@ def _interactive_action_components(
             )
 
     track = action.get("track")
+    tech_space = action.get("tech_space")
     if track is not None:
         track_name = Track(track).name.replace("_", " ").title()
         components.append(
             _component_ref("research_track", track, track_name, f"TRK-{track + 1:02d}")
         )
-        if action["kind"] == "technology":
-            tile = state.standard_tech_tiles[track]
-            components.append(
-                _component_ref(
-                    "standard_tech",
-                    tile,
-                    STANDARD_TECH_TILES[tile].label,
-                    f"TEC-S{tile + 1:02d}",
-                    relation="gained",
-                )
-            )
         if (
             track == Track.TERRAFORMING
             and state.players[player].tracks[track] == 4
+            and (
+                action["kind"] == "research"
+                or (
+                    action["kind"] == "technology"
+                    and state.pending_advanced_tech < 0
+                    and tech_space is not None
+                    and tech_space < len(Track)
+                )
+            )
         ):
             tile = state.terraforming_federation_tile
             components.append(
@@ -814,9 +855,62 @@ def _interactive_action_components(
                 )
             )
 
+    if action["kind"] == "technology" and tech_space is not None:
+        if state.pending_advanced_tech >= 0:
+            tile = state.standard_tech_tiles[tech_space]
+            components.append(
+                _component_ref(
+                    "standard_tech",
+                    tile,
+                    STANDARD_TECH_TILES[tile].label,
+                    f"TEC-S{tile + 1:02d}",
+                    relation="covered",
+                )
+            )
+            tile = state.pending_advanced_tech
+            components.append(
+                _component_ref(
+                    "advanced_tech",
+                    tile,
+                    ADVANCED_TECH_TILES[tile].label,
+                    f"TEC-A{tile + 1:02d}",
+                    relation="gained",
+                )
+            )
+        elif tech_space < STANDARD_TECH_COUNT:
+            tile = state.standard_tech_tiles[tech_space]
+            components.append(
+                _component_ref(
+                    "standard_tech",
+                    tile,
+                    STANDARD_TECH_TILES[tile].label,
+                    f"TEC-S{tile + 1:02d}",
+                    relation="gained",
+                )
+            )
+        else:
+            tile = state.advanced_tech_tiles[tech_space - STANDARD_TECH_COUNT]
+            components.append(
+                _component_ref(
+                    "advanced_tech",
+                    tile,
+                    ADVANCED_TECH_TILES[tile].label,
+                    f"TEC-A{tile + 1:02d}",
+                    relation="selected",
+                )
+            )
+
     power_action = action.get("power_action")
     if power_action is not None:
-        power_labels = ("Gain 2 ore", "Gain 7 credits", "Gain 2 knowledge")
+        power_labels = (
+            "Gain 3 knowledge",
+            "Build a mine with 2 free terraforming steps",
+            "Gain 2 ore",
+            "Gain 7 credits",
+            "Gain 2 knowledge",
+            "Gain 1 ore",
+            "Gain 2 power tokens",
+        )
         components.append(
             _component_ref(
                 "power_action",
@@ -827,7 +921,9 @@ def _interactive_action_components(
         )
 
     if action["kind"] == "federation":
-        tile = state.players[player].federation_tokens % 3
+        tile = action.get("federation_tile")
+        if tile is None:
+            tile = 0
         components.append(
             _component_ref(
                 "federation",
@@ -835,6 +931,88 @@ def _interactive_action_components(
                 FEDERATION_TILES[tile].label,
                 f"FED-{tile + 1:02d}",
                 relation="gained",
+            )
+        )
+    elif action["kind"] == "qic_academy_action":
+        components.append(
+            _component_ref(
+                "faction_action",
+                player,
+                "Q.I.C. academy: gain 1 Q.I.C.",
+                f"FAC-{player + 1:02d}",
+                relation="used",
+            )
+        )
+    elif action["kind"] == "standard_tech_action":
+        components.append(
+            _component_ref(
+                "standard_tech",
+                8,
+                STANDARD_TECH_TILES[8].label,
+                "TEC-S09",
+                relation="used",
+            )
+        )
+    elif action["kind"] == "qic_tech_action":
+        components.append(
+            _component_ref(
+                "qic_action",
+                0,
+                "Q.I.C. action: take a tech tile",
+                "QIC-01",
+                relation="used",
+            )
+        )
+    elif action["kind"] == "qic_federation_action":
+        tile = action.get("federation_tile", 0)
+        components.append(
+            _component_ref(
+                "federation",
+                tile,
+                "Repeat federation reward",
+                f"FED-{tile + 1:02d}",
+                relation="repeated",
+            )
+        )
+    elif action["kind"] == "qic_planet_types_action":
+        components.append(
+            _component_ref(
+                "qic_action",
+                2,
+                "Q.I.C. action: score planet types",
+                "QIC-03",
+                relation="used",
+            )
+        )
+    elif action["kind"] == "booster_terraform_action":
+        components.append(
+            _component_ref(
+                "booster",
+                0,
+                BOOSTER_LABELS[0],
+                "BST-01",
+                relation="used",
+            )
+        )
+    elif action["kind"] == "booster_range_action":
+        components.append(
+            _component_ref(
+                "booster",
+                1,
+                BOOSTER_LABELS[1],
+                "BST-02",
+                relation="used",
+            )
+        )
+    elif action["kind"] == "advanced_tech_action":
+        tile = action["advanced_action_tile"]
+        components.append(
+            _component_ref(
+                "advanced_tech",
+                tile,
+                ADVANCED_TECH_TILES[tile].label,
+                f"TEC-A{tile + 1:02d}",
+                relation="used",
             )
         )
 
@@ -853,7 +1031,11 @@ def _interactive_action_components(
                     scored_kinds.add("terraform")
         elif action["kind"] == "upgrade_trading":
             scored_kinds.add("trading")
-        elif action["kind"] in ("upgrade_pi", "upgrade_academy"):
+        elif action["kind"] in (
+            "upgrade_pi",
+            "upgrade_academy",
+            "upgrade_qic_academy",
+        ):
             scored_kinds.add("big")
         elif action["kind"] in ("research", "technology"):
             scored_kinds.add("research")
@@ -883,7 +1065,17 @@ def _interactive_action_costs(
     target = action.get("target")
     costs: dict[str, int] = {}
     if kind == "build" and target is not None:
-        credits, ore, qic = state._build_cost(player, target)
+        credits, ore, qic = state._build_cost(
+            player,
+            target,
+            free_steps=(
+                2
+                if state.pending_power_terraform_player >= 0
+                else 1
+                if state.pending_booster_terraform_player >= 0
+                else 0
+            ),
+        )
         costs.update(credits=credits, ore=ore, qic=qic)
     elif kind == "gaia":
         costs["power_to_gaia"] = state._gaia_cost(state.players[player])
@@ -896,16 +1088,26 @@ def _interactive_action_costs(
         costs.update(credits=5, ore=3)
     elif kind == "upgrade_pi":
         costs.update(credits=6, ore=4)
-    elif kind == "upgrade_academy":
+    elif kind in ("upgrade_academy", "upgrade_qic_academy"):
         costs.update(credits=6, ore=6)
+    elif kind == "qic_tech_action":
+        costs["qic"] = 4
+    elif kind == "qic_federation_action":
+        costs["qic"] = 3
+    elif kind == "qic_planet_types_action":
+        costs["qic"] = 2
     elif kind == "research":
-        costs["knowledge"] = 4
+        if state.pending_research_player < 0:
+            costs["knowledge"] = 4
     elif kind == "power":
-        costs["power"] = (3, 4, 4)[action["power_action"]]
+        costs["power"] = state._power_action_cost(player, action["power_action"])
     elif kind == "federation":
         plan = state._federation_plan(player)
         if plan is not None and plan[1] > 0:
-            costs["power_tokens"] = plan[1]
+            if FACTIONS[state.players[player].faction].name == "Ivits":
+                costs["qic"] = plan[1]
+            else:
+                costs["power_tokens"] = plan[1]
 
     track = action.get("track")
     if (
@@ -949,6 +1151,20 @@ def _interactive_player_changes(
                 "before": old_value,
                 "after": new_value,
             })
+    if old.knowledge_academies != new.knowledge_academies:
+        changes.append({
+            "kind": "academy",
+            "type": "knowledge",
+            "before": old.knowledge_academies,
+            "after": new.knowledge_academies,
+        })
+    if old.qic_academies != new.qic_academies:
+        changes.append({
+            "kind": "academy",
+            "type": "qic",
+            "before": old.qic_academies,
+            "after": new.qic_academies,
+        })
     for track, (old_level, new_level) in enumerate(zip(old.tracks, new.tracks, strict=True)):
         if old_level != new_level:
             changes.append({
@@ -961,6 +1177,10 @@ def _interactive_player_changes(
     for tile in range(len(STANDARD_TECH_TILES)):
         if gained_tech & (1 << tile):
             changes.append({"kind": "tech", "id": tile})
+    gained_advanced = new.advanced_tech_tiles & ~old.advanced_tech_tiles
+    for tile in range(len(ADVANCED_TECH_TILES)):
+        if gained_advanced & (1 << tile):
+            changes.append({"kind": "advanced_tech", "id": tile})
     old_booster = before._player_booster(player)
     new_booster = after._player_booster(player)
     if old_booster != new_booster:
@@ -1080,7 +1300,7 @@ def _income_sources(state: GaiaState, player: int) -> list[dict[str, Any]]:
                 )
             )
     for tile in (5, 6, 7):
-        if info.tech_tiles & (1 << tile):
+        if state._has_active_standard_tech(info, tile):
             sources.append(
                 _component_ref(
                     "standard_tech",

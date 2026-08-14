@@ -4,19 +4,30 @@ from dataclasses import replace
 import numpy as np
 
 from gaiazero.game.gaia_state import (
+    ADVANCED_TECH_ACTION_OFFSET,
     ADVANCED_TECH_TILES,
+    BOOSTER_RANGE_ACTION,
+    BOOSTER_TERRAFORM_ACTION,
     BOOSTER_COUNT,
     BOOSTER_LABELS,
+    FEDERATION_OFFSET,
     FEDERATION_ACTION,
     FACTIONS,
     FINAL_SCORING_TILES,
     MAX_BUILDINGS,
     ROUND_SCORING_TILES,
     STANDARD_TECH_TILES,
+    STANDARD_TECH_COUNT,
+    STANDARD_TECH_ACTION,
     Building,
     GaiaHeuristicEvaluator,
     GaiaState,
     PlayerState,
+    PowerAction,
+    QIC_ACADEMY_ACTION,
+    QIC_FEDERATION_ACTION_OFFSET,
+    QIC_PLANET_TYPES_ACTION,
+    QIC_TECH_ACTION,
     Terrain,
     Track,
 )
@@ -42,7 +53,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
     def test_setup_has_full_research_and_building_model(self) -> None:
         state = GaiaState.initial(4, seed=3)
 
-        self.assertEqual(state.action_size, 447)
+        self.assertEqual(state.action_size, 551)
         self.assertEqual(len(state.players[0].tracks), 6)
         self.assertEqual(state.first_player, 3)
         self.assertEqual(state.current_player, state.placement_order[0])
@@ -52,7 +63,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(sum(len(planets) for planets in state.starting_planets), 0)
         self.assertEqual(state.round_number, 0)
         self.assertTrue(state.is_starting_placement)
-        self.assertEqual(state.snapshot()["ruleset"], "standard-v7")
+        self.assertEqual(state.snapshot()["ruleset"], "standard-v9")
 
     def test_random_setup_is_seeded_and_respects_component_counts(self) -> None:
         first = GaiaState.initial(2, seed=19)
@@ -120,9 +131,10 @@ class StandardGaiaRulesTests(unittest.TestCase):
             for faction in state.snapshot()["setup"]["faction_catalog"]
         }
 
-        for faction in catalog.values():
-            self.assertEqual(faction["starting_credits"], 15)
-            self.assertEqual(faction["starting_knowledge"], 3)
+        self.assertEqual(catalog["Lantids"]["starting_credits"], 13)
+        self.assertEqual(catalog["Firaks"]["starting_knowledge"], 2)
+        self.assertEqual(catalog["Bescods"]["starting_knowledge"], 1)
+        self.assertEqual(catalog["Nevlas"]["starting_knowledge"], 2)
         self.assertEqual(catalog["Geodens"]["starting_ore"], 6)
         self.assertEqual(catalog["Gleens"]["starting_ore"], 5)
         self.assertEqual(catalog["Gleens"]["starting_qic"], 0)
@@ -137,7 +149,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         snapshot = GaiaState.initial(3, seed=41).snapshot()
         setup = snapshot["setup"]
 
-        self.assertEqual(snapshot["ruleset"], "standard-v7")
+        self.assertEqual(snapshot["ruleset"], "standard-v9")
         self.assertEqual(setup["seed"], 41)
         self.assertEqual(setup["map"]["sector_count"], 10)
         self.assertEqual(len(setup["map"]["sectors"]), 10)
@@ -339,7 +351,10 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(terraforming.ore, 4)
         self.assertEqual(terraforming.vp, 12)
         self.assertEqual(terraforming.federation_tokens, 1)
-        self.assertEqual(terraforming.federation_keys, 1)
+        self.assertEqual(
+            terraforming.federation_keys,
+            int(state.terraforming_federation_tile != 5),
+        )
 
         navigation = advance_to_top(Track.NAVIGATION, base)
         self.assertEqual(navigation.qic, 2)
@@ -370,12 +385,12 @@ class StandardGaiaRulesTests(unittest.TestCase):
                 score_round=False,
             )
         self.assertEqual(gaia.gaiaformers, 3)
-        self.assertEqual(gaia.bowl_one, 15)
+        self.assertEqual(gaia.bowl_one, 12)
         self.assertEqual(gaia.vp, 4 + len(gaia_planets))
 
         economy = advance_to_top(Track.ECONOMY, base)
         self.assertEqual((economy.credits, economy.ore), (6, 3))
-        self.assertEqual((economy.bowl_one, economy.bowl_two), (6, 6))
+        self.assertEqual((economy.bowl_one, economy.bowl_two), (3, 9))
 
         science = advance_to_top(Track.SCIENCE, base)
         self.assertEqual(science.knowledge, 9)
@@ -406,7 +421,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
                 tech_tiles=0,
             )
             income = replace(state, players=tuple(players))._grant_income().players[0]
-            self.assertEqual(income.credits, 2 + credits)
+            self.assertEqual(income.credits, credits)
             self.assertEqual(income.ore, 1 + ore)
             self.assertEqual((income.bowl_one, income.bowl_two), (12 - charge, charge))
 
@@ -947,7 +962,13 @@ class StandardGaiaRulesTests(unittest.TestCase):
         owners[planet] = 0
         buildings[planet] = Building.TRADING_STATION
         players = list(state.players)
-        players[0] = replace(players[0], credits=30, ore=15, tracks=(5, 5, 5, 5, 5, 5))
+        players[0] = replace(
+            players[0],
+            credits=30,
+            ore=15,
+            tracks=(5, 5, 5, 5, 5, 5),
+            tech_tiles=(1 << STANDARD_TECH_COUNT) - 1,
+        )
         state = replace(
             state,
             player_to_move=0,
@@ -957,6 +978,526 @@ class StandardGaiaRulesTests(unittest.TestCase):
         )
 
         self.assertNotIn(state.upgrade_lab_action(planet), state.legal_actions())
+
+    def test_all_nine_standard_technology_spaces_are_available(self) -> None:
+        state = replace(
+            finish_starting_placement(
+                GaiaState.initial(
+                    2,
+                    faction_indices=(0, 2),
+                    standard_tech_tiles=tuple(range(STANDARD_TECH_COUNT)),
+                )
+            ),
+            player_to_move=0,
+            pending_tech_player=0,
+        )
+        players = list(state.players)
+        players[0] = replace(players[0], tech_tiles=0, federation_keys=0)
+        state = replace(state, players=tuple(players))
+
+        self.assertEqual(
+            state.legal_actions(),
+            tuple(state.tech_action(space) for space in range(STANDARD_TECH_COUNT)),
+        )
+
+    def test_advanced_technology_covers_standard_tile_and_uses_keys(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(
+                2,
+                faction_indices=(0, 2),
+                standard_tech_tiles=tuple(range(STANDARD_TECH_COUNT)),
+                advanced_tech_tiles=(0, 1, 2, 3, 4, 5),
+            )
+        )
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            tracks=(4, 0, 0, 0, 0, 0),
+            tech_tiles=1 << 8,
+            federation_keys=2,
+        )
+        state = replace(
+            state,
+            player_to_move=0,
+            players=tuple(players),
+            pending_tech_player=0,
+        )
+
+        selected = state.apply(state.tech_action(STANDARD_TECH_COUNT))
+        self.assertEqual(selected.pending_advanced_tech, 0)
+        self.assertEqual(selected.legal_actions(), (state.tech_action(8),))
+        covered = selected.apply(state.tech_action(8))
+        self.assertTrue(covered.players[0].advanced_tech_tiles & 1)
+        self.assertTrue(covered.players[0].covered_tech_tiles & (1 << 8))
+        self.assertEqual(covered.players[0].federation_keys, 1)
+        self.assertEqual(covered.pending_research_player, 0)
+
+        resolved = covered.apply(state.research_action(Track.TERRAFORMING))
+        self.assertEqual(resolved.players[0].tracks[Track.TERRAFORMING], 5)
+        self.assertEqual(
+            resolved.players[0].federation_keys,
+            int(state.terraforming_federation_tile != 5),
+        )
+
+    def test_advanced_technology_tile_is_unique_across_players(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(0, 2), first_player=0)
+        )
+        advanced_tile = state.advanced_tech_tiles[Track.TERRAFORMING]
+        players = list(state.players)
+        tracks = list(players[0].tracks)
+        tracks[Track.TERRAFORMING] = 4
+        players[0] = replace(
+            players[0],
+            tracks=tuple(tracks),
+            federation_keys=1,
+            tech_tiles=1,
+        )
+        players[1] = replace(players[1], advanced_tech_tiles=1 << advanced_tile)
+        blocked = replace(state, player_to_move=0, players=tuple(players))
+
+        self.assertNotIn(
+            blocked.tech_action(STANDARD_TECH_COUNT + Track.TERRAFORMING),
+            blocked._legal_technology_actions(0),
+        )
+
+    def test_research_level_five_is_exclusive(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(0, 2), first_player=0)
+        )
+        players = list(state.players)
+        players[0] = replace(players[0], tracks=(5, 0, 0, 0, 0, 0))
+        players[1] = replace(
+            players[1],
+            tracks=(4, 0, 0, 0, 0, 0),
+            knowledge=4,
+            federation_keys=1,
+        )
+        state = replace(state, player_to_move=1, players=tuple(players))
+
+        self.assertFalse(state._can_player_advance(1, Track.TERRAFORMING))
+        self.assertNotIn(
+            state.research_action(Track.TERRAFORMING),
+            state.legal_actions(),
+        )
+
+    def test_bal_taks_navigation_unlocks_after_planetary_institute(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(9, 0), first_player=0)
+        )
+        self.assertFalse(state._can_player_advance(0, Track.NAVIGATION))
+
+        planet = state.starting_planets[0][0]
+        buildings = list(state.buildings)
+        buildings[planet] = Building.PLANETARY_INSTITUTE
+        unlocked = replace(state, buildings=tuple(int(value) for value in buildings))
+        self.assertTrue(unlocked._can_player_advance(0, Track.NAVIGATION))
+
+    def test_xenos_federation_threshold_drops_only_after_pi(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(2, 0), first_player=0)
+        )
+        planets = [index for index, active in enumerate(state.active_planets) if active][:3]
+        owners = [-1] * len(state.owners)
+        buildings = [Building.EMPTY] * len(state.buildings)
+        federated = [False] * len(state.federated)
+        for planet in planets:
+            owners[planet] = 0
+            federated[planet] = False
+        buildings[planets[0]] = Building.ACADEMY
+        buildings[planets[1]] = Building.TRADING_STATION
+        buildings[planets[2]] = Building.MINE
+        players = list(state.players)
+        players[0] = replace(players[0], bowl_one=30, bowl_two=0, bowl_three=0)
+        state = replace(
+            state,
+            players=tuple(players),
+            owners=tuple(owners),
+            buildings=tuple(int(value) for value in buildings),
+            federated=tuple(federated),
+        )
+        self.assertIsNone(state._federation_plan(0))
+
+        buildings[planets[0]] = Building.PLANETARY_INSTITUTE
+        with_pi = replace(state, buildings=tuple(int(value) for value in buildings))
+        self.assertIsNotNone(with_pi._federation_plan(0))
+
+    def test_faction_specific_power_and_gaia_rules(self) -> None:
+        nevlas = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(12, 0), first_player=0)
+        )
+        planet = nevlas.starting_planets[0][0]
+        buildings = list(nevlas.buildings)
+        buildings[planet] = Building.PLANETARY_INSTITUTE
+        nevlas = replace(nevlas, buildings=tuple(int(value) for value in buildings))
+        self.assertEqual(
+            tuple(nevlas._power_action_cost(0, action) for action in PowerAction),
+            (4, 3, 2, 2, 2, 2, 2),
+        )
+
+        gleens = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(3, 0), first_player=0)
+        )
+        gaia = next(
+            planet
+            for planet, active in enumerate(gleens.active_planets)
+            if active and gleens.terrains[planet] == Terrain.GAIA
+        )
+        self.assertEqual(gleens._build_cost(0, gaia), (2, 2, 0))
+        players = list(gleens.players)
+        players[0] = replace(players[0], credits=30, ore=15, vp=10)
+        gleens = replace(
+            gleens,
+            player_to_move=0,
+            players=tuple(players),
+            round_scoring_tiles=(1, 0, 2, 3, 4, 5),
+        )
+        built = gleens._apply_build(gaia)
+        self.assertEqual(built.players[0].vp, 12)
+
+    def test_all_seven_public_power_actions_use_bga_costs_and_rewards(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(0, 2), first_player=0)
+        )
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            credits=10,
+            ore=5,
+            knowledge=5,
+            bowl_one=0,
+            bowl_two=0,
+            bowl_three=20,
+        )
+        state = replace(state, player_to_move=0, players=tuple(players))
+        self.assertEqual(
+            tuple(state._power_action_cost(0, action) for action in PowerAction),
+            (7, 5, 4, 4, 4, 3, 3),
+        )
+
+        knowledge = state._apply_power_action(PowerAction.KNOWLEDGE_THREE)
+        self.assertEqual(knowledge.players[0].knowledge, 8)
+        ore = state._apply_power_action(PowerAction.ORE_TWO)
+        self.assertEqual(ore.players[0].ore, 7)
+        credits = state._apply_power_action(PowerAction.CREDITS_SEVEN)
+        self.assertEqual(credits.players[0].credits, 17)
+        tokens = state._apply_power_action(PowerAction.POWER_TOKENS_TWO)
+        self.assertEqual(tokens.players[0].bowl_one, 5)
+
+    def test_power_terraform_action_keeps_turn_until_mine_is_built(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(0, 2), first_player=0)
+        )
+        players = list(state.players)
+        tracks = list(players[0].tracks)
+        tracks[Track.NAVIGATION] = 5
+        players[0] = replace(
+            players[0],
+            credits=30,
+            ore=15,
+            qic=10,
+            bowl_one=0,
+            bowl_two=0,
+            bowl_three=20,
+            tracks=tuple(tracks),
+        )
+        state = replace(state, player_to_move=0, players=tuple(players))
+
+        pending = state.apply(state.power_action(PowerAction.TERRAFORM_TWO))
+        self.assertEqual(pending.current_player, 0)
+        self.assertEqual(pending.pending_power_terraform_player, 0)
+        self.assertTrue(pending.legal_actions())
+        self.assertTrue(all(action < pending.gaia_action(0) for action in pending.legal_actions()))
+        resolved = pending.apply(pending.legal_actions()[0])
+        self.assertEqual(resolved.pending_power_terraform_player, -1)
+        self.assertEqual(resolved.current_player, 1)
+
+    def test_terraforming_booster_builds_with_one_free_step(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(0, 2), first_player=0)
+        )
+        players = list(state.players)
+        tracks = list(players[0].tracks)
+        tracks[Track.NAVIGATION] = 5
+        players[0] = replace(
+            players[0],
+            credits=30,
+            ore=15,
+            qic=10,
+            tracks=tuple(tracks),
+        )
+        boosters = list(state.booster_owner)
+        for index, owner in enumerate(boosters):
+            if owner == 0:
+                boosters[index] = -1
+        boosters[0] = 0
+        state = replace(
+            state,
+            player_to_move=0,
+            players=tuple(players),
+            booster_owner=tuple(boosters),
+        )
+        target = next(
+            planet
+            for planet in range(len(state.active_planets))
+            if state.active_planets[planet]
+            and state.owners[planet] == -1
+            and state.terrains[planet]
+            not in (Terrain.TRANSDIM, Terrain.GAIA, Terrain.TERRA)
+            and state._can_build_mine(0, planet, free_steps=1)
+        )
+        normal_cost = state._build_cost(0, target)
+        boosted_cost = state._build_cost(0, target, free_steps=1)
+        self.assertLess(boosted_cost[1], normal_cost[1])
+        self.assertIn(BOOSTER_TERRAFORM_ACTION, state.legal_actions())
+
+        pending = state.apply(BOOSTER_TERRAFORM_ACTION)
+        self.assertEqual(pending.pending_booster_terraform_player, 0)
+        self.assertIn(pending.build_action(target), pending.legal_actions())
+        resolved = pending.apply(pending.build_action(target))
+        self.assertEqual(resolved.pending_booster_terraform_player, -1)
+        self.assertEqual(resolved.players[0].ore, 15 - boosted_cost[1])
+
+    def test_range_booster_extends_a_build_by_three_hexes(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(0, 2), first_player=0)
+        )
+        players = list(state.players)
+        players[0] = replace(players[0], credits=30, ore=15, qic=10)
+        boosters = list(state.booster_owner)
+        for index, owner in enumerate(boosters):
+            if owner == 0:
+                boosters[index] = -1
+        boosters[1] = 0
+        state = replace(
+            state,
+            player_to_move=0,
+            players=tuple(players),
+            booster_owner=tuple(boosters),
+        )
+        target = next(
+            planet
+            for planet in range(len(state.active_planets))
+            if state.active_planets[planet]
+            and state.terrains[planet] != Terrain.TRANSDIM
+            and not state._can_build_mine(0, planet)
+            and state._can_build_mine(0, planet, range_bonus=3)
+        )
+        self.assertIn(BOOSTER_RANGE_ACTION, state.legal_actions())
+
+        pending = state.apply(BOOSTER_RANGE_ACTION)
+        self.assertEqual(pending.pending_booster_range_player, 0)
+        self.assertIn(pending.build_action(target), pending.legal_actions())
+        resolved = pending.apply(pending.build_action(target))
+        self.assertEqual(resolved.pending_booster_range_player, -1)
+        self.assertEqual(resolved.current_player, 1)
+
+    def test_qic_and_knowledge_academies_are_distinct(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(
+                2,
+                faction_indices=(3, 0),
+                first_player=0,
+                standard_tech_tiles=tuple(range(STANDARD_TECH_COUNT)),
+            )
+        )
+        planet = state.starting_planets[0][0]
+        buildings = list(state.buildings)
+        buildings[planet] = Building.RESEARCH_LAB
+        players = list(state.players)
+        players[0] = replace(players[0], credits=30, ore=15, tech_tiles=0)
+        state = replace(
+            state,
+            player_to_move=0,
+            buildings=tuple(int(value) for value in buildings),
+            players=tuple(players),
+        )
+        self.assertIn(state.upgrade_academy_action(planet), state.legal_actions())
+        self.assertIn(state.upgrade_qic_academy_action(planet), state.legal_actions())
+
+        pending = state.apply(state.upgrade_qic_academy_action(planet))
+        self.assertEqual(pending.players[0].qic_academies, 1)
+        resolved = pending.apply(pending.tech_action(0))
+        resolved = replace(resolved, player_to_move=0)
+        self.assertIn(QIC_ACADEMY_ACTION, resolved.legal_actions())
+        ore_before = resolved.players[0].ore
+        qic_before = resolved.players[0].qic
+        used = resolved.apply(QIC_ACADEMY_ACTION)
+        self.assertEqual(used.players[0].qic, qic_before + 1)
+        self.assertEqual(used.players[0].ore, ore_before)
+        self.assertTrue(used.players[0].used_qic_academy_action)
+
+    def test_advanced_technology_special_action_is_once_per_round(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(0, 2), first_player=0)
+        )
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            credits=10,
+            qic=1,
+            advanced_tech_tiles=1,
+        )
+        state = replace(state, player_to_move=0, players=tuple(players))
+        action = ADVANCED_TECH_ACTION_OFFSET
+        self.assertIn(action, state.legal_actions())
+        used = state.apply(action)
+        self.assertEqual((used.players[0].credits, used.players[0].qic), (15, 2))
+        self.assertTrue(used.players[0].used_advanced_tech_actions & 1)
+        used = replace(used, player_to_move=0)
+        self.assertNotIn(action, used.legal_actions())
+
+    def test_standard_technology_charge_action_is_once_per_round(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(0, 2), first_player=0)
+        )
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            tech_tiles=1 << 8,
+            bowl_one=2,
+            bowl_two=2,
+            bowl_three=0,
+        )
+        state = replace(state, player_to_move=0, players=tuple(players))
+        self.assertIn(STANDARD_TECH_ACTION, state.legal_actions())
+        used = state.apply(STANDARD_TECH_ACTION)
+        self.assertEqual(
+            (used.players[0].bowl_one, used.players[0].bowl_two, used.players[0].bowl_three),
+            (0, 2, 2),
+        )
+        self.assertTrue(used.players[0].used_standard_tech_action)
+        used = replace(used, player_to_move=0)
+        self.assertNotIn(STANDARD_TECH_ACTION, used.legal_actions())
+
+        players = list(state.players)
+        players[0] = replace(players[0], covered_tech_tiles=1 << 8)
+        covered = replace(state, players=tuple(players))
+        self.assertNotIn(STANDARD_TECH_ACTION, covered.legal_actions())
+
+    def test_qic_actions_cover_tech_federation_and_planet_type_spaces(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(
+                2,
+                faction_indices=(0, 2),
+                first_player=0,
+                standard_tech_tiles=tuple(range(STANDARD_TECH_COUNT)),
+            )
+        )
+        players = list(state.players)
+        players[0] = replace(players[0], qic=7, vp=10)
+        state = replace(state, player_to_move=0, players=tuple(players))
+        self.assertIn(QIC_TECH_ACTION, state.legal_actions())
+        self.assertIn(QIC_PLANET_TYPES_ACTION, state.legal_actions())
+
+        scored = state.apply(QIC_PLANET_TYPES_ACTION)
+        self.assertEqual(scored.players[0].qic, 5)
+        self.assertEqual(scored.players[0].vp, 14)
+        self.assertNotIn(QIC_PLANET_TYPES_ACTION, replace(scored, player_to_move=0).legal_actions())
+
+        tech = replace(scored, player_to_move=0, players=(replace(scored.players[0], qic=5), scored.players[1]))
+        pending = tech.apply(QIC_TECH_ACTION)
+        self.assertEqual(pending.players[0].qic, 1)
+        self.assertEqual(pending.pending_tech_player, 0)
+        resolved = pending.apply(pending.tech_action(0))
+        self.assertEqual(resolved.pending_tech_player, -1)
+
+        players = list(resolved.players)
+        players[0] = replace(
+            players[0],
+            qic=3,
+            federation_tile_counts=(1, 0, 0, 0, 0, 0),
+        )
+        repeat = replace(
+            resolved,
+            player_to_move=0,
+            players=tuple(players),
+            used_qic_actions=0,
+        )
+        self.assertIn(QIC_FEDERATION_ACTION_OFFSET, repeat.legal_actions())
+        repeated = repeat.apply(QIC_FEDERATION_ACTION_OFFSET)
+        self.assertEqual(repeated.players[0].qic, 0)
+        self.assertEqual(repeated.players[0].vp, players[0].vp + 6)
+
+    def test_action_descriptions_keep_federation_and_qic_ranges_distinct(self) -> None:
+        state = finish_starting_placement(GaiaState.initial(2, seed=41))
+
+        self.assertEqual(
+            state.describe_action(FEDERATION_OFFSET),
+            "form federation and take tile 0",
+        )
+        self.assertEqual(
+            state.describe_action(QIC_FEDERATION_ACTION_OFFSET),
+            "Q.I.C. action: repeat federation tile 0",
+        )
+
+    def test_bescods_titanium_structure_power_bonus_stacks(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(11, 0), first_player=0)
+        )
+        home_planets = state.starting_planets[0]
+        buildings = list(state.buildings)
+        buildings[home_planets[0]] = Building.PLANETARY_INSTITUTE
+        buildings[home_planets[1]] = Building.ACADEMY
+        state = replace(state, buildings=tuple(int(value) for value in buildings))
+        self.assertEqual(
+            state._structure_power(0, Building.ACADEMY, home_planets[1]),
+            4,
+        )
+        players = list(state.players)
+        players[0] = replace(players[0], tech_tiles=1 << 4)
+        state = replace(state, players=tuple(players))
+        self.assertEqual(
+            state._structure_power(0, Building.ACADEMY, home_planets[1]),
+            5,
+        )
+
+    def test_gray_federation_tile_has_no_research_key(self) -> None:
+        state = finish_starting_placement(GaiaState.initial(2))
+        planets = [index for index, active in enumerate(state.active_planets) if active][:3]
+        owners = list(state.owners)
+        buildings = list(state.buildings)
+        for planet in planets:
+            owners[planet] = 0
+        buildings[planets[0]] = Building.PLANETARY_INSTITUTE
+        buildings[planets[1]] = Building.ACADEMY
+        buildings[planets[2]] = Building.MINE
+        players = list(state.players)
+        players[0] = replace(players[0], bowl_one=30, bowl_two=0, bowl_three=0)
+        state = replace(
+            state,
+            player_to_move=0,
+            owners=tuple(owners),
+            buildings=tuple(int(value) for value in buildings),
+            players=tuple(players),
+            round_scoring_tiles=(0, 1, 2, 3, 4, 5),
+        )
+        gray_action = FEDERATION_OFFSET + 5
+        self.assertIn(gray_action, state.legal_actions())
+        score_before = state.players[0].vp
+        formed = state.apply(gray_action)
+        self.assertEqual(formed.players[0].vp, score_before + 12)
+        self.assertEqual(formed.players[0].federation_keys, 0)
+
+    def test_two_player_final_ranking_includes_neutral_marker(self) -> None:
+        state = GaiaState.initial(2)
+        self.assertEqual(state._ranking_awards([9, 8], 10), [12.0, 6.0])
+        self.assertEqual(state._ranking_awards([10, 5], 10), [15.0, 6.0])
+
+    def test_final_resource_scoring_excludes_qic(self) -> None:
+        state = GaiaState.initial(2, seed=53)
+        players = list(state.players)
+        players[0] = replace(players[0], credits=0, ore=0, knowledge=0, qic=0)
+        empty = replace(state, players=tuple(players))
+        base_score = empty.final_scores()[0]
+
+        players[0] = replace(players[0], qic=9)
+        qic_only = replace(state, players=tuple(players))
+        self.assertEqual(qic_only.final_scores()[0], base_score)
+
+        players[0] = replace(players[0], credits=2, ore=1, knowledge=0, qic=0)
+        resources = replace(state, players=tuple(players))
+        self.assertEqual(resources.final_scores()[0], base_score + 1)
 
     def test_canonical_federation_awards_token(self) -> None:
         state = finish_starting_placement(GaiaState.initial(2))
