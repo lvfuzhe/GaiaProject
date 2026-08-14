@@ -1326,11 +1326,14 @@ main {
   pointer-events: none;
 }
 
+/* BGA gameBoard.png is 1220 x 1311; these slots preserve its source coordinates. */
 .research-tech-slot {
   position: absolute;
   display: block;
   overflow: hidden;
-  transform: translate(-50%, -50%);
+  width: 12.1311%;
+  aspect-ratio: 148 / 116;
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 30% 100%, 0 65%);
   filter: drop-shadow(0 1px 1px rgb(9 14 12 / 45%));
   pointer-events: auto;
 }
@@ -1342,57 +1345,45 @@ main {
 
 .research-tech-slot img {
   position: absolute;
+  inset: 0;
   display: block;
+  width: 100%;
+  height: 100%;
   max-width: none;
+  object-fit: fill;
 }
 
 .research-tech-slot.advanced {
-  top: 8.2%;
-  width: 8.9%;
-  aspect-ratio: 1;
-}
-
-.research-tech-slot.advanced img {
-  top: -5%;
-  left: -5%;
-  width: 160%;
+  top: 8.2380%;
 }
 
 .research-tech-slot.standard {
-  top: 65.0%;
-  width: 12.1%;
-  aspect-ratio: 100 / 77;
+  top: 61.3272%;
 }
 
-.research-tech-slot.standard img {
-  top: 0;
-  left: 0;
-  width: 130%;
-}
+.research-tech-slot.advanced.track-0 { left: 4.2623%; }
+.research-tech-slot.advanced.track-1 { left: 20.5738%; }
+.research-tech-slot.advanced.track-2 { left: 36.7213%; }
+.research-tech-slot.advanced.track-3 { left: 52.9508%; }
+.research-tech-slot.advanced.track-4 { left: 69.2623%; }
+.research-tech-slot.advanced.track-5 { left: 85.4918%; }
 
-.research-tech-slot.track-0 { left: 11.9%; }
-.research-tech-slot.track-1 { left: 28.2%; }
-.research-tech-slot.track-2 { left: 44.3%; }
-.research-tech-slot.track-3 { left: 60.6%; }
-.research-tech-slot.track-4 { left: 76.9%; }
-.research-tech-slot.track-5 { left: 93.1%; }
-
-.research-tech-slot.standard.track-0 { left: 9.0%; }
-.research-tech-slot.standard.track-1 { left: 25.2%; }
-.research-tech-slot.standard.track-2 { left: 41.5%; }
-.research-tech-slot.standard.track-3 { left: 57.7%; }
-.research-tech-slot.standard.track-4 { left: 73.9%; }
-.research-tech-slot.standard.track-5 { left: 90.2%; }
+.research-tech-slot.standard.track-0 { left: 2.2951%; }
+.research-tech-slot.standard.track-1 { left: 18.5246%; }
+.research-tech-slot.standard.track-2 { left: 34.7541%; }
+.research-tech-slot.standard.track-3 { left: 50.9836%; }
+.research-tech-slot.standard.track-4 { left: 67.2131%; }
+.research-tech-slot.standard.track-5 { left: 83.4426%; }
 
 .research-tech-slot.free-0,
 .research-tech-slot.free-1,
 .research-tech-slot.free-2 {
-  top: 79.3%;
+  top: 74.7521%;
 }
 
-.research-tech-slot.free-0 { left: 15.4%; }
-.research-tech-slot.free-1 { left: 48.2%; }
-.research-tech-slot.free-2 { left: 79.3%; }
+.research-tech-slot.free-0 { left: 8.6885%; }
+.research-tech-slot.free-1 { left: 41.4754%; }
+.research-tech-slot.free-2 { left: 72.5410%; }
 
 .research-board-position {
   position: absolute;

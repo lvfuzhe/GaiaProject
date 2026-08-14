@@ -83,6 +83,8 @@ class DashboardTests(unittest.TestCase):
                 page = response.read().decode("utf-8")
             with urlopen(f"{base}/app.js", timeout=5) as response:
                 app_script = response.read().decode("utf-8")
+            with urlopen(f"{base}/styles.css", timeout=5) as response:
+                styles = response.read().decode("utf-8")
             with urlopen(f"{base}/setup/random", timeout=5) as response:
                 random_setup_page = response.read().decode("utf-8")
             with urlopen(f"{base}/setup/manual", timeout=5) as response:
@@ -203,6 +205,11 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("starting_knowledge", app_script)
             self.assertNotIn("TILE_ART_IDS", app_script)
             self.assertIn("const number = Number(id) + 1", app_script)
+            self.assertIn("width: 12.1311%", styles)
+            self.assertIn("top: 8.2380%", styles)
+            self.assertIn(".research-tech-slot.advanced.track-0 { left: 4.2623%; }", styles)
+            self.assertIn(".research-tech-slot.standard.track-0 { left: 2.2951%; }", styles)
+            self.assertIn(".research-tech-slot.free-2 { left: 72.5410%; }", styles)
             for name, (content_type, content) in tile_assets.items():
                 expected_type = "image/gif" if name.endswith(".gif") else "image/jpeg"
                 self.assertEqual(content_type, expected_type)
