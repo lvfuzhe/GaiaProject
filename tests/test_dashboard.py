@@ -205,6 +205,7 @@ class DashboardTests(unittest.TestCase):
                 expected_type = "image/gif" if name.endswith(".gif") else "image/jpeg"
                 self.assertEqual(content_type, expected_type)
                 self.assertTrue(content.startswith(b"GIF" if expected_type == "image/gif" else b"\xff\xd8"))
+                self.assertGreater(len(content), 1_000, name)
         finally:
             server.shutdown()
             server.server_close()
