@@ -2441,9 +2441,8 @@ function renderLiveResearchBoard(snapshot) {
   const techLayer = byId("play-research-tech");
   const markerLayer = byId("play-research-markers");
   const legend = byId("play-research-player-legend");
-  const playersContainer = byId("play-research-players");
   const status = byId("play-research-status");
-  if (!stage || !techLayer || !markerLayer || !legend || !playersContainer || !status) return;
+  if (!stage || !techLayer || !markerLayer || !legend || !status) return;
 
   const setup = snapshot?.setup;
   const players = snapshot?.players || [];
@@ -2452,7 +2451,6 @@ function renderLiveResearchBoard(snapshot) {
     techLayer.innerHTML = "";
     markerLayer.innerHTML = "";
     legend.innerHTML = "";
-    playersContainer.innerHTML = '<div class="play-research-empty">暂无科研轨状态</div>';
     return;
   }
 
@@ -2491,19 +2489,6 @@ function renderLiveResearchBoard(snapshot) {
     })
   ).join("");
   legend.innerHTML = players.map((player) => `<span><i class="player-mini p${player.id}"></i>P${player.id} ${escapeHtml(player.faction || "")}</span>`).join("");
-  playersContainer.innerHTML = players.map((player) => {
-    const tracks = Array.isArray(player.tracks) ? player.tracks : [];
-    const highest = Math.max(0, ...tracks.map((value) => Number(value || 0)));
-    const trackRows = Object.entries(TRACK_LABELS).map(([track, label], index) => {
-      const level = Number(tracks[index] || 0);
-      return `<div class="play-research-track"><span>${escapeHtml(label)}</span><strong>L${level}</strong><i><b style="width:${Math.min(100, level / 5 * 100)}%"></b></i></div>`;
-    }).join("");
-    const playerColor = PLAYER_COLORS[player.id] || PLAYER_COLORS[0];
-    return `<article class="play-research-player ${player.id === snapshot.current_player ? "current" : ""}" style="--research-player-color:${playerColor}">
-      <div class="play-research-player-heading"><strong><i class="player-color p${player.id}"></i>P${player.id} ${escapeHtml(player.faction || "")}</strong><span>最高 L${highest}</span></div>
-      <div class="play-research-track-list">${trackRows}</div>
-    </article>`;
-  }).join("");
   const active = snapshot.current_player === null || snapshot.current_player === undefined
     ? "对局已结束"
     : `当前行动 P${snapshot.current_player}`;
