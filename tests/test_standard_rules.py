@@ -4,10 +4,15 @@ from dataclasses import replace
 import numpy as np
 
 from gaiazero.game.gaia_state import (
+    ADVANCED_TECH_TILES,
     BOOSTER_COUNT,
+    BOOSTER_LABELS,
     FEDERATION_ACTION,
     FACTIONS,
+    FINAL_SCORING_TILES,
     MAX_BUILDINGS,
+    ROUND_SCORING_TILES,
+    STANDARD_TECH_TILES,
     Building,
     GaiaHeuristicEvaluator,
     GaiaState,
@@ -47,7 +52,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(sum(len(planets) for planets in state.starting_planets), 0)
         self.assertEqual(state.round_number, 0)
         self.assertTrue(state.is_starting_placement)
-        self.assertEqual(state.snapshot()["ruleset"], "standard-v5")
+        self.assertEqual(state.snapshot()["ruleset"], "standard-v6")
 
     def test_random_setup_is_seeded_and_respects_component_counts(self) -> None:
         first = GaiaState.initial(2, seed=19)
@@ -98,7 +103,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         snapshot = GaiaState.initial(3, seed=41).snapshot()
         setup = snapshot["setup"]
 
-        self.assertEqual(snapshot["ruleset"], "standard-v5")
+        self.assertEqual(snapshot["ruleset"], "standard-v6")
         self.assertEqual(setup["seed"], 41)
         self.assertEqual(setup["map"]["sector_count"], 10)
         self.assertEqual(len(setup["map"]["sectors"]), 10)
@@ -164,6 +169,134 @@ class StandardGaiaRulesTests(unittest.TestCase):
         changed = replace(state, booster_owner=tuple(owners))
 
         self.assertFalse(np.array_equal(state.observation(), changed.observation()))
+
+    def test_component_catalogs_follow_bga_sprite_order(self) -> None:
+        self.assertEqual(
+            tuple(tile.key for tile in STANDARD_TECH_TILES),
+            (
+                "ore-qic",
+                "planet-type-knowledge",
+                "vp-7",
+                "gaia-mine-vp",
+                "structure-power",
+                "ore-power-income",
+                "knowledge-credit-income",
+                "credits-income",
+                "power-action",
+            ),
+        )
+        self.assertEqual(
+            tuple(tile.key for tile in ROUND_SCORING_TILES),
+            (
+                "terraform-2",
+                "research-2",
+                "mine-2",
+                "federation-5",
+                "trading-3",
+                "trading-4",
+                "gaia-mine-3",
+                "gaia-mine-4",
+                "big-5a",
+                "big-5b",
+            ),
+        )
+        self.assertEqual(
+            tuple(tile.key for tile in FINAL_SCORING_TILES),
+            (
+                "federation-structures",
+                "structures",
+                "planet-types",
+                "gaia-planets",
+                "sectors",
+                "satellites",
+            ),
+        )
+        self.assertEqual(len(ADVANCED_TECH_TILES), 15)
+        self.assertTrue(ADVANCED_TECH_TILES[0].label.startswith("Action: gain 1 Q.I.C."))
+        self.assertTrue(ADVANCED_TECH_TILES[-1].label.startswith("3 VP per trading station"))
+        self.assertEqual(len(BOOSTER_LABELS), 10)
+
+    def test_bga_booster_income_order(self) -> None:
+        self.assertEqual(
+            tuple(GaiaState._booster_income(booster) for booster in range(BOOSTER_COUNT)),
+            (
+                (2, 0, 0, 0, 0),
+                (0, 0, 0, 0, 2),
+                (0, 1, 1, 0, 0),
+                (0, 1, 0, 0, 2),
+                (2, 0, 0, 1, 0),
+                (0, 1, 0, 0, 0),
+                (0, 1, 0, 0, 0),
+                (0, 0, 1, 0, 0),
+                (0, 0, 0, 0, 4),
+                (4, 0, 0, 0, 0),
+            ),
+        )
+
+    def test_bga_standard_tech_immediate_rewards(self) -> None:
+        state = finish_starting_placement(GaiaState.initial(2, seed=7))
+        player = state.current_player
+        players = list(state.players)
+        players[player] = replace(
+            players[player],
+            ore=4,
+            knowledge=3,
+            qic=1,
+            vp=10,
+            colonized_types=(1 << Terrain.TERRA) | (1 << Terrain.GAIA),
+        )
+        state = replace(state, players=tuple(players))
+
+        ore_qic = replace(
+            state,
+            standard_tech_tiles=(0, 3, 4, 5, 6, 7, 1, 2, 8),
+        )._apply_tech(Track.TERRAFORMING).players[player]
+        self.assertEqual((ore_qic.ore, ore_qic.qic), (5, 2))
+
+        knowledge = replace(
+            state,
+            standard_tech_tiles=(1, 3, 4, 5, 6, 7, 0, 2, 8),
+        )._apply_tech(Track.TERRAFORMING).players[player]
+        self.assertEqual(knowledge.knowledge, 5)
+
+        victory_points = replace(
+            state,
+            standard_tech_tiles=(2, 3, 4, 5, 6, 7, 0, 1, 8),
+        )._apply_tech(Track.TERRAFORMING).players[player]
+        self.assertEqual(victory_points.vp, 17)
+
+    def test_bga_booster_pass_scoring_order(self) -> None:
+        state = finish_starting_placement(GaiaState.initial(2, seed=9))
+        planets = [index for index, active in enumerate(state.active_planets) if active][:5]
+        owners = [-1] * len(state.owners)
+        buildings = [Building.EMPTY] * len(state.buildings)
+        terrains = list(state.terrains)
+        for planet in planets:
+            owners[planet] = 0
+        for planet, building in zip(
+            planets,
+            (
+                Building.MINE,
+                Building.TRADING_STATION,
+                Building.RESEARCH_LAB,
+                Building.PLANETARY_INSTITUTE,
+                Building.ACADEMY,
+            ),
+            strict=True,
+        ):
+            buildings[planet] = building
+        terrains[planets[0]] = Terrain.GAIA
+        state = replace(
+            state,
+            owners=tuple(owners),
+            buildings=tuple(int(building) for building in buildings),
+            terrains=tuple(int(terrain) for terrain in terrains),
+        )
+
+        self.assertEqual(
+            tuple(state._booster_pass_points(0, booster) for booster in range(BOOSTER_COUNT)),
+            (0, 0, 0, 0, 0, 1, 2, 3, 8, 1),
+        )
 
     def test_random_factions_use_different_boards_and_home_planets(self) -> None:
         for seed in range(20):
@@ -661,12 +794,15 @@ class StandardGaiaRulesTests(unittest.TestCase):
             owners=tuple(owners),
             buildings=tuple(int(value) for value in buildings),
             players=tuple(players),
+            round_scoring_tiles=(3, 0, 1, 2, 4, 5),
         )
 
         self.assertIn(FEDERATION_ACTION, state.legal_actions())
+        score_before = state.players[0].vp
         formed = state.apply(FEDERATION_ACTION)
         self.assertEqual(formed.players[0].federation_tokens, 1)
         self.assertEqual(formed.players[0].federation_keys, 1)
+        self.assertEqual(formed.players[0].vp, score_before + 11)
         self.assertTrue(all(formed.federated[planet] for planet in planets))
 
     def test_passing_returns_old_booster_and_takes_new_one(self) -> None:

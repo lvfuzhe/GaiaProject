@@ -18,65 +18,61 @@ const TRACK_LABELS = {
 };
 const TRACK_KEYS = Object.keys(TRACK_LABELS);
 const BOOSTER_NAMES = [
-  "矿石与矿场计分", "知识与贸易站计分", "信用点与能量", "信用点",
-  "矿石与能量", "知识与能量", "信用点与能量", "航行行动", "改造行动", "盖亚行动"
+  "2 信用点；特殊行动：免费 1 步改造后建矿",
+  "充能 2；特殊行动：一次建造或盖亚计划航行距离 +3",
+  "1 矿石 + 1 知识",
+  "1 矿石 + 充能 2",
+  "2 信用点 + 1 Q.I.C.",
+  "1 矿石；过轮时每座矿场 1 VP",
+  "1 矿石；过轮时每座贸易站 2 VP",
+  "1 知识；过轮时每座研究所 3 VP",
+  "充能 4；过轮时每座行星研究院或学院 4 VP",
+  "4 信用点；过轮时每颗已殖民盖亚星球 1 VP"
 ];
 const ADVANCED_TECH_NAMES = [
-  "联邦得分", "科研推进得分", "矿场得分", "贸易站得分", "行星研究院得分",
-  "学院得分", "盖亚星球得分", "星球类型得分", "星区得分", "卫星得分",
-  "能量行动", "知识行动", "矿石行动", "信用点行动", "Q.I.C. 行动"
+  "特殊行动：1 Q.I.C. + 5 信用点",
+  "特殊行动：3 矿石",
+  "特殊行动：3 知识",
+  "每座矿场 2 VP",
+  "每个已殖民星区 1 矿石",
+  "每个已殖民星区 2 VP",
+  "每颗已殖民盖亚星球 2 VP",
+  "每枚联邦板块 5 VP",
+  "每座贸易站 4 VP",
+  "过轮时每枚联邦板块 3 VP",
+  "过轮时每座研究所 3 VP",
+  "过轮时每种已殖民星球类型 1 VP",
+  "每次推进科研 2 VP",
+  "每次建造矿场 3 VP",
+  "每次建造贸易站 3 VP"
 ];
 const FEDERATION_NAMES = [
   "6 VP + 2 知识", "7 VP + 2 矿石", "8 VP + 1 Q.I.C.",
   "7 VP + 能量", "信用点 + VP", "12 VP"
 ];
 const SETUP_LABELS = {
-  "mine-2a": "建造矿场", "mine-2b": "建造矿场",
-  "trading-3a": "建造贸易站", "trading-3b": "建造贸易站",
-  "terraform-2a": "地形改造步数", "terraform-2b": "地形改造步数",
-  "gaia-3a": "殖民盖亚星球", "gaia-3b": "殖民盖亚星球",
-  "research-2": "推进科研", "big-5": "建造行星研究院或学院",
+  "terraform-2": "每个地形改造步数 +2 VP",
+  "research-2": "每次推进科研 +2 VP",
+  "mine-2": "每次建造矿场 +2 VP",
+  "federation-5": "每次获得联邦板块 +5 VP",
+  "trading-3": "每次建造贸易站 +3 VP",
+  "trading-4": "每次建造贸易站 +4 VP",
+  "gaia-mine-3": "在盖亚星球建造矿场 +3 VP",
+  "gaia-mine-4": "在盖亚星球建造矿场 +4 VP",
+  "big-5a": "建造行星研究院或学院 +5 VP",
+  "big-5b": "建造行星研究院或学院 +5 VP",
   "federation-structures": "联邦内建筑", structures: "建筑总数",
   "planet-types": "殖民星球类型", "gaia-planets": "殖民盖亚星球",
-  sectors: "殖民星区", satellites: "放置卫星",
-  "ore-income": "矿石收入", "knowledge-income": "知识收入",
-  "credits-income": "信用点收入", "gaia-vp": "盖亚星球得分",
-  "power-income": "能量收入", qic: "立即获得 Q.I.C.",
-  "mine-vp": "矿场得分", "federation-vp": "联邦得分",
-  "planet-type-vp": "星球类型得分"
-};
-const TILE_ART_IDS = {
-  standard: {
-    "ore-income": 4,
-    "knowledge-income": 2,
-    "credits-income": 1,
-    "gaia-vp": 6,
-    "power-income": 9,
-    qic: 7,
-    "mine-vp": 5,
-    "federation-vp": 8,
-    "planet-type-vp": 3,
-  },
-  round: {
-    "mine-2a": 2,
-    "mine-2b": 2,
-    "trading-3a": 9,
-    "trading-3b": 9,
-    "terraform-2a": 10,
-    "terraform-2b": 10,
-    "gaia-3a": 4,
-    "gaia-3b": 4,
-    "research-2": 6,
-    "big-5": 1,
-  },
-  final: {
-    "gaia-planets": 1,
-    satellites: 2,
-    "planet-types": 3,
-    sectors: 4,
-    "federation-structures": 5,
-    structures: 6,
-  },
+  sectors: "殖民星区", satellites: "放置卫星与空间站",
+  "ore-qic": "立即获得 1 矿石和 1 Q.I.C.",
+  "planet-type-knowledge": "每种已殖民星球类型获得 1 知识",
+  "vp-7": "立即获得 7 VP",
+  "gaia-mine-vp": "在盖亚星球建造矿场时获得 3 VP",
+  "structure-power": "行星研究院和学院的建筑强度变为 4",
+  "ore-power-income": "收入：1 矿石并充能 1",
+  "knowledge-credit-income": "收入：1 知识和 1 信用点",
+  "credits-income": "收入：4 信用点",
+  "power-action": "特殊行动：充能 4"
 };
 const FACTION_ABILITIES = {
   Terrans: "盖亚区能量回到能量碗 II",
@@ -111,12 +107,12 @@ const BASE_FACTIONS = [
   { id: 13, board: 7, side: "A", name: "Itars", home_terrain: 6, start_track: "gaia_project", starting_power: [4, 4, 0], starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
 ];
 const STANDARD_TECH_KEYS = [
-  "ore-income", "knowledge-income", "credits-income", "gaia-vp", "power-income",
-  "qic", "mine-vp", "federation-vp", "planet-type-vp",
+  "ore-qic", "planet-type-knowledge", "vp-7", "gaia-mine-vp", "structure-power",
+  "ore-power-income", "knowledge-credit-income", "credits-income", "power-action",
 ];
 const ROUND_SETUP_KEYS = [
-  "mine-2a", "mine-2b", "trading-3a", "trading-3b", "terraform-2a",
-  "terraform-2b", "gaia-3a", "gaia-3b", "research-2", "big-5",
+  "terraform-2", "research-2", "mine-2", "federation-5", "trading-3",
+  "trading-4", "gaia-mine-3", "gaia-mine-4", "big-5a", "big-5b",
 ];
 const FINAL_SETUP_KEYS = [
   "federation-structures", "structures", "planet-types",
@@ -551,9 +547,8 @@ function setupLabel(tile) {
   return SETUP_LABELS[tile?.key] || tile?.label || "--";
 }
 
-function tileAsset(kind, id, key = "") {
-  const mapped = TILE_ART_IDS[kind]?.[key];
-  const number = mapped || Number(id) + 1;
+function tileAsset(kind, id) {
+  const number = Number(id) + 1;
   if (!Number.isInteger(number) || number < 1) return "";
   const assets = {
     standard: ["tech-standard", "jpg"],

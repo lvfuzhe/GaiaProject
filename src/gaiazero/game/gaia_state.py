@@ -147,16 +147,16 @@ class TileSpec:
 
 
 ROUND_SCORING_TILES: tuple[TileSpec, ...] = (
-    TileSpec("mine-2a", "Build mines", "mine", 2),
-    TileSpec("mine-2b", "Build mines", "mine", 2),
-    TileSpec("trading-3a", "Build trading stations", "trading", 3),
-    TileSpec("trading-3b", "Build trading stations", "trading", 3),
-    TileSpec("terraform-2a", "Terraforming steps", "terraform", 2),
-    TileSpec("terraform-2b", "Terraforming steps", "terraform", 2),
-    TileSpec("gaia-3a", "Colonize Gaia planets", "gaia", 3),
-    TileSpec("gaia-3b", "Colonize Gaia planets", "gaia", 3),
+    TileSpec("terraform-2", "Terraforming steps", "terraform", 2),
     TileSpec("research-2", "Advance research", "research", 2),
-    TileSpec("big-5", "Build PI or academy", "big", 5),
+    TileSpec("mine-2", "Build mines", "mine", 2),
+    TileSpec("federation-5", "Gain federation tokens", "federation", 5),
+    TileSpec("trading-3", "Build trading stations", "trading", 3),
+    TileSpec("trading-4", "Build trading stations", "trading", 4),
+    TileSpec("gaia-mine-3", "Build mines on Gaia planets", "gaia", 3),
+    TileSpec("gaia-mine-4", "Build mines on Gaia planets", "gaia", 4),
+    TileSpec("big-5a", "Build PI or academy", "big", 5),
+    TileSpec("big-5b", "Build PI or academy", "big", 5),
 )
 
 FINAL_SCORING_TILES: tuple[TileSpec, ...] = (
@@ -165,40 +165,40 @@ FINAL_SCORING_TILES: tuple[TileSpec, ...] = (
     TileSpec("planet-types", "Colonized planet types"),
     TileSpec("gaia-planets", "Colonized Gaia planets"),
     TileSpec("sectors", "Colonized sectors"),
-    TileSpec("satellites", "Placed satellites"),
+    TileSpec("satellites", "Placed satellites and space stations"),
 )
 
 STANDARD_TECH_TILES: tuple[TileSpec, ...] = (
-    TileSpec("ore-income", "Ore income"),
-    TileSpec("knowledge-income", "Knowledge income"),
-    TileSpec("credits-income", "Credits income"),
-    TileSpec("gaia-vp", "Gaia planet VP"),
-    TileSpec("power-income", "Power income"),
-    TileSpec("qic", "Immediate Q.I.C."),
-    TileSpec("mine-vp", "Mine scoring"),
-    TileSpec("federation-vp", "Federation scoring"),
-    TileSpec("planet-type-vp", "Planet type scoring"),
+    TileSpec("ore-qic", "Immediately gain 1 ore and 1 Q.I.C."),
+    TileSpec("planet-type-knowledge", "1 knowledge per colonized planet type"),
+    TileSpec("vp-7", "Immediately gain 7 VP"),
+    TileSpec("gaia-mine-vp", "3 VP when building a mine on a Gaia planet"),
+    TileSpec("structure-power", "PI and academy power value becomes 4"),
+    TileSpec("ore-power-income", "Income: 1 ore and charge 1 power"),
+    TileSpec("knowledge-credit-income", "Income: 1 knowledge and 1 credit"),
+    TileSpec("credits-income", "Income: 4 credits"),
+    TileSpec("power-action", "Action: charge 4 power"),
 )
 
 ADVANCED_TECH_TILES: tuple[TileSpec, ...] = tuple(
     TileSpec(f"advanced-{index + 1:02d}", label)
     for index, label in enumerate(
         (
-            "Federation VP",
-            "Research VP",
-            "Mine VP",
-            "Trading station VP",
-            "Planetary institute VP",
-            "Academy VP",
-            "Gaia planet VP",
-            "Planet type VP",
-            "Sector VP",
-            "Satellite VP",
-            "Power action",
-            "Knowledge action",
-            "Ore action",
-            "Credits action",
-            "Q.I.C. action",
+            "Action: gain 1 Q.I.C. and 5 credits",
+            "Action: gain 3 ore",
+            "Action: gain 3 knowledge",
+            "2 VP per mine",
+            "1 ore per colonized sector",
+            "2 VP per colonized sector",
+            "2 VP per Gaia planet",
+            "5 VP per federation token",
+            "4 VP per trading station",
+            "Pass: 3 VP per federation token",
+            "Pass: 3 VP per research lab",
+            "Pass: 1 VP per planet type",
+            "2 VP per research advance",
+            "3 VP per mine built",
+            "3 VP per trading station built",
         )
     )
 )
@@ -213,16 +213,16 @@ FEDERATION_TILES: tuple[TileSpec, ...] = (
 )
 
 BOOSTER_LABELS: tuple[str, ...] = (
-    "Ore + mine scoring",
-    "Knowledge + trading scoring",
-    "Credits + power",
-    "Credits",
-    "Ore + power",
-    "Knowledge + power",
-    "Credits + power",
-    "Navigation action",
-    "Terraforming action",
-    "Gaia action",
+    "2 credits; action: build a mine with 1 free terraforming step",
+    "Charge 2 power; action: range +3 for one build or Gaia Project",
+    "1 ore and 1 knowledge",
+    "1 ore and charge 2 power",
+    "2 credits and 1 Q.I.C.",
+    "1 ore; pass: 1 VP per mine",
+    "1 ore; pass: 2 VP per trading station",
+    "1 knowledge; pass: 3 VP per research lab",
+    "Charge 4 power; pass: 4 VP per PI or academy",
+    "4 credits; pass: 1 VP per colonized Gaia planet",
 )
 
 N = MAX_PLANETS
@@ -748,7 +748,11 @@ class GaiaState:
             buildings=tuple(int(value) for value in buildings),
             gaiaformer_owner=tuple(gaiaformers),
         )
-        return state._trigger_passive_charge(player, planet, STRUCTURE_POWER[Building.MINE])
+        return state._trigger_passive_charge(
+            player,
+            planet,
+            state._structure_power(player, Building.MINE),
+        )
 
     def _apply_gaia(self, planet: int) -> GaiaState:
         player = self.player_to_move
@@ -787,7 +791,11 @@ class GaiaState:
             buildings=tuple(int(value) for value in buildings),
             pending_tech_player=player if target in (Building.RESEARCH_LAB, Building.ACADEMY) else -1,
         )
-        state = state._trigger_passive_charge(player, planet, STRUCTURE_POWER[target])
+        state = state._trigger_passive_charge(
+            player,
+            planet,
+            state._structure_power(player, target),
+        )
         if target in (Building.RESEARCH_LAB, Building.ACADEMY):
             return state
         return state
@@ -804,8 +812,15 @@ class GaiaState:
         info = self.players[player]
         tile = self.standard_tech_tiles[track]
         info = replace(info, tech_tiles=info.tech_tiles | (1 << tile))
-        if tile == 5:
-            info = replace(info, qic=info.qic + 1)
+        if tile == 0:
+            info = replace(info, ore=min(15, info.ore + 1), qic=info.qic + 1)
+        elif tile == 1:
+            info = replace(
+                info,
+                knowledge=min(15, info.knowledge + info.colonized_types.bit_count()),
+            )
+        elif tile == 2:
+            info = replace(info, vp=info.vp + 7)
         info = self._advance_research(info, Track(track))
         return replace(
             self,
@@ -850,6 +865,7 @@ class GaiaState:
             federation_keys=info.federation_keys + 1,
             satellites=info.satellites + satellites,
         )
+        info = self._score(info, "federation")
         federated = list(self.federated)
         for planet in planets:
             federated[planet] = True
@@ -912,20 +928,35 @@ class GaiaState:
             economy = info.tracks[Track.ECONOMY]
             science = info.tracks[Track.SCIENCE]
             booster = self._player_booster(player)
-            booster_credits, booster_ore, booster_knowledge, booster_charge = self._booster_income(booster)
+            (
+                booster_credits,
+                booster_ore,
+                booster_knowledge,
+                booster_qic,
+                booster_charge,
+            ) = self._booster_income(booster)
             credits = min(30, info.credits + 2 + 2 * trading + economy + booster_credits)
             ore = min(15, info.ore + 1 + mines + economy // 2 + booster_ore)
             knowledge = min(15, info.knowledge + 1 + labs + academies + science + booster_knowledge)
-            info = replace(info, credits=credits, ore=ore, knowledge=knowledge)
+            info = replace(
+                info,
+                credits=credits,
+                ore=ore,
+                knowledge=knowledge,
+                qic=info.qic + booster_qic,
+            )
             charge = institutes * 4 + economy + booster_charge
-            if info.tech_tiles & (1 << 0):
+            if info.tech_tiles & (1 << 5):
                 info = replace(info, ore=min(15, info.ore + 1))
-            if info.tech_tiles & (1 << 1):
-                info = replace(info, knowledge=min(15, info.knowledge + 1))
-            if info.tech_tiles & (1 << 2):
-                info = replace(info, credits=min(30, info.credits + 4))
-            if info.tech_tiles & (1 << 4):
                 charge += 1
+            if info.tech_tiles & (1 << 6):
+                info = replace(
+                    info,
+                    credits=min(30, info.credits + 1),
+                    knowledge=min(15, info.knowledge + 1),
+                )
+            if info.tech_tiles & (1 << 7):
+                info = replace(info, credits=min(30, info.credits + 4))
             info, _ = self._charge_power(info, charge)
             updated.append(info)
         return replace(self, players=tuple(updated))
@@ -961,6 +992,7 @@ class GaiaState:
             info = replace(info, gaiaformers=info.gaiaformers + 1)
         elif track == Track.TERRAFORMING and new_level == 5:
             info = replace(info, federation_tokens=info.federation_tokens + 1, federation_keys=info.federation_keys + 1)
+            info = self._score(info, "federation")
         return info
 
     @staticmethod
@@ -1049,7 +1081,10 @@ class GaiaState:
         best: tuple[tuple[int, int, int], tuple[int, ...], int] | None = None
         for size in range(1, len(candidates) + 1):
             for subset in combinations(candidates, size):
-                power = sum(STRUCTURE_POWER[Building(self.buildings[planet])] for planet in subset)
+                power = sum(
+                    self._structure_power(player, Building(self.buildings[planet]))
+                    for planet in subset
+                )
                 if power < threshold:
                     continue
                 satellites = self._minimum_satellites(subset)
@@ -1131,6 +1166,14 @@ class GaiaState:
             for owner, building in zip(self.owners, self.buildings, strict=True)
         )
 
+    def _structure_power(self, player: int, building: Building) -> int:
+        if (
+            building in (Building.PLANETARY_INSTITUTE, Building.ACADEMY)
+            and self.players[player].tech_tiles & (1 << 4)
+        ):
+            return 4
+        return STRUCTURE_POWER[building]
+
     def _has_pi(self, player: int) -> bool:
         return self._building_count(player, Building.PLANETARY_INSTITUTE) > 0
 
@@ -1155,30 +1198,38 @@ class GaiaState:
         return next((index for index, owner in enumerate(self.booster_owner) if owner == player), -1)
 
     @staticmethod
-    def _booster_income(booster: int) -> tuple[int, int, int, int]:
+    def _booster_income(booster: int) -> tuple[int, int, int, int, int]:
         incomes = (
-            (0, 1, 0, 0),
-            (0, 0, 1, 0),
-            (2, 0, 0, 2),
-            (4, 0, 0, 0),
-            (0, 1, 0, 1),
-            (0, 0, 1, 1),
-            (2, 0, 0, 1),
-            (0, 0, 0, 0),
-            (0, 0, 0, 0),
-            (0, 0, 0, 0),
+            (2, 0, 0, 0, 0),
+            (0, 0, 0, 0, 2),
+            (0, 1, 1, 0, 0),
+            (0, 1, 0, 0, 2),
+            (2, 0, 0, 1, 0),
+            (0, 1, 0, 0, 0),
+            (0, 1, 0, 0, 0),
+            (0, 0, 1, 0, 0),
+            (0, 0, 0, 0, 4),
+            (4, 0, 0, 0, 0),
         )
-        return incomes[booster] if booster >= 0 else (0, 0, 0, 0)
+        return incomes[booster] if booster >= 0 else (0, 0, 0, 0, 0)
 
     def _booster_pass_points(self, player: int, booster: int) -> int:
-        if booster == 0:
-            return self._building_count(player, Building.MINE)
-        if booster == 1:
-            return 2 * self._building_count(player, Building.TRADING_STATION)
-        if booster == 4:
-            return self.players[player].tracks[Track.NAVIGATION]
         if booster == 5:
-            return self.players[player].tracks[Track.GAIA_PROJECT]
+            return self._building_count(player, Building.MINE)
+        if booster == 6:
+            return 2 * self._building_count(player, Building.TRADING_STATION)
+        if booster == 7:
+            return 3 * self._building_count(player, Building.RESEARCH_LAB)
+        if booster == 8:
+            return 4 * (
+                self._building_count(player, Building.PLANETARY_INSTITUTE)
+                + self._building_count(player, Building.ACADEMY)
+            )
+        if booster == 9:
+            return sum(
+                owner == player and terrain == Terrain.GAIA
+                for owner, terrain in zip(self.owners, self.terrains, strict=True)
+            )
         return 0
 
     def final_scores(self) -> tuple[float, ...]:
@@ -1398,7 +1449,7 @@ class GaiaState:
                 self.round_scoring_tiles[self.round_number - 1]
             ].key
         return {
-            "ruleset": "standard-v5",
+            "ruleset": "standard-v6",
             "round": max(0, min(self.round_number, MAX_ROUNDS)),
             "max_rounds": MAX_ROUNDS,
             "phase": (

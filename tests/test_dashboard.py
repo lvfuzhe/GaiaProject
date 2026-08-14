@@ -201,6 +201,8 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("starting_credits", app_script)
             self.assertIn("starting_ore", app_script)
             self.assertIn("starting_knowledge", app_script)
+            self.assertNotIn("TILE_ART_IDS", app_script)
+            self.assertIn("const number = Number(id) + 1", app_script)
             for name, (content_type, content) in tile_assets.items():
                 expected_type = "image/gif" if name.endswith(".gif") else "image/jpeg"
                 self.assertEqual(content_type, expected_type)
