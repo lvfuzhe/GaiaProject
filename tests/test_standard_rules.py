@@ -52,7 +52,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(sum(len(planets) for planets in state.starting_planets), 0)
         self.assertEqual(state.round_number, 0)
         self.assertTrue(state.is_starting_placement)
-        self.assertEqual(state.snapshot()["ruleset"], "standard-v6")
+        self.assertEqual(state.snapshot()["ruleset"], "standard-v7")
 
     def test_random_setup_is_seeded_and_respects_component_counts(self) -> None:
         first = GaiaState.initial(2, seed=19)
@@ -88,22 +88,56 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(next(f["starting_qic"] for f in catalog if f["name"] == "Itars"), 1)
         self.assertEqual(next(f["starting_qic"] for f in catalog if f["name"] == "Bal T'aks"), 0)
 
-    def test_faction_catalog_exposes_complete_starting_resources(self) -> None:
-        state = GaiaState.initial(2, faction_indices=(0, 9), first_player=0)
-        catalog = state.snapshot()["setup"]["faction_catalog"]
+    def test_initial_research_levels_grant_immediate_bga_rewards(self) -> None:
+        state = GaiaState.initial(
+            4,
+            faction_indices=(8, 2, 0, 4),
+            first_player=0,
+        )
+        geodens, xenos, terrans, taklons = state.players
 
-        for faction in catalog:
+        self.assertEqual(geodens.tracks[Track.TERRAFORMING], 1)
+        self.assertEqual(geodens.ore, 6)
+        self.assertEqual(xenos.tracks[Track.ARTIFICIAL_INTELLIGENCE], 1)
+        self.assertEqual(xenos.qic, 2)
+        self.assertEqual(terrans.tracks[Track.GAIA_PROJECT], 1)
+        self.assertEqual(terrans.gaiaformers, 1)
+        self.assertEqual(taklons.tracks[Track.ECONOMY], 1)
+        self.assertEqual((taklons.credits, taklons.ore), (15, 4))
+
+        gleens = GaiaState.initial(
+            2,
+            faction_indices=(3, 0),
+            first_player=0,
+        ).players[0]
+        self.assertEqual(gleens.tracks[Track.NAVIGATION], 1)
+        self.assertEqual((gleens.ore, gleens.qic), (5, 0))
+
+    def test_faction_catalog_includes_initial_research_rewards(self) -> None:
+        state = GaiaState.initial(2, faction_indices=(0, 9), first_player=0)
+        catalog = {
+            faction["name"]: faction
+            for faction in state.snapshot()["setup"]["faction_catalog"]
+        }
+
+        for faction in catalog.values():
             self.assertEqual(faction["starting_credits"], 15)
-            self.assertEqual(faction["starting_ore"], 4)
             self.assertEqual(faction["starting_knowledge"], 3)
-        for player in state.players:
-            self.assertEqual((player.credits, player.ore, player.knowledge), (15, 4, 3))
+        self.assertEqual(catalog["Geodens"]["starting_ore"], 6)
+        self.assertEqual(catalog["Gleens"]["starting_ore"], 5)
+        self.assertEqual(catalog["Gleens"]["starting_qic"], 0)
+        self.assertEqual(catalog["Xenos"]["starting_qic"], 2)
+        self.assertEqual(catalog["Ambas"]["starting_qic"], 2)
+        self.assertEqual(catalog["Ivits"]["starting_qic"], 2)
+        self.assertEqual(catalog["Terrans"]["starting_gaiaformers"], 1)
+        self.assertEqual(catalog["Bal T'aks"]["starting_gaiaformers"], 1)
+        self.assertEqual(catalog["Itars"]["starting_gaiaformers"], 1)
 
     def test_snapshot_preserves_complete_initial_setup(self) -> None:
         snapshot = GaiaState.initial(3, seed=41).snapshot()
         setup = snapshot["setup"]
 
-        self.assertEqual(snapshot["ruleset"], "standard-v6")
+        self.assertEqual(snapshot["ruleset"], "standard-v7")
         self.assertEqual(setup["seed"], 41)
         self.assertEqual(setup["map"]["sector_count"], 10)
         self.assertEqual(len(setup["map"]["sectors"]), 10)
@@ -244,14 +278,19 @@ class StandardGaiaRulesTests(unittest.TestCase):
             qic=1,
             vp=10,
             colonized_types=(1 << Terrain.TERRA) | (1 << Terrain.GAIA),
+            tracks=(0, 0, 0, 0, 0, 0),
         )
-        state = replace(state, players=tuple(players))
+        state = replace(
+            state,
+            players=tuple(players),
+            round_scoring_tiles=(0, 1, 2, 3, 4, 5),
+        )
 
         ore_qic = replace(
             state,
             standard_tech_tiles=(0, 3, 4, 5, 6, 7, 1, 2, 8),
         )._apply_tech(Track.TERRAFORMING).players[player]
-        self.assertEqual((ore_qic.ore, ore_qic.qic), (5, 2))
+        self.assertEqual((ore_qic.ore, ore_qic.qic), (7, 2))
 
         knowledge = replace(
             state,
@@ -264,6 +303,149 @@ class StandardGaiaRulesTests(unittest.TestCase):
             standard_tech_tiles=(2, 3, 4, 5, 6, 7, 0, 1, 8),
         )._apply_tech(Track.TERRAFORMING).players[player]
         self.assertEqual(victory_points.vp, 17)
+
+    def test_bga_research_track_immediate_rewards(self) -> None:
+        state = replace(
+            GaiaState.initial(2, faction_indices=(0, 2), first_player=0),
+            round_number=1,
+            round_scoring_tiles=(0, 1, 2, 3, 4, 5),
+            terraforming_federation_tile=5,
+        )
+
+        def advance_to_top(track: Track, info: PlayerState) -> PlayerState:
+            for level in range(1, 6):
+                if level == 5:
+                    info = replace(info, federation_keys=1)
+                info = state._advance_research(
+                    0,
+                    info,
+                    track,
+                    score_round=False,
+                )
+            return info
+
+        base = PlayerState(
+            faction=0,
+            credits=0,
+            ore=0,
+            knowledge=0,
+            qic=0,
+            vp=0,
+            bowl_one=12,
+            bowl_two=0,
+            bowl_three=0,
+        )
+        terraforming = advance_to_top(Track.TERRAFORMING, base)
+        self.assertEqual(terraforming.ore, 4)
+        self.assertEqual(terraforming.vp, 12)
+        self.assertEqual(terraforming.federation_tokens, 1)
+        self.assertEqual(terraforming.federation_keys, 1)
+
+        navigation = advance_to_top(Track.NAVIGATION, base)
+        self.assertEqual(navigation.qic, 2)
+
+        artificial_intelligence = advance_to_top(
+            Track.ARTIFICIAL_INTELLIGENCE,
+            base,
+        )
+        self.assertEqual(artificial_intelligence.qic, 10)
+
+        gaia_planets = [
+            planet
+            for planet, terrain in enumerate(state.terrains)
+            if state.active_planets[planet] and terrain == Terrain.GAIA
+        ][:2]
+        owners = list(state.owners)
+        for planet in gaia_planets:
+            owners[planet] = 0
+        gaia_state = replace(state, owners=tuple(owners))
+        gaia = base
+        for level in range(1, 6):
+            if level == 5:
+                gaia = replace(gaia, federation_keys=1)
+            gaia = gaia_state._advance_research(
+                0,
+                gaia,
+                Track.GAIA_PROJECT,
+                score_round=False,
+            )
+        self.assertEqual(gaia.gaiaformers, 3)
+        self.assertEqual(gaia.bowl_one, 15)
+        self.assertEqual(gaia.vp, 4 + len(gaia_planets))
+
+        economy = advance_to_top(Track.ECONOMY, base)
+        self.assertEqual((economy.credits, economy.ore), (6, 3))
+        self.assertEqual((economy.bowl_one, economy.bowl_two), (6, 6))
+
+        science = advance_to_top(Track.SCIENCE, base)
+        self.assertEqual(science.knowledge, 9)
+
+    def test_bga_economy_and_science_track_income(self) -> None:
+        state = GaiaState.initial(2, faction_indices=(0, 2), first_player=0)
+        economy_income = (
+            (0, 0, 0),
+            (2, 0, 1),
+            (2, 1, 2),
+            (3, 1, 3),
+            (4, 2, 4),
+            (0, 0, 0),
+        )
+        for level, (credits, ore, charge) in enumerate(economy_income):
+            tracks = [0] * 6
+            tracks[Track.ECONOMY] = level
+            players = list(state.players)
+            players[0] = replace(
+                players[0],
+                credits=0,
+                ore=0,
+                knowledge=0,
+                bowl_one=12,
+                bowl_two=0,
+                bowl_three=0,
+                tracks=tuple(tracks),
+                tech_tiles=0,
+            )
+            income = replace(state, players=tuple(players))._grant_income().players[0]
+            self.assertEqual(income.credits, 2 + credits)
+            self.assertEqual(income.ore, 1 + ore)
+            self.assertEqual((income.bowl_one, income.bowl_two), (12 - charge, charge))
+
+        for level, knowledge in enumerate((0, 1, 2, 3, 4, 0)):
+            tracks = [0] * 6
+            tracks[Track.SCIENCE] = level
+            players = list(state.players)
+            players[0] = replace(
+                players[0],
+                credits=0,
+                ore=0,
+                knowledge=0,
+                tracks=tuple(tracks),
+                tech_tiles=0,
+            )
+            income = replace(state, players=tuple(players))._grant_income().players[0]
+            self.assertEqual(income.knowledge, 1 + knowledge)
+
+    def test_tech_tile_research_advance_scores_the_round_tile(self) -> None:
+        state = replace(
+            finish_starting_placement(
+                GaiaState.initial(2, faction_indices=(0, 2), first_player=0)
+            ),
+            player_to_move=0,
+            round_scoring_tiles=(1, 0, 2, 3, 4, 5),
+            standard_tech_tiles=(0, 1, 2, 3, 4, 5, 6, 7, 8),
+        )
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            vp=10,
+            tracks=(0, 0, 0, 0, 0, 0),
+        )
+        state = replace(state, players=tuple(players))
+
+        researched = state._apply_tech(Track.TERRAFORMING).players[0]
+
+        self.assertEqual(researched.tracks[Track.TERRAFORMING], 1)
+        self.assertEqual(researched.vp, 12)
 
     def test_bga_booster_pass_scoring_order(self) -> None:
         state = finish_starting_placement(GaiaState.initial(2, seed=9))

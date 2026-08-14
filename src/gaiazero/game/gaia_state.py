@@ -138,6 +138,17 @@ STRUCTURE_POWER = {
     Building.PLANETARY_INSTITUTE: 3,
     Building.ACADEMY: 3,
 }
+ECONOMY_TRACK_INCOME: tuple[tuple[int, int, int], ...] = (
+    (0, 0, 0),
+    (2, 0, 1),
+    (2, 1, 2),
+    (3, 1, 3),
+    (4, 2, 4),
+    (0, 0, 0),
+)
+SCIENCE_TRACK_INCOME: tuple[int, ...] = (0, 1, 2, 3, 4, 0)
+
+
 @dataclass(frozen=True, slots=True)
 class TileSpec:
     key: str
@@ -379,24 +390,7 @@ class GaiaState:
         players: list[PlayerState] = []
         for player in range(num_players):
             faction_index = setup.faction_indices[player]
-            faction = FACTIONS[faction_index]
-            tracks = [0] * TRACK_COUNT
-            tracks[faction.start_track] = 1
-            gaiaformers = 1 if faction.start_track == Track.GAIA_PROJECT else 0
-            info = PlayerState(
-                faction=faction_index,
-                credits=faction.starting_credits,
-                ore=faction.starting_ore,
-                knowledge=faction.starting_knowledge,
-                qic=faction.starting_qic,
-                bowl_one=faction.power[0],
-                bowl_two=faction.power[1],
-                bowl_three=faction.power[2],
-                tracks=tuple(tracks),
-                gaiaformers=gaiaformers,
-                colonized_types=0,
-            )
-            players.append(info)
+            players.append(cls._base_player_state(faction_index))
 
         first = setup.first_player
         state = cls(
@@ -438,7 +432,33 @@ class GaiaState:
             advanced_tech_tiles=setup.advanced_tech_tiles,
             terraforming_federation_tile=setup.terraforming_federation_tile,
         )
-        return state
+        initialized_players = tuple(
+            state._advance_research(
+                player,
+                info,
+                FACTIONS[info.faction].start_track,
+                score_round=False,
+            )
+            for player, info in enumerate(state.players)
+        )
+        return replace(state, players=initialized_players)
+
+    @staticmethod
+    def _base_player_state(faction_index: int) -> PlayerState:
+        faction = FACTIONS[faction_index]
+        return PlayerState(
+            faction=faction_index,
+            credits=faction.starting_credits,
+            ore=faction.starting_ore,
+            knowledge=faction.starting_knowledge,
+            qic=faction.starting_qic,
+            bowl_one=faction.power[0],
+            bowl_two=faction.power[1],
+            bowl_three=faction.power[2],
+            tracks=(0,) * TRACK_COUNT,
+            gaiaformers=0,
+            colonized_types=0,
+        )
 
     @property
     def num_players(self) -> int:
@@ -803,8 +823,7 @@ class GaiaState:
     def _apply_research(self, track: int) -> GaiaState:
         player = self.player_to_move
         info = self.players[player].spend(knowledge=4)
-        info = self._advance_research(info, Track(track))
-        info = self._score(info, "research")
+        info = self._advance_research(player, info, Track(track))
         return replace(self, players=self._replace_player(player, info))
 
     def _apply_tech(self, track: int) -> GaiaState:
@@ -813,7 +832,8 @@ class GaiaState:
         tile = self.standard_tech_tiles[track]
         info = replace(info, tech_tiles=info.tech_tiles | (1 << tile))
         if tile == 0:
-            info = replace(info, ore=min(15, info.ore + 1), qic=info.qic + 1)
+            info = replace(info, ore=min(15, info.ore + 1))
+            info = self._gain_qic(info, 1)
         elif tile == 1:
             info = replace(
                 info,
@@ -821,7 +841,7 @@ class GaiaState:
             )
         elif tile == 2:
             info = replace(info, vp=info.vp + 7)
-        info = self._advance_research(info, Track(track))
+        info = self._advance_research(player, info, Track(track))
         return replace(
             self,
             players=self._replace_player(player, info),
@@ -853,12 +873,7 @@ class GaiaState:
         planets, satellites = plan
         info = self._discard_power(self.players[player], satellites)
         reward = info.federation_tokens % 3
-        if reward == 0:
-            info = replace(info, vp=info.vp + 6, knowledge=min(15, info.knowledge + 2))
-        elif reward == 1:
-            info = replace(info, vp=info.vp + 7, ore=min(15, info.ore + 2))
-        else:
-            info = replace(info, vp=info.vp + 8, qic=info.qic + 1)
+        info = self._gain_federation_reward(info, reward)
         info = replace(
             info,
             federation_tokens=info.federation_tokens + 1,
@@ -925,8 +940,10 @@ class GaiaState:
             labs = self._building_count(player, Building.RESEARCH_LAB)
             academies = self._building_count(player, Building.ACADEMY)
             institutes = self._building_count(player, Building.PLANETARY_INSTITUTE)
-            economy = info.tracks[Track.ECONOMY]
-            science = info.tracks[Track.SCIENCE]
+            economy_credits, economy_ore, economy_charge = ECONOMY_TRACK_INCOME[
+                info.tracks[Track.ECONOMY]
+            ]
+            science_knowledge = SCIENCE_TRACK_INCOME[info.tracks[Track.SCIENCE]]
             booster = self._player_booster(player)
             (
                 booster_credits,
@@ -935,17 +952,28 @@ class GaiaState:
                 booster_qic,
                 booster_charge,
             ) = self._booster_income(booster)
-            credits = min(30, info.credits + 2 + 2 * trading + economy + booster_credits)
-            ore = min(15, info.ore + 1 + mines + economy // 2 + booster_ore)
-            knowledge = min(15, info.knowledge + 1 + labs + academies + science + booster_knowledge)
+            credits = min(
+                30,
+                info.credits + 2 + 2 * trading + economy_credits + booster_credits,
+            )
+            ore = min(15, info.ore + 1 + mines + economy_ore + booster_ore)
+            knowledge = min(
+                15,
+                info.knowledge
+                + 1
+                + labs
+                + academies
+                + science_knowledge
+                + booster_knowledge,
+            )
             info = replace(
                 info,
                 credits=credits,
                 ore=ore,
                 knowledge=knowledge,
-                qic=info.qic + booster_qic,
             )
-            charge = institutes * 4 + economy + booster_charge
+            info = self._gain_qic(info, booster_qic)
+            charge = institutes * 4 + economy_charge + booster_charge
             if info.tech_tiles & (1 << 5):
                 info = replace(info, ore=min(15, info.ore + 1))
                 charge += 1
@@ -976,7 +1004,14 @@ class GaiaState:
                 terrains[planet] = Terrain.GAIA
         return replace(self, players=tuple(players), terrains=tuple(int(value) for value in terrains))
 
-    def _advance_research(self, info: PlayerState, track: Track) -> PlayerState:
+    def _advance_research(
+        self,
+        player: int,
+        info: PlayerState,
+        track: Track,
+        *,
+        score_round: bool = True,
+    ) -> PlayerState:
         if not self._can_advance(info, track):
             raise ValueError(f"cannot advance {track.name}")
         levels = list(info.tracks)
@@ -986,13 +1021,69 @@ class GaiaState:
         if old_level == 4:
             info = replace(info, federation_keys=info.federation_keys - 1)
         new_level = levels[track]
-        if track == Track.ARTIFICIAL_INTELLIGENCE:
-            info = replace(info, qic=info.qic + (1, 1, 2, 2, 4)[new_level - 1])
-        elif track == Track.GAIA_PROJECT and new_level in (1, 3, 4):
-            info = replace(info, gaiaformers=info.gaiaformers + 1)
-        elif track == Track.TERRAFORMING and new_level == 5:
-            info = replace(info, federation_tokens=info.federation_tokens + 1, federation_keys=info.federation_keys + 1)
-            info = self._score(info, "federation")
+        if track == Track.TERRAFORMING:
+            if new_level in (1, 4):
+                info = replace(info, ore=min(15, info.ore + 2))
+            elif new_level == 5:
+                info = self._gain_federation_reward(
+                    info,
+                    self.terraforming_federation_tile,
+                )
+                info = replace(
+                    info,
+                    federation_tokens=info.federation_tokens + 1,
+                    federation_keys=info.federation_keys + 1,
+                )
+                info = self._score(info, "federation")
+        elif track == Track.NAVIGATION and new_level in (1, 3):
+            info = self._gain_qic(info, 1)
+        elif track == Track.ARTIFICIAL_INTELLIGENCE:
+            info = self._gain_qic(info, (1, 1, 2, 2, 4)[new_level - 1])
+        elif track == Track.GAIA_PROJECT:
+            if new_level in (1, 3, 4):
+                info = replace(info, gaiaformers=info.gaiaformers + 1)
+            elif new_level == 2:
+                info = replace(info, bowl_one=info.bowl_one + 3)
+            elif new_level == 5:
+                gaia_planets = sum(
+                    owner == player and terrain == Terrain.GAIA
+                    for owner, terrain in zip(self.owners, self.terrains, strict=True)
+                )
+                info = replace(info, vp=info.vp + 4 + gaia_planets)
+        elif track == Track.ECONOMY and new_level == 5:
+            info = replace(
+                info,
+                credits=min(30, info.credits + 6),
+                ore=min(15, info.ore + 3),
+            )
+            info, _ = self._charge_power(info, 6)
+        elif track == Track.SCIENCE and new_level == 5:
+            info = replace(info, knowledge=min(15, info.knowledge + 9))
+        if score_round:
+            info = self._score(info, "research")
+        return info
+
+    @staticmethod
+    def _gain_qic(info: PlayerState, amount: int) -> PlayerState:
+        if amount <= 0:
+            return info
+        if FACTIONS[info.faction].name == "Gleens":
+            return replace(info, ore=min(15, info.ore + amount))
+        return replace(info, qic=info.qic + amount)
+
+    def _gain_federation_reward(self, info: PlayerState, tile: int) -> PlayerState:
+        victory_points = (6, 7, 8, 7, 7, 12)[tile]
+        info = replace(info, vp=info.vp + victory_points)
+        if tile == 0:
+            return replace(info, knowledge=min(15, info.knowledge + 2))
+        if tile == 1:
+            return replace(info, ore=min(15, info.ore + 2))
+        if tile == 2:
+            return self._gain_qic(info, 1)
+        if tile == 3:
+            return replace(info, bowl_one=info.bowl_one + 2)
+        if tile == 4:
+            return replace(info, credits=min(30, info.credits + 6))
         return info
 
     @staticmethod
@@ -1449,7 +1540,7 @@ class GaiaState:
                 self.round_scoring_tiles[self.round_number - 1]
             ].key
         return {
-            "ruleset": "standard-v6",
+            "ruleset": "standard-v7",
             "round": max(0, min(self.round_number, MAX_ROUNDS)),
             "max_rounds": MAX_ROUNDS,
             "phase": (
@@ -1588,25 +1679,8 @@ class GaiaState:
                     for player, info in enumerate(self.players)
                 ],
                 "faction_catalog": [
-                    {
-                        "id": faction_id,
-                        "board": faction.board + 1,
-                        "side": FACTION_BOARD_SIDES[faction_id],
-                        "name": faction.name,
-                        "home_terrain": int(faction.home),
-                        "start_track": faction.start_track.name.lower(),
-                        "ability": faction.ability,
-                        "starting_power": list(faction.power),
-                        "starting_credits": faction.starting_credits,
-                        "starting_ore": faction.starting_ore,
-                        "starting_knowledge": faction.starting_knowledge,
-                        "starting_qic": faction.starting_qic,
-                        "starting_structures": faction.starting_structures,
-                        "starts_with_pi": faction.starts_with_pi,
-                        "places_last": faction.places_last,
-                        "federation_threshold": faction.federation_threshold,
-                    }
-                    for faction_id, faction in enumerate(FACTIONS)
+                    self._faction_catalog_entry(faction_id)
+                    for faction_id in range(len(FACTIONS))
                 ],
                 "boosters": [
                     {
@@ -1660,6 +1734,34 @@ class GaiaState:
                     "label": FEDERATION_TILES[self.terraforming_federation_tile].label,
                 },
             },
+        }
+
+    def _faction_catalog_entry(self, faction_id: int) -> dict[str, object]:
+        faction = FACTIONS[faction_id]
+        info = self._advance_research(
+            0,
+            self._base_player_state(faction_id),
+            faction.start_track,
+            score_round=False,
+        )
+        return {
+            "id": faction_id,
+            "board": faction.board + 1,
+            "side": FACTION_BOARD_SIDES[faction_id],
+            "name": faction.name,
+            "home_terrain": int(faction.home),
+            "start_track": faction.start_track.name.lower(),
+            "ability": faction.ability,
+            "starting_power": list(faction.power),
+            "starting_credits": info.credits,
+            "starting_ore": info.ore,
+            "starting_knowledge": info.knowledge,
+            "starting_qic": info.qic,
+            "starting_gaiaformers": info.gaiaformers,
+            "starting_structures": faction.starting_structures,
+            "starts_with_pi": faction.starts_with_pi,
+            "places_last": faction.places_last,
+            "federation_threshold": faction.federation_threshold,
         }
 
 
