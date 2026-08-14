@@ -14,18 +14,27 @@ import numpy as np
 
 from gaiazero.game import GaiaHeuristicEvaluator, GaiaState
 from gaiazero.game.gaia_state import (
+    BOOSTER_LABELS,
     BUILD_OFFSET,
+    FACTIONS,
+    FEDERATION_TILES,
     FEDERATION_ACTION,
     GAIA_OFFSET,
+    MAX_ROUNDS,
     PASS_BOOSTER_OFFSET,
     PASS_FINAL_ACTION,
     POWER_OFFSET,
     RESEARCH_OFFSET,
+    ROUND_SCORING_TILES,
+    STANDARD_TECH_TILES,
     TECH_OFFSET,
     UPGRADE_ACADEMY_OFFSET,
     UPGRADE_LAB_OFFSET,
     UPGRADE_PI_OFFSET,
     UPGRADE_TRADING_OFFSET,
+    Building,
+    Terrain,
+    Track,
 )
 from gaiazero.mcts import PUCTSearch, SearchConfig
 from gaiazero.model import NetworkEvaluator, load_checkpoint
@@ -663,6 +672,8 @@ def _normalize_player_roles(value: object, players: int) -> list[str]:
 def _interactive_action_snapshot(state: GaiaState, action: int) -> dict[str, Any]:
     target: int | None = None
     booster: int | None = None
+    track: int | None = None
+    power_action: int | None = None
     if BUILD_OFFSET <= action < GAIA_OFFSET:
         kind = "starting_placement" if state.is_starting_placement else "build"
         target = action - BUILD_OFFSET
@@ -678,10 +689,13 @@ def _interactive_action_snapshot(state: GaiaState, action: int) -> dict[str, Any
         kind, target = "upgrade_academy", action - UPGRADE_ACADEMY_OFFSET
     elif RESEARCH_OFFSET <= action < POWER_OFFSET:
         kind = "research"
+        track = action - RESEARCH_OFFSET
     elif POWER_OFFSET <= action < TECH_OFFSET:
         kind = "power"
+        power_action = action - POWER_OFFSET
     elif TECH_OFFSET <= action < FEDERATION_ACTION:
         kind = "technology"
+        track = action - TECH_OFFSET
     elif action == FEDERATION_ACTION:
         kind = "federation"
     elif PASS_BOOSTER_OFFSET <= action < PASS_FINAL_ACTION:
@@ -697,6 +711,466 @@ def _interactive_action_snapshot(state: GaiaState, action: int) -> dict[str, Any
         "kind": kind,
         "target": target,
         "booster": booster,
+        "track": track,
+        "power_action": power_action,
+    }
+
+
+_LOG_RESOURCE_FIELDS = ("credits", "ore", "knowledge", "qic", "vp")
+
+
+def _interactive_phase(state: GaiaState) -> str:
+    if state.is_starting_placement:
+        return "starting_placement"
+    if state.is_booster_selection:
+        return "booster_selection"
+    if state.is_terminal:
+        return "terminal"
+    return "round"
+
+
+def _component_ref(
+    kind: str,
+    component_id: int,
+    label: str,
+    code: str,
+    *,
+    relation: str = "uses",
+) -> dict[str, Any]:
+    return {
+        "kind": kind,
+        "id": int(component_id),
+        "code": code,
+        "label": label,
+        "relation": relation,
+    }
+
+
+def _interactive_action_components(
+    state: GaiaState,
+    action: dict[str, Any],
+    player: int,
+) -> list[dict[str, Any]]:
+    components: list[dict[str, Any]] = []
+    target = action.get("target")
+    if target is not None:
+        components.append(
+            _component_ref("planet", target, f"Planet {target}", f"P-{target}")
+        )
+
+    booster = action.get("booster")
+    if booster is not None and booster >= 0:
+        components.append(
+            _component_ref(
+                "booster",
+                booster,
+                BOOSTER_LABELS[booster],
+                f"BST-{booster + 1:02d}",
+                relation="selected",
+            )
+        )
+    if action["kind"] == "pass_booster":
+        returned = state._player_booster(player)
+        if returned >= 0:
+            components.append(
+                _component_ref(
+                    "booster",
+                    returned,
+                    BOOSTER_LABELS[returned],
+                    f"BST-{returned + 1:02d}",
+                    relation="returned",
+                )
+            )
+
+    track = action.get("track")
+    if track is not None:
+        track_name = Track(track).name.replace("_", " ").title()
+        components.append(
+            _component_ref("research_track", track, track_name, f"TRK-{track + 1:02d}")
+        )
+        if action["kind"] == "technology":
+            tile = state.standard_tech_tiles[track]
+            components.append(
+                _component_ref(
+                    "standard_tech",
+                    tile,
+                    STANDARD_TECH_TILES[tile].label,
+                    f"TEC-S{tile + 1:02d}",
+                    relation="gained",
+                )
+            )
+        if (
+            track == Track.TERRAFORMING
+            and state.players[player].tracks[track] == 4
+        ):
+            tile = state.terraforming_federation_tile
+            components.append(
+                _component_ref(
+                    "federation",
+                    tile,
+                    FEDERATION_TILES[tile].label,
+                    f"FED-{tile + 1:02d}",
+                    relation="gained",
+                )
+            )
+
+    power_action = action.get("power_action")
+    if power_action is not None:
+        power_labels = ("Gain 2 ore", "Gain 7 credits", "Gain 2 knowledge")
+        components.append(
+            _component_ref(
+                "power_action",
+                power_action,
+                power_labels[power_action],
+                f"PWR-{power_action + 1:02d}",
+            )
+        )
+
+    if action["kind"] == "federation":
+        tile = state.players[player].federation_tokens % 3
+        components.append(
+            _component_ref(
+                "federation",
+                tile,
+                FEDERATION_TILES[tile].label,
+                f"FED-{tile + 1:02d}",
+                relation="gained",
+            )
+        )
+
+    if 1 <= state.round_number <= MAX_ROUNDS:
+        tile = state.round_scoring_tiles[state.round_number - 1]
+        scoring_kind = ROUND_SCORING_TILES[tile].kind
+        scored_kinds: set[str] = set()
+        if action["kind"] == "build" and target is not None:
+            terrain = Terrain(state.terrains[target])
+            scored_kinds.add("mine")
+            if terrain == Terrain.GAIA:
+                scored_kinds.add("gaia")
+            elif terrain != Terrain.TRANSDIM:
+                home = FACTIONS[state.players[player].faction].home
+                if state._terrain_steps(home, terrain):
+                    scored_kinds.add("terraform")
+        elif action["kind"] == "upgrade_trading":
+            scored_kinds.add("trading")
+        elif action["kind"] in ("upgrade_pi", "upgrade_academy"):
+            scored_kinds.add("big")
+        elif action["kind"] in ("research", "technology"):
+            scored_kinds.add("research")
+            if track == Track.TERRAFORMING and state.players[player].tracks[track] == 4:
+                scored_kinds.add("federation")
+        elif action["kind"] == "federation":
+            scored_kinds.add("federation")
+        if scoring_kind in scored_kinds:
+            components.append(
+                _component_ref(
+                    "round_scoring",
+                    tile,
+                    ROUND_SCORING_TILES[tile].label,
+                    f"RND-{tile + 1:02d}",
+                    relation="scored",
+                )
+            )
+    return components
+
+
+def _interactive_action_costs(
+    state: GaiaState,
+    action: dict[str, Any],
+    player: int,
+) -> list[dict[str, Any]]:
+    kind = action["kind"]
+    target = action.get("target")
+    costs: dict[str, int] = {}
+    if kind == "build" and target is not None:
+        credits, ore, qic = state._build_cost(player, target)
+        costs.update(credits=credits, ore=ore, qic=qic)
+    elif kind == "gaia":
+        costs["power_to_gaia"] = state._gaia_cost(state.players[player])
+    elif kind == "upgrade_trading" and target is not None:
+        costs.update(
+            credits=3 if state._has_nearby_opponent(player, target) else 6,
+            ore=2,
+        )
+    elif kind == "upgrade_lab":
+        costs.update(credits=5, ore=3)
+    elif kind == "upgrade_pi":
+        costs.update(credits=6, ore=4)
+    elif kind == "upgrade_academy":
+        costs.update(credits=6, ore=6)
+    elif kind == "research":
+        costs["knowledge"] = 4
+    elif kind == "power":
+        costs["power"] = (3, 4, 4)[action["power_action"]]
+    elif kind == "federation":
+        plan = state._federation_plan(player)
+        if plan is not None and plan[1] > 0:
+            costs["power_tokens"] = plan[1]
+
+    track = action.get("track")
+    if (
+        track is not None
+        and state.players[player].tracks[track] == 4
+        and kind in ("research", "technology")
+    ):
+        costs["federation_key"] = 1
+    return [
+        {"resource": resource, "amount": int(amount)}
+        for resource, amount in costs.items()
+        if amount > 0
+    ]
+
+
+def _interactive_player_changes(
+    before: GaiaState,
+    after: GaiaState,
+    player: int,
+) -> list[dict[str, Any]]:
+    old = before.players[player]
+    new = after.players[player]
+    changes: list[dict[str, Any]] = []
+    old_power = [old.bowl_one, old.bowl_two, old.bowl_three]
+    new_power = [new.bowl_one, new.bowl_two, new.bowl_three]
+    if old_power != new_power:
+        changes.append({"kind": "power", "before": old_power, "after": new_power})
+    for counter in (
+        "gaia_power",
+        "gaiaformers",
+        "federation_tokens",
+        "federation_keys",
+        "satellites",
+    ):
+        old_value = int(getattr(old, counter))
+        new_value = int(getattr(new, counter))
+        if old_value != new_value:
+            changes.append({
+                "kind": "counter",
+                "counter": counter,
+                "before": old_value,
+                "after": new_value,
+            })
+    for track, (old_level, new_level) in enumerate(zip(old.tracks, new.tracks, strict=True)):
+        if old_level != new_level:
+            changes.append({
+                "kind": "track",
+                "track": track,
+                "before": int(old_level),
+                "after": int(new_level),
+            })
+    gained_tech = new.tech_tiles & ~old.tech_tiles
+    for tile in range(len(STANDARD_TECH_TILES)):
+        if gained_tech & (1 << tile):
+            changes.append({"kind": "tech", "id": tile})
+    old_booster = before._player_booster(player)
+    new_booster = after._player_booster(player)
+    if old_booster != new_booster:
+        changes.append({
+            "kind": "booster",
+            "before": old_booster,
+            "after": new_booster,
+        })
+    if old.passed != new.passed:
+        changes.append({"kind": "passed", "before": old.passed, "after": new.passed})
+    return changes
+
+
+def _interactive_board_changes(
+    before: GaiaState,
+    after: GaiaState,
+) -> list[dict[str, Any]]:
+    changes: list[dict[str, Any]] = []
+    for planet in range(len(before.active_planets)):
+        if before.owners[planet] != after.owners[planet] or before.buildings[planet] != after.buildings[planet]:
+            changes.append({
+                "kind": "building",
+                "planet": planet,
+                "owner_before": before.owners[planet],
+                "owner_after": after.owners[planet],
+                "building_before": Building(before.buildings[planet]).name.lower(),
+                "building_after": Building(after.buildings[planet]).name.lower(),
+            })
+        if before.gaiaformer_owner[planet] != after.gaiaformer_owner[planet]:
+            changes.append({
+                "kind": "gaiaformer",
+                "planet": planet,
+                "before": before.gaiaformer_owner[planet],
+                "after": after.gaiaformer_owner[planet],
+            })
+        if before.terrains[planet] != after.terrains[planet]:
+            changes.append({
+                "kind": "terrain",
+                "planet": planet,
+                "before": before.terrains[planet],
+                "after": after.terrains[planet],
+            })
+    federated = sum(after.federated) - sum(before.federated)
+    if federated:
+        changes.append({"kind": "federated", "amount": int(federated)})
+    return changes
+
+
+def _interactive_player_effects(
+    before: GaiaState,
+    after: GaiaState,
+    actor: int,
+    costs: list[dict[str, Any]],
+    *,
+    adjustments: dict[tuple[int, str], int] | None = None,
+    change_kinds: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    adjustments = adjustments or {}
+    effects: list[dict[str, Any]] = []
+    actor_costs = {item["resource"]: item["amount"] for item in costs}
+    player_order = (actor, *(player for player in range(before.num_players) if player != actor))
+    for player in player_order:
+        old = before.players[player]
+        new = after.players[player]
+        player_costs = list(costs) if player == actor else []
+        player_gains: list[dict[str, Any]] = []
+        for resource in _LOG_RESOURCE_FIELDS:
+            delta = (
+                int(getattr(new, resource))
+                - int(getattr(old, resource))
+                + adjustments.get((player, resource), 0)
+            )
+            paid = actor_costs.get(resource, 0) if player == actor else 0
+            received = delta + paid
+            if received > 0:
+                player_gains.append({"resource": resource, "amount": received})
+            elif received < 0:
+                player_costs.append({"resource": resource, "amount": -received})
+        changes = _interactive_player_changes(before, after, player)
+        if change_kinds is not None:
+            changes = [change for change in changes if change["kind"] in change_kinds]
+        if player == actor or player_costs or player_gains or changes:
+            effects.append({
+                "player": player,
+                "costs": player_costs,
+                "gains": player_gains,
+                "changes": changes,
+            })
+    return effects
+
+
+def _income_sources(state: GaiaState, player: int) -> list[dict[str, Any]]:
+    sources: list[dict[str, Any]] = []
+    booster = state._player_booster(player)
+    if booster >= 0:
+        sources.append(
+            _component_ref(
+                "booster",
+                booster,
+                BOOSTER_LABELS[booster],
+                f"BST-{booster + 1:02d}",
+                relation="income",
+            )
+        )
+    info = state.players[player]
+    for track in (Track.ECONOMY, Track.SCIENCE):
+        level = info.tracks[track]
+        if level:
+            name = Track(track).name.replace("_", " ").title()
+            sources.append(
+                _component_ref(
+                    "research_track",
+                    int(track),
+                    f"{name} level {level}",
+                    f"TRK-{int(track) + 1:02d}",
+                    relation="income",
+                )
+            )
+    for tile in (5, 6, 7):
+        if info.tech_tiles & (1 << tile):
+            sources.append(
+                _component_ref(
+                    "standard_tech",
+                    tile,
+                    STANDARD_TECH_TILES[tile].label,
+                    f"TEC-S{tile + 1:02d}",
+                    relation="income",
+                )
+            )
+    return sources
+
+
+def _interactive_action_record(
+    before: GaiaState,
+    after: GaiaState,
+    action: int,
+    move: int,
+    player: int,
+    role: str,
+) -> dict[str, Any]:
+    summary = _interactive_action_snapshot(before, action)
+    costs = _interactive_action_costs(before, summary, player)
+    components = _interactive_action_components(before, summary, player)
+    round_advanced = (
+        after.round_number == before.round_number + 1
+        and 1 <= after.round_number <= MAX_ROUNDS
+    )
+    automatic_steps: list[dict[str, Any]] = []
+    if round_advanced:
+        pass_points = 0
+        if summary["kind"] == "pass_booster":
+            pass_points = before._booster_pass_points(
+                player,
+                before._player_booster(player),
+            )
+        action_changes = [
+            change
+            for change in _interactive_player_changes(before, after, player)
+            if change["kind"] == "booster"
+        ]
+        effects = [{
+            "player": player,
+            "costs": costs,
+            "gains": ([{"resource": "vp", "amount": pass_points}] if pass_points else []),
+            "changes": action_changes,
+        }]
+        adjustments = {(player, "vp"): -pass_points} if pass_points else {}
+        income_effects = _interactive_player_effects(
+            before,
+            after,
+            player,
+            [],
+            adjustments=adjustments,
+            change_kinds={"power", "counter"},
+        )
+        for effect in income_effects:
+            effect["sources"] = _income_sources(after, effect["player"])
+        round_tile = after.round_scoring_tiles[after.round_number - 1]
+        automatic_steps.append({
+            "kind": "round_income",
+            "round": after.round_number,
+            "label": f"Round {after.round_number} automatic income",
+            "gaia_phase": before.round_number >= 1,
+            "components": [
+                _component_ref(
+                    "round_scoring",
+                    round_tile,
+                    ROUND_SCORING_TILES[round_tile].label,
+                    f"RND-{round_tile + 1:02d}",
+                    relation="round",
+                )
+            ],
+            "effects": income_effects,
+            "changes": _interactive_board_changes(before, after),
+        })
+        board_changes: list[dict[str, Any]] = []
+    else:
+        effects = _interactive_player_effects(before, after, player, costs)
+        board_changes = _interactive_board_changes(before, after)
+    return {
+        "move": move,
+        "player": player,
+        "role": role,
+        "round": before.round_number,
+        "phase": _interactive_phase(before),
+        **summary,
+        "components": components,
+        "effects": effects,
+        "changes": board_changes,
+        "automatic_steps": automatic_steps,
     }
 
 
@@ -787,12 +1261,14 @@ def _apply_interactive_action(
     session["state"] = after
     session["move"] += 1
     session["revision"] += 1
-    session["last_action"] = {
-        "move": session["move"],
-        "player": player,
-        "role": role,
-        **_interactive_action_snapshot(before, action),
-    }
+    session["last_action"] = _interactive_action_record(
+        before,
+        after,
+        action,
+        session["move"],
+        player,
+        role,
+    )
     session["last_search"] = search_summary
     session["history"].append(session["last_action"])
     session["error"] = None

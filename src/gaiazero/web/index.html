@@ -481,10 +481,9 @@
             <div><p class="eyebrow">Action log</p><h3>本局行动</h3></div>
             <span id="play-action-log-count" class="muted">0 步</span>
           </div>
-          <div class="table-scroll play-action-log-scroll"><table>
-            <thead><tr><th>步</th><th>玩家</th><th>控制</th><th>动作</th></tr></thead>
-            <tbody id="play-action-log"><tr><td colspan="4" class="empty-cell">暂无动作</td></tr></tbody>
-          </table></div>
+          <div id="play-action-log" class="play-action-timeline" role="log" aria-live="polite">
+            <div class="play-action-log-empty">暂无动作</div>
+          </div>
         </section>
       </div>
       </div>

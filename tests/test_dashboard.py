@@ -3,12 +3,14 @@ import json
 import threading
 import time
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from gaiazero.dashboard import create_dashboard_server
-from gaiazero.game import MiniGaiaState
+from gaiazero.dashboard import _interactive_action_record, create_dashboard_server
+from gaiazero.game import GaiaState, MiniGaiaState
+from gaiazero.game.gaia_state import Track
 from gaiazero.telemetry import JsonlTelemetry, build_history_index, read_events, read_game_trace
 
 
@@ -169,6 +171,9 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("function undoInteractiveTurn", app_script)
             self.assertIn("function updateLivePlayRole", app_script)
             self.assertIn("function planetAtPlayEvent", app_script)
+            self.assertIn("function renderPlayActionEntry", app_script)
+            self.assertIn("function renderPlayAutomaticStep", app_script)
+            self.assertIn("PLAY_LOG_RESOURCE_LABELS", app_script)
             self.assertNotIn("function runManualSimulation", app_script)
             self.assertIn("开局基地按蛇形顺位放置", app_script)
             self.assertIn("planetArtwork: true", app_script)
@@ -494,6 +499,16 @@ class DashboardTests(unittest.TestCase):
             )
             self.assertEqual(game["move"], 1)
             self.assertEqual(game["history"][0]["role"], "human")
+            first_log = game["history"][0]
+            self.assertEqual(first_log["phase"], "starting_placement")
+            self.assertTrue(any(
+                component["kind"] == "planet"
+                and component["code"].startswith("P-")
+                for component in first_log["components"]
+            ))
+            self.assertIn("effects", first_log)
+            self.assertIn("changes", first_log)
+            self.assertEqual(first_log["automatic_steps"], [])
             self.assertEqual(game["current_role"], "ai")
             self.assertTrue(game["can_undo"])
             self.assertEqual(game["undo_count"], 1)
@@ -537,6 +552,38 @@ class DashboardTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
+
+    def test_interactive_action_ledger_marks_technology_tile_id(self) -> None:
+        state = GaiaState.initial(
+            2,
+            seed=7,
+            faction_indices=(0, 2),
+            first_player=0,
+        )
+        state = replace(state, round_number=1, player_to_move=0)
+        action = state.tech_action(Track.TERRAFORMING)
+        after = state._apply_tech(Track.TERRAFORMING)
+
+        entry = _interactive_action_record(
+            state,
+            after,
+            action,
+            move=1,
+            player=0,
+            role="human",
+        )
+
+        tile = state.standard_tech_tiles[Track.TERRAFORMING]
+        self.assertTrue(any(
+            component["kind"] == "standard_tech"
+            and component["id"] == tile
+            and component["code"] == f"TEC-S{tile + 1:02d}"
+            for component in entry["components"]
+        ))
+        self.assertTrue(any(
+            change["kind"] == "tech" and change["id"] == tile
+            for change in entry["effects"][0]["changes"]
+        ))
 
     def test_interactive_game_selects_starting_boosters_before_round_one(self) -> None:
         server = create_dashboard_server(self.metrics, port=0, quiet=True)
@@ -602,6 +649,96 @@ class DashboardTests(unittest.TestCase):
                 [item["kind"] for item in game["history"][-2:]],
                 ["select_booster", "select_booster"],
             )
+            final_booster_log = game["history"][-1]
+            self.assertTrue(any(
+                component["kind"] == "booster"
+                and component["code"].startswith("BST-")
+                for component in final_booster_log["components"]
+            ))
+            self.assertEqual(len(final_booster_log["automatic_steps"]), 1)
+            income_step = final_booster_log["automatic_steps"][0]
+            self.assertEqual(income_step["kind"], "round_income")
+            self.assertEqual(income_step["round"], 1)
+            self.assertFalse(income_step["gaia_phase"])
+            self.assertTrue(any(
+                component["kind"] == "round_scoring"
+                and component["code"].startswith("RND-")
+                for component in income_step["components"]
+            ))
+            self.assertEqual(
+                {effect["player"] for effect in income_step["effects"]},
+                {0, 1},
+            )
+            self.assertTrue(all(
+                any(source["kind"] == "booster" for source in effect["sources"])
+                for effect in income_step["effects"]
+            ))
+            self.assertTrue(all(effect["gains"] for effect in income_step["effects"]))
+
+            build_action = next(
+                action for action in game["legal_actions"] if action["kind"] == "build"
+            )
+            _, game = self.post_json(
+                f"{base}/api/play/action",
+                {"action": build_action["id"]},
+            )
+            build_log = game["history"][-1]
+            build_costs = {
+                item["resource"]: item["amount"]
+                for item in build_log["effects"][0]["costs"]
+            }
+            self.assertEqual(build_costs["credits"], 2)
+            self.assertGreaterEqual(build_costs["ore"], 1)
+            self.assertTrue(any(
+                change["kind"] == "building"
+                and change["planet"] == build_action["target"]
+                for change in build_log["changes"]
+            ))
+
+            research_action = next(
+                action for action in game["legal_actions"] if action["kind"] == "research"
+            )
+            _, game = self.post_json(
+                f"{base}/api/play/action",
+                {"action": research_action["id"]},
+            )
+            research_log = game["history"][-1]
+            self.assertIn(
+                {"resource": "knowledge", "amount": 4},
+                research_log["effects"][0]["costs"],
+            )
+            self.assertTrue(any(
+                component["kind"] == "research_track"
+                and component["code"].startswith("TRK-")
+                for component in research_log["components"]
+            ))
+
+            live_state = server.play_session["state"]
+            current_player = live_state.current_player
+            forced_players = tuple(
+                replace(player, passed=index != current_player)
+                for index, player in enumerate(live_state.players)
+            )
+            server.play_session["state"] = replace(
+                live_state,
+                players=forced_players,
+                player_to_move=current_player,
+            )
+            with urlopen(f"{base}/api/play", timeout=5) as response:
+                game = json.loads(response.read())
+            pass_action = next(
+                action for action in game["legal_actions"] if action["kind"] == "pass_booster"
+            )
+            _, game = self.post_json(
+                f"{base}/api/play/action",
+                {"action": pass_action["id"]},
+            )
+            round_two_log = game["history"][-1]
+            self.assertEqual(round_two_log["kind"], "pass_booster")
+            self.assertEqual(round_two_log["automatic_steps"][0]["kind"], "round_income")
+            self.assertEqual(round_two_log["automatic_steps"][0]["round"], 2)
+            self.assertTrue(round_two_log["automatic_steps"][0]["gaia_phase"])
+            self.assertEqual(game["state"]["round"], 2)
         finally:
             server.shutdown()
             server.server_close()

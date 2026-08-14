@@ -2535,8 +2535,223 @@ h3 {
   overflow-y: auto;
 }
 
-.play-action-log-scroll {
-  max-height: 360px;
+.play-action-timeline {
+  max-height: 680px;
+  margin-top: 12px;
+  overflow-y: auto;
+  border-top: 1px solid var(--line);
+}
+
+.play-action-log-empty {
+  padding: 28px 12px;
+  color: var(--muted);
+  text-align: center;
+  font-size: 10px;
+}
+
+.play-log-entry {
+  padding: 15px 4px 17px;
+  border-bottom: 1px solid var(--line);
+}
+
+.play-log-entry-heading {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.play-log-move {
+  min-width: 38px;
+  padding: 5px 4px;
+  color: #fff;
+  background: var(--ink);
+  text-align: center;
+  font-family: Consolas, monospace;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.play-log-entry-heading > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.play-log-entry-heading strong {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.play-log-entry-heading small {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.play-log-components {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.play-log-component {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  overflow: hidden;
+  color: #263c50;
+  border: 1px solid #a9bdcf;
+  background: #f1f6fb;
+  font-family: Consolas, monospace;
+  font-size: 8px;
+}
+
+.play-log-component i {
+  padding: 4px 5px;
+  color: #526a7f;
+  border-right: 1px solid #a9bdcf;
+  font-family: inherit;
+  font-style: normal;
+}
+
+.play-log-component strong {
+  padding: 4px 6px;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.play-log-component.kind-booster {
+  color: #78531b;
+  border-color: #cfb77e;
+  background: #fff8e8;
+}
+
+.play-log-component.kind-booster i {
+  color: #78531b;
+  border-color: #cfb77e;
+}
+
+.play-log-component.kind-standard_tech,
+.play-log-component.kind-research_track {
+  color: #1e6554;
+  border-color: #9abfb4;
+  background: #edf7f3;
+}
+
+.play-log-component.kind-standard_tech i,
+.play-log-component.kind-research_track i {
+  color: #1e6554;
+  border-color: #9abfb4;
+}
+
+.play-log-effects {
+  margin-top: 9px;
+  display: grid;
+  gap: 7px;
+}
+
+.play-log-effect {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.play-log-effect-player {
+  padding-top: 5px;
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  font-size: 9px;
+}
+
+.play-log-effect-detail {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.play-log-resource-group {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: start;
+  gap: 6px;
+}
+
+.play-log-resource-group > span {
+  padding-top: 4px;
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.play-log-resource-group > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.play-log-resource-group b {
+  padding: 3px 6px;
+  border: 1px solid currentColor;
+  background: #fff;
+  font-size: 8px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.play-log-resource-group.cost b {
+  color: #9e4134;
+  background: #fff5f2;
+}
+
+.play-log-resource-group.gain b {
+  color: #18705a;
+  background: #f0f8f4;
+}
+
+.play-log-changes {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.play-log-changes span,
+.play-log-no-change {
+  padding: 3px 6px;
+  color: #59645e;
+  background: var(--surface-soft);
+  font-size: 8px;
+  line-height: 1.35;
+}
+
+.play-log-system-step {
+  margin: 12px 0 0 52px;
+  padding: 11px 12px 12px;
+  border-left: 3px solid var(--blue);
+  background: #f1f6fb;
+}
+
+.play-log-system-step header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.play-log-system-step header span {
+  color: var(--blue);
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.play-log-system-step header strong {
+  font-size: 10px;
 }
 
 canvas {
@@ -3910,6 +4125,41 @@ footer {
 
   .owned-tech-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .history-log-panel {
+    padding: 14px;
+  }
+
+  .play-log-entry-heading {
+    grid-template-columns: 36px minmax(0, 1fr);
+  }
+
+  .play-log-move {
+    min-width: 34px;
+  }
+
+  .play-log-effect {
+    grid-template-columns: 42px minmax(0, 1fr);
+  }
+
+  .play-log-resource-group {
+    grid-template-columns: 1fr;
+    gap: 3px;
+  }
+
+  .play-log-resource-group > span {
+    padding-top: 0;
+  }
+
+  .play-log-system-step {
+    margin-left: 0;
+  }
+
+  .play-log-system-step header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
   }
 
   .metric-card {

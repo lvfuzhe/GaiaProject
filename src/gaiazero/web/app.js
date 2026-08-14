@@ -2528,6 +2528,132 @@ const PLAY_ACTION_LABELS = {
   other: "执行动作",
 };
 
+const PLAY_LOG_RESOURCE_LABELS = {
+  credits: "信用点",
+  ore: "矿石",
+  knowledge: "知识",
+  qic: "Q.I.C.",
+  vp: "VP",
+  power: "能量",
+  power_tokens: "能量标记",
+  power_to_gaia: "移入盖亚区",
+  federation_key: "绿色联邦标记",
+};
+
+const PLAY_LOG_COUNTER_LABELS = {
+  gaia_power: "盖亚区能量",
+  gaiaformers: "可用盖亚塑形者",
+  federation_tokens: "联邦板块",
+  federation_keys: "绿色联邦标记",
+  satellites: "卫星",
+};
+
+const PLAY_LOG_RELATION_LABELS = {
+  selected: "选择",
+  returned: "归还",
+  gained: "获得",
+  scored: "计分",
+  income: "收入来源",
+  round: "本轮",
+  uses: "关联",
+};
+
+function renderPlayLogComponents(components = []) {
+  if (!components.length) return "";
+  return `<div class="play-log-components">${components.map((component) => {
+    const relation = PLAY_LOG_RELATION_LABELS[component.relation] || PLAY_LOG_RELATION_LABELS.uses;
+    let label = component.label || component.code;
+    if (component.kind === "booster") label = BOOSTER_NAMES[component.id] || label;
+    if (component.kind === "standard_tech") label = SETUP_LABELS[STANDARD_TECH_KEYS[component.id]] || label;
+    if (component.kind === "round_scoring") label = SETUP_LABELS[ROUND_SETUP_KEYS[component.id]] || label;
+    if (component.kind === "federation") label = FEDERATION_NAMES[component.id] || label;
+    if (component.kind === "research_track") label = TRACK_LABELS[TRACK_KEYS[component.id]] || label;
+    if (component.kind === "planet") label = `星球 ${component.id}`;
+    return `<span class="play-log-component kind-${escapeHtml(component.kind || "other")}" title="${escapeHtml(label)}"><i>${escapeHtml(relation)}</i><strong>${escapeHtml(component.code)}</strong></span>`;
+  }).join("")}</div>`;
+}
+
+function renderPlayLogResources(label, items = [], tone = "gain") {
+  if (!items.length) return "";
+  const sign = tone === "cost" ? "−" : "+";
+  return `<div class="play-log-resource-group ${tone}"><span>${label}</span><div>${items.map((item) => {
+    const resource = PLAY_LOG_RESOURCE_LABELS[item.resource] || item.resource;
+    return `<b>${sign}${formatNumber(item.amount)} ${escapeHtml(resource)}</b>`;
+  }).join("")}</div></div>`;
+}
+
+function renderPlayLogChange(change) {
+  if (change.kind === "power") {
+    return `能量碗 ${change.before.join("/")} → ${change.after.join("/")}`;
+  }
+  if (change.kind === "counter") {
+    return `${PLAY_LOG_COUNTER_LABELS[change.counter] || change.counter} ${change.before} → ${change.after}`;
+  }
+  if (change.kind === "track") {
+    return `${TRACK_LABELS[TRACK_KEYS[change.track]] || `科研轨 ${change.track + 1}`} L${change.before} → L${change.after}`;
+  }
+  if (change.kind === "tech") return `获得基础科技 TEC-S${String(change.id + 1).padStart(2, "0")}`;
+  if (change.kind === "booster") {
+    const before = change.before >= 0 ? `BST-${String(change.before + 1).padStart(2, "0")}` : "无";
+    const after = change.after >= 0 ? `BST-${String(change.after + 1).padStart(2, "0")}` : "无";
+    return `助推板块 ${before} → ${after}`;
+  }
+  if (change.kind === "passed") return change.after ? "完成本轮过轮" : "重置为未过轮";
+  if (change.kind === "building") {
+    const building = BUILDING_SPECS.find((item) => item.key === change.building_after)?.label || change.building_after;
+    return `星球 P-${change.planet}：P${change.owner_after} 放置${building}`;
+  }
+  if (change.kind === "gaiaformer") return `星球 P-${change.planet}：盖亚塑形者 ${change.before} → ${change.after}`;
+  if (change.kind === "terrain") {
+    return `星球 P-${change.planet}：${TERRAIN_LABELS[change.before] || change.before} → ${TERRAIN_LABELS[change.after] || change.after}`;
+  }
+  if (change.kind === "federated") return `${change.amount} 个建筑位置加入联邦`;
+  return "状态已更新";
+}
+
+function renderPlayLogChanges(changes = []) {
+  if (!changes.length) return "";
+  return `<div class="play-log-changes">${changes.map((change) => `<span>${escapeHtml(renderPlayLogChange(change))}</span>`).join("")}</div>`;
+}
+
+function renderPlayLogEffect(effect, system = false) {
+  const resources = [
+    renderPlayLogResources("开销", effect.costs, "cost"),
+    renderPlayLogResources(system ? "回合收入" : "获得", effect.gains, "gain"),
+  ].join("");
+  const changes = renderPlayLogChanges(effect.changes);
+  const empty = !resources && !changes ? '<span class="play-log-no-change">无资源变化</span>' : "";
+  return `<div class="play-log-effect">
+    <div class="play-log-effect-player"><i class="player-color p${effect.player}"></i><strong>P${effect.player}</strong></div>
+    <div class="play-log-effect-detail">${resources}${changes}${renderPlayLogComponents(effect.sources)}${empty}</div>
+  </div>`;
+}
+
+function renderPlayAutomaticStep(step) {
+  const phaseLabel = step.gaia_phase ? "自动收入与盖亚阶段" : "自动收入";
+  return `<section class="play-log-system-step">
+    <header><span>系统步骤</span><strong>第 ${step.round} 大轮${phaseLabel}</strong></header>
+    ${renderPlayLogComponents(step.components)}
+    <div class="play-log-effects">${(step.effects || []).map((effect) => renderPlayLogEffect(effect, true)).join("")}</div>
+    ${renderPlayLogChanges(step.changes)}
+  </section>`;
+}
+
+function renderPlayActionEntry(item) {
+  const actionName = PLAY_ACTION_LABELS[item.kind] || PLAY_ACTION_LABELS.other;
+  const round = item.round > 0 ? `第 ${item.round} 轮` : "初始设置";
+  return `<article class="play-log-entry">
+    <header class="play-log-entry-heading">
+      <span class="play-log-move">#${item.move}</span>
+      <div><strong><i class="player-color p${item.player}"></i>P${item.player} · ${escapeHtml(actionName)}</strong><small>${round} · ${item.role === "human" ? "人工" : "AI"}</small></div>
+    </header>
+    ${renderPlayLogComponents(item.components)}
+    <div class="play-log-effects">${(item.effects || []).map((effect) => renderPlayLogEffect(effect)).join("")}</div>
+    ${renderPlayLogChanges(item.changes)}
+    ${(item.automatic_steps || []).map(renderPlayAutomaticStep).join("")}
+  </article>`;
+}
+
 function ensurePlaySeats(players = state.play.players) {
   state.play.players = players;
   const defaults = [0, 2, 4, 6];
@@ -2945,10 +3071,13 @@ function renderPlay() {
   renderPlayerRows("play-players-table", snapshot, "play-active-player");
   renderPersonalBoards("play-player-board-grid", snapshot);
   const history = session.history || [];
-  byId("play-action-log-count").textContent = `${history.length} 步`;
+  const automaticSteps = history.reduce((total, item) => total + (item.automatic_steps?.length || 0), 0);
+  byId("play-action-log-count").textContent = automaticSteps
+    ? `${history.length} 个动作 · ${automaticSteps} 个系统步骤`
+    : `${history.length} 个动作`;
   byId("play-action-log").innerHTML = history.length
-    ? [...history].reverse().map((item) => `<tr><td>${item.move}</td><td><span class="player-label"><i class="player-color p${item.player}"></i>P${item.player}</span></td><td>${item.role === "human" ? "人工" : "AI"}</td><td>${escapeHtml(PLAY_ACTION_LABELS[item.kind] || item.label)}${item.target === null || item.target === undefined ? "" : ` · #${item.target}`}</td></tr>`).join("")
-    : '<tr><td colspan="4" class="empty-cell">暂无动作</td></tr>';
+    ? [...history].reverse().map(renderPlayActionEntry).join("")
+    : '<div class="play-action-log-empty">暂无动作</div>';
   scheduleInteractiveAi();
 }
 
