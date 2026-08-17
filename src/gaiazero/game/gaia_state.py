@@ -72,6 +72,7 @@ class FactionSpec:
     ability: str
     starting_qic: int = 1
     starting_structures: int = 2
+    mine_income_zero_slot: int = 4
     starts_with_pi: bool = False
     places_last: bool = False
     federation_threshold: int = 7
@@ -91,7 +92,7 @@ class FactionSpec:
 FACTIONS: tuple[FactionSpec, ...] = (
     FactionSpec("Terrans", Terrain.TERRA, Track.GAIA_PROJECT, (4, 4, 0), 0, "Gaia power returns to bowl II", gaia_to_bowl_two=True),
     FactionSpec("Lantids", Terrain.TERRA, Track.SCIENCE, (4, 0, 0), 0, "May coexist on colonized planets", starting_credits=13),
-    FactionSpec("Xenos", Terrain.DESERT, Track.ARTIFICIAL_INTELLIGENCE, (2, 4, 0), 1, "Starts with a third mine; its PI lowers federation power to 6", starting_structures=3),
+    FactionSpec("Xenos", Terrain.DESERT, Track.ARTIFICIAL_INTELLIGENCE, (2, 4, 0), 1, "Starts with a third mine; its PI lowers federation power to 6", starting_structures=3, mine_income_zero_slot=3),
     FactionSpec("Gleens", Terrain.DESERT, Track.NAVIGATION, (2, 4, 0), 1, "Ore replaces Q.I.C. for Gaia colonization", starting_qic=0),
     FactionSpec("Taklons", Terrain.SWAMP, Track.ECONOMY, (2, 4, 0), 2, "Brainstone strengthens the power cycle", passive_power_token=True),
     FactionSpec("Ambas", Terrain.SWAMP, Track.NAVIGATION, (4, 4, 0), 2, "Planetary institute can swap with a mine", income_ore=1),
@@ -1452,7 +1453,7 @@ class GaiaState:
                 + booster_credits
                 + faction.income_credits
             ))
-            mine_ore = 1 + mines - int(mines >= 4)
+            mine_ore = 1 + mines - int(mines >= faction.mine_income_zero_slot)
             ore = min(
                 15,
                 info.ore + mine_ore + economy_ore + booster_ore + faction.income_ore,

@@ -124,6 +124,37 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(gleens.tracks[Track.NAVIGATION], 1)
         self.assertEqual((gleens.ore, gleens.qic), (5, 0))
 
+    def test_xenos_third_starting_mine_does_not_increase_round_one_income(self) -> None:
+        state = GaiaState.initial(
+            2,
+            faction_indices=(2, 0),
+            first_player=0,
+        )
+        while state.is_starting_placement:
+            state = state.apply(state.legal_actions()[0])
+
+        self.assertTrue(state.is_booster_selection)
+        self.assertEqual(state._building_count(0, Building.MINE), 3)
+        first_income = state._grant_income().players[0]
+        self.assertEqual(first_income.ore - state.players[0].ore, 3)
+
+        owners = list(state.owners)
+        buildings = list(state.buildings)
+        fourth_mine = next(
+            planet
+            for planet, active in enumerate(state.active_planets)
+            if active and owners[planet] < 0
+        )
+        owners[fourth_mine] = 0
+        buildings[fourth_mine] = Building.MINE
+        expanded = replace(
+            state,
+            owners=tuple(owners),
+            buildings=tuple(buildings),
+        )
+        later_income = expanded._grant_income().players[0]
+        self.assertEqual(later_income.ore - expanded.players[0].ore, 4)
+
     def test_faction_catalog_includes_initial_research_rewards(self) -> None:
         state = GaiaState.initial(2, faction_indices=(0, 9), first_player=0)
         catalog = {
