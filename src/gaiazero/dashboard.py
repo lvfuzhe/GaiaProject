@@ -48,7 +48,11 @@ from gaiazero.game.gaia_state import (
     Track,
 )
 from gaiazero.mcts import PUCTSearch, SearchConfig
-from gaiazero.model import NetworkEvaluator, load_checkpoint
+from gaiazero.model import (
+    NetworkEvaluator,
+    architecture_for_players,
+    load_checkpoint,
+)
 from gaiazero.telemetry import (
     JsonlTelemetry,
     build_history_index,
@@ -1397,8 +1401,16 @@ def _interactive_action_record(
 def _interactive_ai_components(
     state: GaiaState,
 ) -> tuple[object, str]:
-    checkpoint = Path.cwd() / "runs" / "models" / f"gaia-standard-{state.num_players}p.pt"
-    if checkpoint.is_file():
+    expected_architecture = architecture_for_players(state.num_players)
+    model_directory = Path.cwd() / "runs" / "models"
+    checkpoints = (
+        model_directory
+        / f"gaia-standard-{state.num_players}p-{expected_architecture}.pt",
+        model_directory / f"gaia-standard-{state.num_players}p.pt",
+    )
+    for checkpoint in checkpoints:
+        if not checkpoint.is_file():
+            continue
         try:
             model, _metadata = load_checkpoint(checkpoint, "cpu")
             expected = (state.observation_size, state.action_size, state.num_players)
@@ -1407,8 +1419,9 @@ def _interactive_ai_components(
                 model.config.action_size,
                 model.config.num_players,
             )
-            if actual == expected:
-                return NetworkEvaluator(model, "cpu"), "AlphaZero + PIMCTS"
+            if actual == expected and model.architecture == expected_architecture:
+                label = "NNUE" if model.architecture == "nnue" else "KataGo"
+                return NetworkEvaluator(model, "cpu"), f"{label} + PIMCTS"
         except Exception:
             pass
     return GaiaHeuristicEvaluator(), "Heuristic PIMCTS"

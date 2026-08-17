@@ -3137,7 +3137,7 @@ function renderDiagnostics() {
   const preferred = [
     ["players", "玩家"], ["iterations", "迭代"], ["games_per_iteration", "每轮对局"],
     ["updates_per_iteration", "每轮更新"], ["simulations", "搜索模拟"], ["batch_size", "批大小"],
-    ["hidden_size", "隐藏层"], ["residual_blocks", "残差块"], ["learning_rate", "学习率"],
+    ["architecture", "网络架构"], ["hidden_size", "隐藏层"], ["residual_blocks", "残差块"], ["learning_rate", "学习率"],
     ["replay_capacity", "回放容量"], ["seed", "随机种子"], ["output", "检查点"]
   ];
   byId("config-list").innerHTML = start

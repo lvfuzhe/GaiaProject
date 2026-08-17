@@ -20,6 +20,7 @@ from gaiazero.model import (
     NetworkConfig,
     NetworkEvaluator,
     PolicyValueNetwork,
+    architecture_for_players,
     load_checkpoint,
     resolve_device,
     save_checkpoint,
@@ -73,6 +74,7 @@ def command_train(args: argparse.Namespace) -> None:
         num_players=args.players,
         hidden_size=args.hidden_size,
         residual_blocks=args.residual_blocks,
+        architecture=architecture_for_players(args.players),
     )
     model = PolicyValueNetwork(network_config)
     evaluator = NetworkEvaluator(model, device)
@@ -94,10 +96,16 @@ def command_train(args: argparse.Namespace) -> None:
         for key, value in vars(args).items()
         if key not in {"handler", "command"}
     }
+    configuration["architecture"] = model.architecture
+    print(
+        f"training players={args.players} architecture={model.architecture} "
+        f"device={device}"
+    )
     telemetry.emit(
         "run_started",
         config=configuration,
         device=str(device),
+        architecture=model.architecture,
         model_parameters=sum(parameter.numel() for parameter in model.parameters()),
         observation_size=template.observation_size,
         action_size=template.action_size,
@@ -243,7 +251,10 @@ def command_train(args: argparse.Namespace) -> None:
                     "self_play_games": total_games,
                     "replay_positions": len(replay),
                     "player_count": args.players,
-                    "model_id": f"{args.ruleset}-{args.players}p",
+                    "architecture": model.architecture,
+                    "model_id": (
+                        f"{args.ruleset}-{args.players}p-{model.architecture}"
+                    ),
                     "ruleset": template.snapshot()["ruleset"],
                 },
             )
@@ -297,10 +308,17 @@ def command_train_all(args: argparse.Namespace) -> None:
         child.handler = command_train
         child.players = players
         child.seed = args.seed + index * 1_000_003
-        child.output = str(output_dir / f"gaia-{args.ruleset}-{players}p.pt")
-        child.metrics = str(metrics_dir / f"metrics-{args.ruleset}-{players}p.jsonl")
+        architecture = architecture_for_players(players)
+        child.output = str(
+            output_dir / f"gaia-{args.ruleset}-{players}p-{architecture}.pt"
+        )
+        child.metrics = str(
+            metrics_dir
+            / f"metrics-{args.ruleset}-{players}p-{architecture}.jsonl"
+        )
         print(
-            f"[train-all] players={players} output={child.output} "
+            f"[train-all] players={players} "
+            f"architecture={architecture} output={child.output} "
             f"metrics={child.metrics} seed={child.seed}"
         )
         command_train(child)
@@ -319,6 +337,12 @@ def command_evaluate(args: argparse.Namespace) -> None:
     actual = (config.observation_size, config.action_size, config.num_players)
     if actual != expected:
         raise ValueError(f"checkpoint dimensions {actual} do not match game {expected}")
+    expected_architecture = architecture_for_players(args.players)
+    if config.architecture != expected_architecture:
+        raise ValueError(
+            f"checkpoint architecture {config.architecture} does not match "
+            f"{args.players}-player {expected_architecture} architecture"
+        )
     challenger = NetworkEvaluator(model, args.device)
     summary = evaluate_against(
         lambda seed: state_type.initial(args.players, args.seed + seed),
