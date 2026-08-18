@@ -578,6 +578,74 @@ class StandardGaiaRulesTests(unittest.TestCase):
         bal_taks = bal_taks_state.apply(QIC_ACADEMY_ACTION).players[0]
         self.assertEqual((bal_taks.credits, bal_taks.qic), (4, 0))
 
+    def test_snapshot_round_income_preview_matches_granted_income(self) -> None:
+        state = GaiaState.initial(
+            2,
+            faction_indices=(0, 2),
+            first_player=0,
+            standard_tech_tiles=tuple(range(STANDARD_TECH_COUNT)),
+        )
+        planets = [
+            planet
+            for planet, active in enumerate(state.active_planets)
+            if active
+        ]
+        placed = (
+            (Building.MINE,) * 3
+            + (Building.TRADING_STATION,) * 2
+            + (Building.RESEARCH_LAB, Building.PLANETARY_INSTITUTE, Building.ACADEMY)
+        )
+        owners = [-1] * len(state.owners)
+        buildings = [Building.EMPTY] * len(state.buildings)
+        for planet, building in zip(planets[:len(placed)], placed, strict=True):
+            owners[planet] = 0
+            buildings[planet] = building
+
+        tracks = [0] * len(Track)
+        tracks[Track.ECONOMY] = 3
+        tracks[Track.SCIENCE] = 2
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            credits=0,
+            ore=0,
+            knowledge=0,
+            qic=0,
+            bowl_one=12,
+            bowl_two=0,
+            bowl_three=0,
+            tracks=tuple(tracks),
+            tech_tiles=(1 << 5) | (1 << 6) | (1 << 7),
+            knowledge_academies=1,
+        )
+        booster_owner = [-1] * len(state.booster_owner)
+        booster_owner[4] = 0
+        state = replace(
+            state,
+            players=tuple(players),
+            owners=tuple(owners),
+            buildings=tuple(int(value) for value in buildings),
+            booster_owner=tuple(booster_owner),
+        )
+
+        expected = {
+            "credits": 17,
+            "ore": 5,
+            "knowledge": 7,
+            "qic": 1,
+            "power_tokens": 1,
+            "power_charge": 8,
+        }
+        self.assertEqual(state._income_preview(0), expected)
+        self.assertEqual(state.snapshot()["players"][0]["round_income"], expected)
+
+        after = state._grant_income().players[0]
+        self.assertEqual(
+            (after.credits, after.ore, after.knowledge, after.qic),
+            (17, 5, 7, 1),
+        )
+        self.assertEqual((after.bowl_one, after.bowl_two, after.bowl_three), (5, 8, 0))
+
     def test_bescods_swap_academy_and_planetary_institute_upgrades(self) -> None:
         state = finish_starting_placement(
             GaiaState.initial(

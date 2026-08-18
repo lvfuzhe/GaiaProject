@@ -1511,96 +1511,104 @@ class GaiaState:
     def _grant_income(self) -> GaiaState:
         updated: list[PlayerState] = []
         for player, info in enumerate(self.players):
-            faction = FACTIONS[info.faction]
-            mines = self._building_count(player, Building.MINE)
-            trading = self._building_count(player, Building.TRADING_STATION)
-            labs = self._building_count(player, Building.RESEARCH_LAB)
-            institutes = self._building_count(player, Building.PLANETARY_INSTITUTE)
-            economy_credits, economy_ore, economy_charge = ECONOMY_TRACK_INCOME[
-                info.tracks[Track.ECONOMY]
-            ]
-            science_knowledge = SCIENCE_TRACK_INCOME[info.tracks[Track.SCIENCE]]
-            booster = self._player_booster(player)
-            (
-                booster_credits,
-                booster_ore,
-                booster_knowledge,
-                booster_qic,
-                booster_charge,
-            ) = self._booster_income(booster)
-            trading_credits = sum(faction.trading_station_credit_income[:trading])
-            lab_credits = sum(faction.research_lab_credit_income[:labs])
-            credits = min(30, info.credits + (
-                trading_credits
-                + lab_credits
-                + economy_credits
-                + booster_credits
-                + faction.income_credits
-            ))
-            mine_ore = 1 + mines - int(mines >= faction.mine_income_zero_slot)
-            ore = min(
-                15,
-                info.ore + mine_ore + economy_ore + booster_ore + faction.income_ore,
-            )
-            board_knowledge = (
-                trading * faction.trading_station_knowledge_income
-                + labs * faction.research_lab_knowledge_income
-            )
-            academy_knowledge = (
-                info.knowledge_academies
-                * faction.knowledge_academy_knowledge_income
-            )
-            knowledge = min(
-                15,
-                info.knowledge
-                + 1
-                + board_knowledge
-                + academy_knowledge
-                + science_knowledge
-                + booster_knowledge
-                + faction.income_knowledge,
-            )
+            income = self._income_preview(player)
             info = replace(
                 info,
-                credits=credits,
-                ore=ore,
-                knowledge=knowledge,
+                credits=min(30, info.credits + income["credits"]),
+                ore=min(15, info.ore + income["ore"]),
+                knowledge=min(15, info.knowledge + income["knowledge"]),
             )
-            info = self._gain_qic(info, booster_qic + faction.income_qic)
-            power_tokens = faction.income_power_tokens
-            if institutes:
-                if faction.name == "Xenos":
-                    info = self._gain_qic(info, institutes)
-                elif faction.name == "Gleens":
-                    info = replace(info, ore=min(15, info.ore + institutes))
-                elif faction.name == "Lantids":
-                    pass
-                elif faction.name in ("Ambas", "Bescods"):
-                    power_tokens += 2 * institutes
-                else:
-                    power_tokens += institutes
-            if power_tokens:
-                info = replace(info, bowl_one=info.bowl_one + power_tokens)
-            charge = (
-                institutes * 4
-                + labs * faction.research_lab_charge_income
-                + economy_charge
-                + booster_charge
-            )
-            if self._has_active_standard_tech(info, 5):
-                info = replace(info, ore=min(15, info.ore + 1))
-                charge += 1
-            if self._has_active_standard_tech(info, 6):
+            info = self._gain_qic(info, income["qic"])
+            if income["power_tokens"]:
                 info = replace(
                     info,
-                    credits=min(30, info.credits + 1),
-                    knowledge=min(15, info.knowledge + 1),
+                    bowl_one=info.bowl_one + income["power_tokens"],
                 )
-            if self._has_active_standard_tech(info, 7):
-                info = replace(info, credits=min(30, info.credits + 4))
-            info, _ = self._charge_power(info, charge)
+            info, _ = self._charge_power(info, income["power_charge"])
             updated.append(info)
         return replace(self, players=tuple(updated))
+
+    def _income_preview(self, player: int) -> dict[str, int]:
+        info = self.players[player]
+        faction = FACTIONS[info.faction]
+        mines = self._building_count(player, Building.MINE)
+        trading = self._building_count(player, Building.TRADING_STATION)
+        labs = self._building_count(player, Building.RESEARCH_LAB)
+        institutes = self._building_count(player, Building.PLANETARY_INSTITUTE)
+        economy_credits, economy_ore, economy_charge = ECONOMY_TRACK_INCOME[
+            info.tracks[Track.ECONOMY]
+        ]
+        science_knowledge = SCIENCE_TRACK_INCOME[info.tracks[Track.SCIENCE]]
+        (
+            booster_credits,
+            booster_ore,
+            booster_knowledge,
+            booster_qic,
+            booster_charge,
+        ) = self._booster_income(self._player_booster(player))
+
+        credits = (
+            sum(faction.trading_station_credit_income[:trading])
+            + sum(faction.research_lab_credit_income[:labs])
+            + economy_credits
+            + booster_credits
+            + faction.income_credits
+        )
+        ore = (
+            1
+            + mines
+            - int(mines >= faction.mine_income_zero_slot)
+            + economy_ore
+            + booster_ore
+            + faction.income_ore
+        )
+        knowledge = (
+            1
+            + trading * faction.trading_station_knowledge_income
+            + labs * faction.research_lab_knowledge_income
+            + info.knowledge_academies * faction.knowledge_academy_knowledge_income
+            + science_knowledge
+            + booster_knowledge
+            + faction.income_knowledge
+        )
+        qic = booster_qic + faction.income_qic
+        power_tokens = faction.income_power_tokens
+
+        if institutes:
+            if faction.name == "Xenos":
+                qic += institutes
+            elif faction.name == "Gleens":
+                ore += institutes
+            elif faction.name == "Lantids":
+                pass
+            elif faction.name in ("Ambas", "Bescods"):
+                power_tokens += 2 * institutes
+            else:
+                power_tokens += institutes
+
+        power_charge = (
+            institutes * 4
+            + labs * faction.research_lab_charge_income
+            + economy_charge
+            + booster_charge
+        )
+        if self._has_active_standard_tech(info, 5):
+            ore += 1
+            power_charge += 1
+        if self._has_active_standard_tech(info, 6):
+            credits += 1
+            knowledge += 1
+        if self._has_active_standard_tech(info, 7):
+            credits += 4
+
+        return {
+            "credits": credits,
+            "ore": ore,
+            "knowledge": knowledge,
+            "qic": qic,
+            "power_tokens": power_tokens,
+            "power_charge": power_charge,
+        }
 
     def _gaia_phase(self) -> GaiaState:
         players: list[PlayerState] = []
@@ -2480,6 +2488,7 @@ class GaiaState:
                     "vp": info.vp,
                     "power": [info.bowl_one, info.bowl_two, info.bowl_three],
                     "gaia_power": info.gaia_power,
+                    "round_income": self._income_preview(player),
                     "gaiaformers": info.gaiaformers,
                     "gaiaformers_on_board": sum(
                         owner == player for owner in self.gaiaformer_owner

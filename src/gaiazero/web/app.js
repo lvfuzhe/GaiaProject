@@ -2337,6 +2337,14 @@ function renderPersonalBoards(containerId, snapshot) {
     { key: "knowledge", label: "知识", cap: 15 },
     { key: "qic", label: "Q.I.C.", cap: null },
   ];
+  const incomeSpecs = [
+    { key: "credits", label: "信用点", tone: "credits" },
+    { key: "ore", label: "矿石", tone: "ore" },
+    { key: "knowledge", label: "知识", tone: "knowledge" },
+    { key: "qic", label: "Q.I.C.", tone: "qic" },
+    { key: "power_tokens", label: "能量片", tone: "power-token" },
+    { key: "power_charge", label: "充能", tone: "power-charge" },
+  ];
 
   container.innerHTML = players.map((player) => {
     const factionId = Number.isInteger(Number(player.faction_id))
@@ -2395,6 +2403,14 @@ function renderPersonalBoards(containerId, snapshot) {
     const resources = resourceSpecs.map((resource) => `<div class="personal-resource">
       <span>${resource.label}</span><strong>${formatNumber(player[resource.key])}</strong>${resource.cap ? `<small>/ ${resource.cap}</small>` : ""}
     </div>`).join("");
+    const income = player.round_income || {};
+    const incomeItems = incomeSpecs.map((item) => {
+      const value = Number(income[item.key]);
+      const display = Number.isFinite(value) ? `+${formatNumber(value)}` : "--";
+      return `<div class="personal-income-item ${item.tone}">
+        <span>${item.label}</span><strong>${display}</strong>
+      </div>`;
+    }).join("");
     const status = snapshot.terminal
       ? "对局结束"
       : player.passed ? "已过轮" : player.id === snapshot.current_player ? "当前行动" : "等待行动";
@@ -2412,6 +2428,10 @@ function renderPersonalBoards(containerId, snapshot) {
             </figure>
             <div class="personal-board-resources">
               <div class="personal-resource-grid">${resources}</div>
+              <div class="personal-income-panel" aria-label="下一次收入阶段的回合收入">
+                <div class="personal-income-heading"><strong>回合收入</strong><span>实时预览</span></div>
+                <div class="personal-income-grid">${incomeItems}</div>
+              </div>
               <div class="power-cycle" aria-label="能量碗 I、II、III 和盖亚区">${powerAreas}</div>
               <div class="personal-board-counters">
                 <span>盖亚塑形者 <strong>${formatNumber(player.gaiaformers)}</strong></span>
