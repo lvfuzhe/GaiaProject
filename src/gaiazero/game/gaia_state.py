@@ -66,7 +66,7 @@ class QicAction(IntEnum):
 class FactionSpec:
     name: str
     home: Terrain
-    start_track: Track
+    start_track: Track | None
     power: tuple[int, int, int]
     board: int
     ability: str
@@ -99,13 +99,13 @@ class FactionSpec:
 
 FACTIONS: tuple[FactionSpec, ...] = (
     FactionSpec("Terrans", Terrain.TERRA, Track.GAIA_PROJECT, (4, 4, 0), 0, "Gaia power returns to bowl II", gaia_to_bowl_two=True),
-    FactionSpec("Lantids", Terrain.TERRA, Track.SCIENCE, (4, 0, 0), 0, "May coexist on colonized planets", starting_credits=13),
+    FactionSpec("Lantids", Terrain.TERRA, None, (4, 0, 0), 0, "May coexist on colonized planets", starting_credits=13),
     FactionSpec("Xenos", Terrain.DESERT, Track.ARTIFICIAL_INTELLIGENCE, (2, 4, 0), 1, "Starts with a third mine; its PI lowers federation power to 6", starting_structures=3),
     FactionSpec("Gleens", Terrain.DESERT, Track.NAVIGATION, (2, 4, 0), 1, "Ore replaces Q.I.C. for Gaia colonization", starting_qic=0),
-    FactionSpec("Taklons", Terrain.SWAMP, Track.ECONOMY, (2, 4, 0), 2, "Brainstone strengthens the power cycle", passive_power_token=True),
+    FactionSpec("Taklons", Terrain.SWAMP, None, (2, 4, 0), 2, "Brainstone strengthens the power cycle", passive_power_token=True),
     FactionSpec("Ambas", Terrain.SWAMP, Track.NAVIGATION, (4, 4, 0), 2, "Planetary institute can swap with a mine", income_ore=1),
     FactionSpec("Hadsch Hallas", Terrain.OXIDE, Track.ECONOMY, (2, 4, 0), 3, "Credits unlock expanded free actions", income_credits=3),
-    FactionSpec("Ivits", Terrain.OXIDE, Track.NAVIGATION, (4, 4, 0), 3, "Places its starting planetary institute after all starting mines", starting_structures=1, starts_with_pi=True, places_last=True, income_qic=1),
+    FactionSpec("Ivits", Terrain.OXIDE, None, (4, 4, 0), 3, "Places its starting planetary institute after all starting mines", starting_structures=1, starts_with_pi=True, places_last=True, income_qic=1),
     FactionSpec("Geodens", Terrain.VOLCANIC, Track.TERRAFORMING, (2, 4, 0), 4, "Knowledge for newly colonized planet types", knowledge_for_new_type=True),
     FactionSpec(
         "Bal T'aks",
@@ -117,11 +117,11 @@ FACTIONS: tuple[FactionSpec, ...] = (
         starting_qic=0,
         qic_academy_credit_action=4,
     ),
-    FactionSpec("Firaks", Terrain.TITANIUM, Track.SCIENCE, (2, 4, 0), 5, "May downgrade a research lab to research", starting_ore=3, starting_knowledge=2, income_knowledge=1),
+    FactionSpec("Firaks", Terrain.TITANIUM, None, (2, 4, 0), 5, "May downgrade a research lab to research", starting_ore=3, starting_knowledge=2, income_knowledge=1),
     FactionSpec(
         "Bescods",
         Terrain.TITANIUM,
-        Track.ECONOMY,
+        None,
         (2, 4, 0),
         5,
         "Lowest research areas advance together",
@@ -147,7 +147,7 @@ FACTIONS: tuple[FactionSpec, ...] = (
     FactionSpec(
         "Itars",
         Terrain.ICE,
-        Track.GAIA_PROJECT,
+        None,
         (4, 4, 0),
         6,
         "Gaia power can buy technology",
@@ -545,6 +545,8 @@ class GaiaState:
                 FACTIONS[info.faction].start_track,
                 score_round=False,
             )
+            if FACTIONS[info.faction].start_track is not None
+            else info
             for player, info in enumerate(state.players)
         )
         return replace(state, players=initialized_players)
@@ -2581,7 +2583,11 @@ class GaiaState:
                         "side": FACTION_BOARD_SIDES[info.faction],
                         "name": FACTIONS[info.faction].name,
                         "home_terrain": int(FACTIONS[info.faction].home),
-                        "start_track": FACTIONS[info.faction].start_track.name.lower(),
+                        "start_track": (
+                            FACTIONS[info.faction].start_track.name.lower()
+                            if FACTIONS[info.faction].start_track is not None
+                            else None
+                        ),
                         "ability": FACTIONS[info.faction].ability,
                         "starting_structures": FACTIONS[info.faction].starting_structures,
                         "starts_with_pi": FACTIONS[info.faction].starts_with_pi,
@@ -2651,19 +2657,25 @@ class GaiaState:
 
     def _faction_catalog_entry(self, faction_id: int) -> dict[str, object]:
         faction = FACTIONS[faction_id]
-        info = self._advance_research(
-            0,
-            self._base_player_state(faction_id),
-            faction.start_track,
-            score_round=False,
-        )
+        info = self._base_player_state(faction_id)
+        if faction.start_track is not None:
+            info = self._advance_research(
+                0,
+                info,
+                faction.start_track,
+                score_round=False,
+            )
         return {
             "id": faction_id,
             "board": faction.board + 1,
             "side": FACTION_BOARD_SIDES[faction_id],
             "name": faction.name,
             "home_terrain": int(faction.home),
-            "start_track": faction.start_track.name.lower(),
+            "start_track": (
+                faction.start_track.name.lower()
+                if faction.start_track is not None
+                else None
+            ),
             "ability": faction.ability,
             "starting_power": list(faction.power),
             "starting_credits": info.credits,

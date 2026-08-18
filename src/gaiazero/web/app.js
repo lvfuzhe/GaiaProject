@@ -92,19 +92,19 @@ const FACTION_ABILITIES = {
 };
 const BASE_FACTIONS = [
   { id: 0, board: 1, side: "A", name: "Terrans", home_terrain: 0, start_track: "gaia_project", starting_power: [4, 4, 0], starting_credits: 15, starting_ore: 4, starting_knowledge: 3, starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
-  { id: 1, board: 1, side: "B", name: "Lantids", home_terrain: 0, start_track: "science", starting_power: [4, 0, 0], starting_credits: 13, starting_ore: 4, starting_knowledge: 3, starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
+  { id: 1, board: 1, side: "B", name: "Lantids", home_terrain: 0, start_track: null, starting_power: [4, 0, 0], starting_credits: 13, starting_ore: 4, starting_knowledge: 3, starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
   { id: 2, board: 2, side: "A", name: "Xenos", home_terrain: 1, start_track: "artificial_intelligence", starting_power: [2, 4, 0], starting_credits: 15, starting_ore: 4, starting_knowledge: 3, starting_qic: 2, starting_structures: 3, starts_with_pi: false, federation_threshold: 7 },
   { id: 3, board: 2, side: "B", name: "Gleens", home_terrain: 1, start_track: "navigation", starting_power: [2, 4, 0], starting_credits: 15, starting_ore: 5, starting_knowledge: 3, starting_qic: 0, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
-  { id: 4, board: 3, side: "A", name: "Taklons", home_terrain: 2, start_track: "economy", starting_power: [2, 4, 0], starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
+  { id: 4, board: 3, side: "A", name: "Taklons", home_terrain: 2, start_track: null, starting_power: [2, 4, 0], starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
   { id: 5, board: 3, side: "B", name: "Ambas", home_terrain: 2, start_track: "navigation", starting_power: [4, 4, 0], starting_qic: 2, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
   { id: 6, board: 4, side: "A", name: "Hadsch Hallas", home_terrain: 4, start_track: "economy", starting_power: [2, 4, 0], starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
-  { id: 7, board: 4, side: "B", name: "Ivits", home_terrain: 4, start_track: "navigation", starting_power: [4, 4, 0], starting_qic: 2, starting_structures: 1, starts_with_pi: true, places_last: true, federation_threshold: 7 },
+  { id: 7, board: 4, side: "B", name: "Ivits", home_terrain: 4, start_track: null, starting_power: [4, 4, 0], starting_qic: 1, starting_structures: 1, starts_with_pi: true, places_last: true, federation_threshold: 7 },
   { id: 8, board: 5, side: "A", name: "Geodens", home_terrain: 3, start_track: "terraforming", starting_power: [2, 4, 0], starting_ore: 6, starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
   { id: 9, board: 5, side: "B", name: "Bal T'aks", home_terrain: 3, start_track: "gaia_project", starting_power: [2, 2, 0], starting_credits: 15, starting_ore: 4, starting_knowledge: 3, starting_qic: 0, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
-  { id: 10, board: 6, side: "A", name: "Firaks", home_terrain: 5, start_track: "science", starting_power: [2, 4, 0], starting_credits: 15, starting_ore: 3, starting_knowledge: 2, starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
-  { id: 11, board: 6, side: "B", name: "Bescods", home_terrain: 5, start_track: "economy", starting_power: [2, 4, 0], starting_credits: 15, starting_ore: 4, starting_knowledge: 1, starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
+  { id: 10, board: 6, side: "A", name: "Firaks", home_terrain: 5, start_track: null, starting_power: [2, 4, 0], starting_credits: 15, starting_ore: 3, starting_knowledge: 2, starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
+  { id: 11, board: 6, side: "B", name: "Bescods", home_terrain: 5, start_track: null, starting_power: [2, 4, 0], starting_credits: 15, starting_ore: 4, starting_knowledge: 1, starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
   { id: 12, board: 7, side: "B", name: "Nevlas", home_terrain: 6, start_track: "science", starting_power: [2, 4, 0], starting_credits: 15, starting_ore: 4, starting_knowledge: 2, starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
-  { id: 13, board: 7, side: "A", name: "Itars", home_terrain: 6, start_track: "gaia_project", starting_power: [4, 4, 0], starting_credits: 15, starting_ore: 5, starting_knowledge: 3, starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
+  { id: 13, board: 7, side: "A", name: "Itars", home_terrain: 6, start_track: null, starting_power: [4, 4, 0], starting_credits: 15, starting_ore: 5, starting_knowledge: 3, starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
 ];
 const STANDARD_TECH_KEYS = [
   "ore-qic", "planet-type-knowledge", "vp-7", "gaia-mine-vp", "structure-power",
@@ -648,7 +648,9 @@ function renderSetup(snapshot) {
         </div>
         <div class="faction-setup-meta">
           <span class="setup-tag">${TERRAIN_LABELS[faction.home_terrain]}</span>
-          <span class="setup-tag">${TRACK_LABELS[faction.start_track] || faction.start_track} +1</span>
+          ${faction.start_track
+            ? `<span class="setup-tag">${TRACK_LABELS[faction.start_track] || faction.start_track} +1</span>`
+            : '<span class="setup-tag">无初始科研</span>'}
           <span class="setup-tag">${startBuilding}</span>
           <span class="setup-tag">信用点 ${faction.starting_credits ?? 15}</span>
           <span class="setup-tag">矿石 ${faction.starting_ore ?? 4}</span>

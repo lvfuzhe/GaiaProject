@@ -113,7 +113,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(xenos.qic, 2)
         self.assertEqual(terrans.tracks[Track.GAIA_PROJECT], 1)
         self.assertEqual(terrans.gaiaformers, 1)
-        self.assertEqual(taklons.tracks[Track.ECONOMY], 1)
+        self.assertEqual(taklons.tracks, (0,) * len(Track))
         self.assertEqual((taklons.credits, taklons.ore), (15, 4))
 
         gleens = GaiaState.initial(
@@ -123,6 +123,24 @@ class StandardGaiaRulesTests(unittest.TestCase):
         ).players[0]
         self.assertEqual(gleens.tracks[Track.NAVIGATION], 1)
         self.assertEqual((gleens.ore, gleens.qic), (5, 0))
+
+    def test_factions_without_starting_research_begin_at_level_zero(self) -> None:
+        no_starting_research = (1, 4, 7, 10, 11, 13)
+        for faction_id in no_starting_research:
+            opponent = 2 if faction_id == 1 else 0
+            with self.subTest(faction=FACTIONS[faction_id].name):
+                state = GaiaState.initial(
+                    2,
+                    faction_indices=(faction_id, opponent),
+                    first_player=0,
+                )
+                self.assertEqual(state.players[0].tracks, (0,) * len(Track))
+                selected = state.snapshot()["setup"]["factions"][0]
+                self.assertIsNone(selected["start_track"])
+
+                catalog = state.snapshot()["setup"]["faction_catalog"]
+                entry = next(faction for faction in catalog if faction["id"] == faction_id)
+                self.assertIsNone(entry["start_track"])
 
     def test_xenos_third_starting_mine_does_not_increase_round_one_income(self) -> None:
         state = GaiaState.initial(
@@ -171,10 +189,10 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(catalog["Gleens"]["starting_qic"], 0)
         self.assertEqual(catalog["Xenos"]["starting_qic"], 2)
         self.assertEqual(catalog["Ambas"]["starting_qic"], 2)
-        self.assertEqual(catalog["Ivits"]["starting_qic"], 2)
+        self.assertEqual(catalog["Ivits"]["starting_qic"], 1)
         self.assertEqual(catalog["Terrans"]["starting_gaiaformers"], 1)
         self.assertEqual(catalog["Bal T'aks"]["starting_gaiaformers"], 1)
-        self.assertEqual(catalog["Itars"]["starting_gaiaformers"], 1)
+        self.assertEqual(catalog["Itars"]["starting_gaiaformers"], 0)
 
     def test_snapshot_preserves_complete_initial_setup(self) -> None:
         snapshot = GaiaState.initial(3, seed=41).snapshot()
