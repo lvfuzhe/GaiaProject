@@ -471,6 +471,138 @@ class StandardGaiaRulesTests(unittest.TestCase):
             income = replace(state, players=tuple(players))._grant_income().players[0]
             self.assertEqual(income.knowledge, 1 + knowledge)
 
+    def test_faction_income_panels_match_board_slots(self) -> None:
+        def panel_state(
+            faction: int,
+            buildings_to_place: tuple[Building, ...] = (),
+            **player_changes: object,
+        ) -> GaiaState:
+            opponent = 2 if faction == 0 else 0
+            state = GaiaState.initial(
+                2,
+                faction_indices=(faction, opponent),
+                first_player=0,
+                standard_tech_tiles=tuple(range(STANDARD_TECH_COUNT)),
+            )
+            owners = [-1] * len(state.owners)
+            buildings = [Building.EMPTY] * len(state.buildings)
+            planets = [
+                planet
+                for planet, active in enumerate(state.active_planets)
+                if active
+            ]
+            for planet, building in zip(planets, buildings_to_place, strict=False):
+                owners[planet] = 0
+                buildings[planet] = building
+            players = list(state.players)
+            players[0] = replace(
+                players[0],
+                credits=0,
+                ore=0,
+                knowledge=0,
+                qic=0,
+                tracks=(0, 0, 0, 0, 0, 0),
+                tech_tiles=0,
+                bowl_one=12,
+                bowl_two=0,
+                bowl_three=0,
+                **player_changes,
+            )
+            return replace(
+                state,
+                players=tuple(players),
+                owners=tuple(owners),
+                buildings=tuple(int(value) for value in buildings),
+            )
+
+        generic = panel_state(
+            0,
+            (Building.MINE,) * 3
+            + (Building.TRADING_STATION,) * 4
+            + (Building.RESEARCH_LAB,) * 3,
+        )._grant_income().players[0]
+        self.assertEqual((generic.credits, generic.ore, generic.knowledge), (16, 3, 4))
+
+        firaks = panel_state(10)._grant_income().players[0]
+        self.assertEqual(firaks.knowledge, 2)
+        hadsch_hallas = panel_state(6)._grant_income().players[0]
+        self.assertEqual(hadsch_hallas.credits, 3)
+        ambas = panel_state(5, (Building.MINE,) * 2)._grant_income().players[0]
+        self.assertEqual(ambas.ore, 4)
+
+        bescods_trading = panel_state(
+            11,
+            (Building.TRADING_STATION,) * 4,
+        )._grant_income().players[0]
+        self.assertEqual((bescods_trading.credits, bescods_trading.knowledge), (0, 4))
+        bescods_labs = panel_state(
+            11,
+            (Building.RESEARCH_LAB,) * 3,
+        )._grant_income().players[0]
+        self.assertEqual((bescods_labs.credits, bescods_labs.knowledge), (12, 0))
+
+        nevlas = panel_state(
+            12,
+            (Building.RESEARCH_LAB,) * 3,
+        )._grant_income().players[0]
+        self.assertEqual(nevlas.knowledge, 1)
+        self.assertEqual((nevlas.bowl_one, nevlas.bowl_two), (6, 6))
+
+        itars = panel_state(13, knowledge_academies=1)._grant_income().players[0]
+        self.assertEqual(itars.knowledge, 4)
+
+        bal_taks_state = replace(
+            panel_state(9, qic_academies=1),
+            round_number=1,
+            player_to_move=0,
+        )
+        self.assertIn(QIC_ACADEMY_ACTION, bal_taks_state.legal_actions())
+        bal_taks = bal_taks_state.apply(QIC_ACADEMY_ACTION).players[0]
+        self.assertEqual((bal_taks.credits, bal_taks.qic), (4, 0))
+
+    def test_bescods_swap_academy_and_planetary_institute_upgrades(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(
+                2,
+                faction_indices=(11, 0),
+                first_player=0,
+                standard_tech_tiles=tuple(range(STANDARD_TECH_COUNT)),
+            )
+        )
+        planet = state.starting_planets[0][0]
+        owners = list(state.owners)
+        buildings = list(state.buildings)
+        owners[planet] = 0
+        buildings[planet] = Building.TRADING_STATION
+        players = list(state.players)
+        players[0] = replace(players[0], credits=30, ore=15, tech_tiles=0)
+        state = replace(
+            state,
+            player_to_move=0,
+            players=tuple(players),
+            owners=tuple(owners),
+            buildings=tuple(int(value) for value in buildings),
+        )
+
+        legal = state.legal_actions()
+        self.assertIn(state.upgrade_lab_action(planet), legal)
+        self.assertIn(state.upgrade_academy_action(planet), legal)
+        self.assertIn(state.upgrade_qic_academy_action(planet), legal)
+        self.assertNotIn(state.upgrade_pi_action(planet), legal)
+        academy = state.apply(state.upgrade_academy_action(planet))
+        self.assertEqual(academy.buildings[planet], Building.ACADEMY)
+        self.assertEqual(academy.pending_tech_player, 0)
+
+        buildings[planet] = Building.RESEARCH_LAB
+        state = replace(state, buildings=tuple(int(value) for value in buildings))
+        legal = state.legal_actions()
+        self.assertIn(state.upgrade_pi_action(planet), legal)
+        self.assertNotIn(state.upgrade_academy_action(planet), legal)
+        self.assertNotIn(state.upgrade_qic_academy_action(planet), legal)
+        institute = state.apply(state.upgrade_pi_action(planet))
+        self.assertEqual(institute.buildings[planet], Building.PLANETARY_INSTITUTE)
+        self.assertEqual(institute.pending_tech_player, -1)
+
     def test_tech_tile_research_advance_scores_the_round_tile(self) -> None:
         state = replace(
             finish_starting_placement(

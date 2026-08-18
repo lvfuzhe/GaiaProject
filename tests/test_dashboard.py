@@ -8,9 +8,13 @@ from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from gaiazero.dashboard import _interactive_action_record, create_dashboard_server
+from gaiazero.dashboard import (
+    _interactive_action_record,
+    _interactive_action_snapshot,
+    create_dashboard_server,
+)
 from gaiazero.game import GaiaState, MiniGaiaState
-from gaiazero.game.gaia_state import Track
+from gaiazero.game.gaia_state import QIC_ACADEMY_ACTION, Track
 from gaiazero.telemetry import JsonlTelemetry, build_history_index, read_events, read_game_trace
 
 
@@ -63,6 +67,47 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(events[0]["run_id"], "test-run")
         self.assertEqual(len(events[0]["payload"]["state"]["planets"]), 19)
         self.assertEqual(read_events(self.metrics, after=first["sequence"]), [second])
+
+    def test_bal_taks_credit_academy_is_labeled_in_action_history(self) -> None:
+        state = GaiaState.initial(
+            2,
+            faction_indices=(9, 0),
+            first_player=0,
+        )
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            credits=0,
+            qic=0,
+            qic_academies=1,
+        )
+        state = replace(
+            state,
+            round_number=1,
+            player_to_move=0,
+            players=tuple(players),
+        )
+
+        after = state.apply(QIC_ACADEMY_ACTION)
+        record = _interactive_action_record(
+            state,
+            after,
+            QIC_ACADEMY_ACTION,
+            move=1,
+            player=0,
+            role="human",
+        )
+
+        self.assertEqual(record["kind"], "credits_academy_action")
+        self.assertIn("4 credits", record["label"])
+        self.assertEqual(record["components"][0]["label"], "Gain 4 credits")
+        self.assertEqual(record["effects"][0]["gains"], [{"resource": "credits", "amount": 4}])
+        upgrade = _interactive_action_snapshot(
+            state,
+            state.upgrade_qic_academy_action(0),
+        )
+        self.assertEqual(upgrade["kind"], "upgrade_credits_academy")
+        self.assertIn("credit academy", upgrade["label"])
 
     def test_http_api_and_static_dashboard(self) -> None:
         telemetry = JsonlTelemetry(self.metrics, run_id="http-test")

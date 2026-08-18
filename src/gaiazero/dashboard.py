@@ -706,7 +706,14 @@ def _interactive_action_snapshot(state: GaiaState, action: int) -> dict[str, Any
     elif UPGRADE_ACADEMY_OFFSET <= action < UPGRADE_QIC_ACADEMY_OFFSET:
         kind, target = "upgrade_academy", action - UPGRADE_ACADEMY_OFFSET
     elif UPGRADE_QIC_ACADEMY_OFFSET <= action < RESEARCH_OFFSET:
-        kind, target = "upgrade_qic_academy", action - UPGRADE_QIC_ACADEMY_OFFSET
+        kind = (
+            "upgrade_credits_academy"
+            if FACTIONS[
+                state.players[state.player_to_move].faction
+            ].qic_academy_credit_action
+            else "upgrade_qic_academy"
+        )
+        target = action - UPGRADE_QIC_ACADEMY_OFFSET
     elif RESEARCH_OFFSET <= action < POWER_OFFSET:
         kind = "research"
         track = action - RESEARCH_OFFSET
@@ -724,7 +731,13 @@ def _interactive_action_snapshot(state: GaiaState, action: int) -> dict[str, Any
         kind = "federation"
         federation_tile = action - FEDERATION_OFFSET
     elif action == QIC_ACADEMY_ACTION:
-        kind = "qic_academy_action"
+        kind = (
+            "credits_academy_action"
+            if FACTIONS[
+                state.players[state.player_to_move].faction
+            ].qic_academy_credit_action
+            else "qic_academy_action"
+        )
     elif action == STANDARD_TECH_ACTION:
         kind = "standard_tech_action"
     elif action == QIC_TECH_ACTION:
@@ -937,12 +950,18 @@ def _interactive_action_components(
                 relation="gained",
             )
         )
-    elif action["kind"] == "qic_academy_action":
+    elif action["kind"] in ("qic_academy_action", "credits_academy_action"):
+        faction = FACTIONS[state.players[player].faction]
+        label = (
+            f"Gain {faction.qic_academy_credit_action} credits"
+            if faction.qic_academy_credit_action
+            else "Q.I.C. academy: gain 1 Q.I.C."
+        )
         components.append(
             _component_ref(
                 "faction_action",
                 player,
-                "Q.I.C. academy: gain 1 Q.I.C.",
+                label,
                 f"FAC-{player + 1:02d}",
                 relation="used",
             )
@@ -1039,6 +1058,7 @@ def _interactive_action_components(
             "upgrade_pi",
             "upgrade_academy",
             "upgrade_qic_academy",
+            "upgrade_credits_academy",
         ):
             scored_kinds.add("big")
         elif action["kind"] in ("research", "technology"):
@@ -1092,7 +1112,11 @@ def _interactive_action_costs(
         costs.update(credits=5, ore=3)
     elif kind == "upgrade_pi":
         costs.update(credits=6, ore=4)
-    elif kind in ("upgrade_academy", "upgrade_qic_academy"):
+    elif kind in (
+        "upgrade_academy",
+        "upgrade_qic_academy",
+        "upgrade_credits_academy",
+    ):
         costs.update(credits=6, ore=6)
     elif kind == "qic_tech_action":
         costs["qic"] = 4

@@ -72,7 +72,15 @@ class FactionSpec:
     ability: str
     starting_qic: int = 1
     starting_structures: int = 2
-    mine_income_zero_slot: int = 4
+    mine_income_zero_slot: int = 3
+    trading_station_credit_income: tuple[int, ...] = (3, 4, 4, 5)
+    trading_station_knowledge_income: int = 0
+    research_lab_credit_income: tuple[int, ...] = ()
+    research_lab_knowledge_income: int = 1
+    research_lab_charge_income: int = 0
+    knowledge_academy_knowledge_income: int = 2
+    qic_academy_credit_action: int = 0
+    swapped_pi_academy: bool = False
     starts_with_pi: bool = False
     places_last: bool = False
     federation_threshold: int = 7
@@ -92,18 +100,62 @@ class FactionSpec:
 FACTIONS: tuple[FactionSpec, ...] = (
     FactionSpec("Terrans", Terrain.TERRA, Track.GAIA_PROJECT, (4, 4, 0), 0, "Gaia power returns to bowl II", gaia_to_bowl_two=True),
     FactionSpec("Lantids", Terrain.TERRA, Track.SCIENCE, (4, 0, 0), 0, "May coexist on colonized planets", starting_credits=13),
-    FactionSpec("Xenos", Terrain.DESERT, Track.ARTIFICIAL_INTELLIGENCE, (2, 4, 0), 1, "Starts with a third mine; its PI lowers federation power to 6", starting_structures=3, mine_income_zero_slot=3),
+    FactionSpec("Xenos", Terrain.DESERT, Track.ARTIFICIAL_INTELLIGENCE, (2, 4, 0), 1, "Starts with a third mine; its PI lowers federation power to 6", starting_structures=3),
     FactionSpec("Gleens", Terrain.DESERT, Track.NAVIGATION, (2, 4, 0), 1, "Ore replaces Q.I.C. for Gaia colonization", starting_qic=0),
     FactionSpec("Taklons", Terrain.SWAMP, Track.ECONOMY, (2, 4, 0), 2, "Brainstone strengthens the power cycle", passive_power_token=True),
     FactionSpec("Ambas", Terrain.SWAMP, Track.NAVIGATION, (4, 4, 0), 2, "Planetary institute can swap with a mine", income_ore=1),
     FactionSpec("Hadsch Hallas", Terrain.OXIDE, Track.ECONOMY, (2, 4, 0), 3, "Credits unlock expanded free actions", income_credits=3),
     FactionSpec("Ivits", Terrain.OXIDE, Track.NAVIGATION, (4, 4, 0), 3, "Places its starting planetary institute after all starting mines", starting_structures=1, starts_with_pi=True, places_last=True, income_qic=1),
     FactionSpec("Geodens", Terrain.VOLCANIC, Track.TERRAFORMING, (2, 4, 0), 4, "Knowledge for newly colonized planet types", knowledge_for_new_type=True),
-    FactionSpec("Bal T'aks", Terrain.VOLCANIC, Track.GAIA_PROJECT, (2, 2, 0), 4, "Gaiaformers can be converted to Q.I.C.", starting_qic=0),
+    FactionSpec(
+        "Bal T'aks",
+        Terrain.VOLCANIC,
+        Track.GAIA_PROJECT,
+        (2, 2, 0),
+        4,
+        "Gaiaformers can be converted to Q.I.C.",
+        starting_qic=0,
+        qic_academy_credit_action=4,
+    ),
     FactionSpec("Firaks", Terrain.TITANIUM, Track.SCIENCE, (2, 4, 0), 5, "May downgrade a research lab to research", starting_ore=3, starting_knowledge=2, income_knowledge=1),
-    FactionSpec("Bescods", Terrain.TITANIUM, Track.ECONOMY, (2, 4, 0), 5, "Lowest research areas advance together", starting_knowledge=1, income_knowledge=-1),
-    FactionSpec("Nevlas", Terrain.ICE, Track.SCIENCE, (2, 4, 0), 6, "Bowl III power counts double for free actions", starting_knowledge=2),
-    FactionSpec("Itars", Terrain.ICE, Track.GAIA_PROJECT, (4, 4, 0), 6, "Gaia power can buy technology", starting_qic=1, starting_ore=5, income_power_tokens=1),
+    FactionSpec(
+        "Bescods",
+        Terrain.TITANIUM,
+        Track.ECONOMY,
+        (2, 4, 0),
+        5,
+        "Lowest research areas advance together",
+        starting_knowledge=1,
+        income_knowledge=-1,
+        trading_station_credit_income=(0, 0, 0, 0),
+        trading_station_knowledge_income=1,
+        research_lab_credit_income=(3, 4, 5),
+        research_lab_knowledge_income=0,
+        swapped_pi_academy=True,
+    ),
+    FactionSpec(
+        "Nevlas",
+        Terrain.ICE,
+        Track.SCIENCE,
+        (2, 4, 0),
+        6,
+        "Bowl III power counts double for free actions",
+        starting_knowledge=2,
+        research_lab_knowledge_income=0,
+        research_lab_charge_income=2,
+    ),
+    FactionSpec(
+        "Itars",
+        Terrain.ICE,
+        Track.GAIA_PROJECT,
+        (4, 4, 0),
+        6,
+        "Gaia power can buy technology",
+        starting_qic=1,
+        starting_ore=5,
+        income_power_tokens=1,
+        knowledge_academy_knowledge_income=3,
+    ),
 )
 
 FACTION_BOARDS: tuple[tuple[int, int], ...] = (
@@ -603,6 +655,7 @@ class GaiaState:
             return ()
         player = self.player_to_move
         info = self.players[player]
+        faction = FACTIONS[info.faction]
         if self.is_starting_placement:
             home = FACTIONS[info.faction].home
             return tuple(
@@ -704,10 +757,32 @@ class GaiaState:
                     and has_tech_choice
                 ):
                     actions.append(self.upgrade_lab_action(planet))
-                if self._building_count(player, Building.PLANETARY_INSTITUTE) < 1 and info.credits >= 6 and info.ore >= 4:
+                if faction.swapped_pi_academy:
+                    if (
+                        self._building_count(player, Building.ACADEMY) < 2
+                        and info.credits >= 6
+                        and info.ore >= 6
+                        and has_tech_choice
+                    ):
+                        if info.knowledge_academies < 1:
+                            actions.append(self.upgrade_academy_action(planet))
+                        if info.qic_academies < 1:
+                            actions.append(self.upgrade_qic_academy_action(planet))
+                elif (
+                    self._building_count(player, Building.PLANETARY_INSTITUTE) < 1
+                    and info.credits >= 6
+                    and info.ore >= 4
+                ):
                     actions.append(self.upgrade_pi_action(planet))
             elif level == Building.RESEARCH_LAB:
-                if (
+                if faction.swapped_pi_academy:
+                    if (
+                        self._building_count(player, Building.PLANETARY_INSTITUTE) < 1
+                        and info.credits >= 6
+                        and info.ore >= 4
+                    ):
+                        actions.append(self.upgrade_pi_action(planet))
+                elif (
                     self._building_count(player, Building.ACADEMY) < 2
                     and info.credits >= 6
                     and info.ore >= 6
@@ -1219,8 +1294,15 @@ class GaiaState:
         player = self.player_to_move
         info = self.players[player]
         if not info.qic_academies or info.used_qic_academy_action:
-            raise ValueError("Q.I.C. academy action is unavailable")
-        info = self._gain_qic(info, 1)
+            raise ValueError("academy action is unavailable")
+        faction = FACTIONS[info.faction]
+        if faction.qic_academy_credit_action:
+            info = replace(
+                info,
+                credits=min(30, info.credits + faction.qic_academy_credit_action),
+            )
+        else:
+            info = self._gain_qic(info, 1)
         info = replace(info, used_qic_academy_action=True)
         return replace(self, players=self._replace_player(player, info))
 
@@ -1444,11 +1526,11 @@ class GaiaState:
                 booster_qic,
                 booster_charge,
             ) = self._booster_income(booster)
-            trading_credits = (0, 3, 7, 11, 16)[trading]
-            lab_credits = (0, 3, 7, 12)[labs]
-            is_bescods = faction.name == "Bescods"
+            trading_credits = sum(faction.trading_station_credit_income[:trading])
+            lab_credits = sum(faction.research_lab_credit_income[:labs])
             credits = min(30, info.credits + (
-                (lab_credits if is_bescods else trading_credits)
+                trading_credits
+                + lab_credits
                 + economy_credits
                 + booster_credits
                 + faction.income_credits
@@ -1458,9 +1540,13 @@ class GaiaState:
                 15,
                 info.ore + mine_ore + economy_ore + booster_ore + faction.income_ore,
             )
-            board_knowledge = trading if is_bescods else labs
-            academy_knowledge = info.knowledge_academies * (
-                3 if faction.name == "Itars" else 2
+            board_knowledge = (
+                trading * faction.trading_station_knowledge_income
+                + labs * faction.research_lab_knowledge_income
+            )
+            academy_knowledge = (
+                info.knowledge_academies
+                * faction.knowledge_academy_knowledge_income
             )
             knowledge = min(
                 15,
@@ -1493,7 +1579,12 @@ class GaiaState:
                     power_tokens += institutes
             if power_tokens:
                 info = replace(info, bowl_one=info.bowl_one + power_tokens)
-            charge = institutes * 4 + economy_charge + booster_charge
+            charge = (
+                institutes * 4
+                + labs * faction.research_lab_charge_income
+                + economy_charge
+                + booster_charge
+            )
             if self._has_active_standard_tech(info, 5):
                 info = replace(info, ore=min(15, info.ore + 1))
                 charge += 1
@@ -2240,12 +2331,19 @@ class GaiaState:
             return f"build mine at planet {action - BUILD_OFFSET}"
         if GAIA_OFFSET <= action < UPGRADE_TRADING_OFFSET:
             return f"start Gaia Project at planet {action - GAIA_OFFSET}"
+        if UPGRADE_QIC_ACADEMY_OFFSET <= action < RESEARCH_OFFSET:
+            faction = FACTIONS[self.players[self.player_to_move].faction]
+            target = (
+                "credit academy"
+                if faction.qic_academy_credit_action
+                else "Q.I.C. academy"
+            )
+            return f"upgrade planet {action - UPGRADE_QIC_ACADEMY_OFFSET} to {target}"
         ranges = (
             (UPGRADE_TRADING_OFFSET, UPGRADE_LAB_OFFSET, "trading station"),
             (UPGRADE_LAB_OFFSET, UPGRADE_PI_OFFSET, "research lab"),
             (UPGRADE_PI_OFFSET, UPGRADE_ACADEMY_OFFSET, "planetary institute"),
             (UPGRADE_ACADEMY_OFFSET, UPGRADE_QIC_ACADEMY_OFFSET, "knowledge academy"),
-            (UPGRADE_QIC_ACADEMY_OFFSET, RESEARCH_OFFSET, "Q.I.C. academy"),
         )
         for start, end, target in ranges:
             if start <= action < end:
@@ -2264,6 +2362,9 @@ class GaiaState:
             return f"take advanced tech tile {tile} from {track.name.lower()}"
         if FEDERATION_OFFSET <= action < PASS_BOOSTER_OFFSET:
             if action == QIC_ACADEMY_ACTION:
+                faction = FACTIONS[self.players[self.player_to_move].faction]
+                if faction.qic_academy_credit_action:
+                    return f"use academy action: gain {faction.qic_academy_credit_action} credits"
                 return "use Q.I.C. academy action"
             if action == STANDARD_TECH_ACTION:
                 return "use standard tech tile 8 action"
