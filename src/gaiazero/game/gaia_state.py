@@ -103,9 +103,9 @@ FACTIONS: tuple[FactionSpec, ...] = (
     FactionSpec("Xenos", Terrain.DESERT, Track.ARTIFICIAL_INTELLIGENCE, (2, 4, 0), 1, "Starts with a third mine; its PI lowers federation power to 6", starting_structures=3),
     FactionSpec("Gleens", Terrain.DESERT, Track.NAVIGATION, (2, 4, 0), 1, "Ore replaces Q.I.C. for Gaia colonization", starting_qic=0),
     FactionSpec("Taklons", Terrain.SWAMP, None, (2, 4, 0), 2, "Brainstone strengthens the power cycle", passive_power_token=True),
-    FactionSpec("Ambas", Terrain.SWAMP, Track.NAVIGATION, (4, 4, 0), 2, "Planetary institute can swap with a mine", income_ore=1),
+    FactionSpec("Ambas", Terrain.SWAMP, Track.NAVIGATION, (2, 4, 0), 2, "Planetary institute can swap with a mine", income_ore=1),
     FactionSpec("Hadsch Hallas", Terrain.OXIDE, Track.ECONOMY, (2, 4, 0), 3, "Credits unlock expanded free actions", income_credits=3),
-    FactionSpec("Ivits", Terrain.OXIDE, None, (4, 4, 0), 3, "Places its starting planetary institute after all starting mines", starting_structures=1, starts_with_pi=True, places_last=True, income_qic=1),
+    FactionSpec("Ivits", Terrain.OXIDE, None, (2, 4, 0), 3, "Places its starting planetary institute after all starting mines", starting_structures=1, starts_with_pi=True, places_last=True, income_qic=1),
     FactionSpec("Geodens", Terrain.VOLCANIC, Track.TERRAFORMING, (2, 4, 0), 4, "Knowledge for newly colonized planet types", knowledge_for_new_type=True),
     FactionSpec(
         "Bal T'aks",

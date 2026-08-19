@@ -99,6 +99,27 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(next(f["starting_qic"] for f in catalog if f["name"] == "Itars"), 1)
         self.assertEqual(next(f["starting_qic"] for f in catalog if f["name"] == "Bal T'aks"), 0)
 
+    def test_ambas_and_ivits_use_default_starting_power(self) -> None:
+        state = GaiaState.initial(
+            2,
+            faction_indices=(5, 7),
+            first_player=0,
+        )
+        self.assertEqual(
+            (state.players[0].bowl_one, state.players[0].bowl_two, state.players[0].bowl_three),
+            (2, 4, 0),
+        )
+        self.assertEqual(
+            (state.players[1].bowl_one, state.players[1].bowl_two, state.players[1].bowl_three),
+            (2, 4, 0),
+        )
+        catalog = {
+            faction["name"]: faction
+            for faction in state.snapshot()["setup"]["faction_catalog"]
+        }
+        self.assertEqual(catalog["Ambas"]["starting_power"], [2, 4, 0])
+        self.assertEqual(catalog["Ivits"]["starting_power"], [2, 4, 0])
+
     def test_initial_research_levels_grant_immediate_bga_rewards(self) -> None:
         state = GaiaState.initial(
             4,
