@@ -825,7 +825,11 @@ function renderSetupEditorSeats(preferredFirstPlayer = null) {
   byId("setup-editor-factions").innerHTML = state.manualSetup.factions.map((selected, player) => `<label class="setup-editor-faction">
     <span>P${player}</span>
     <select data-player="${player}" aria-label="P${player} 种族">
-      ${BASE_FACTIONS.map((faction) => `<option value="${faction.id}" ${faction.id === selected ? "selected" : ""}>版图 ${faction.board}${faction.side} · ${escapeHtml(faction.name)}</option>`).join("")}
+      ${BASE_FACTIONS
+        .slice()
+        .sort((left, right) => left.board - right.board || left.side.localeCompare(right.side))
+        .map((faction) => `<option value="${faction.id}" ${faction.id === selected ? "selected" : ""}>版图 ${faction.board}${faction.side} · ${escapeHtml(faction.name)}</option>`)
+        .join("")}
     </select>
   </label>`).join("");
   const firstSelect = byId("setup-editor-first-player");
