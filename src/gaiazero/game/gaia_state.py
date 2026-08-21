@@ -86,6 +86,7 @@ class FactionSpec:
     federation_threshold: int = 7
     gaia_to_bowl_two: bool = False
     passive_power_token: bool = False
+    has_brainstone: bool = False
     knowledge_for_new_type: bool = False
     starting_credits: int = 15
     starting_ore: int = 4
@@ -102,7 +103,16 @@ FACTIONS: tuple[FactionSpec, ...] = (
     FactionSpec("Lantids", Terrain.TERRA, None, (4, 0, 0), 0, "May coexist on colonized planets", starting_credits=13),
     FactionSpec("Xenos", Terrain.DESERT, Track.ARTIFICIAL_INTELLIGENCE, (2, 4, 0), 1, "Starts with a third mine; its PI lowers federation power to 6", starting_structures=3),
     FactionSpec("Gleens", Terrain.DESERT, Track.NAVIGATION, (2, 4, 0), 1, "Ore replaces Q.I.C. for Gaia colonization", starting_qic=0),
-    FactionSpec("Taklons", Terrain.SWAMP, None, (2, 4, 0), 2, "Brainstone strengthens the power cycle", passive_power_token=True),
+    FactionSpec(
+        "Taklons",
+        Terrain.SWAMP,
+        None,
+        (2, 4, 0),
+        2,
+        "Brainstone strengthens the power cycle",
+        passive_power_token=True,
+        has_brainstone=True,
+    ),
     FactionSpec("Ambas", Terrain.SWAMP, Track.NAVIGATION, (2, 4, 0), 2, "Planetary institute can swap with a mine", income_ore=1),
     FactionSpec("Hadsch Hallas", Terrain.OXIDE, Track.ECONOMY, (2, 4, 0), 3, "Credits unlock expanded free actions", income_credits=3),
     FactionSpec("Ivits", Terrain.OXIDE, None, (2, 4, 0), 3, "Places its starting planetary institute after all starting mines", starting_structures=1, starts_with_pi=True, places_last=True, income_qic=1),
@@ -333,7 +343,8 @@ BOOSTER_TERRAFORM_ACTION = QIC_PLANET_TYPES_ACTION + 1
 BOOSTER_RANGE_ACTION = BOOSTER_TERRAFORM_ACTION + 1
 PASS_BOOSTER_OFFSET = BOOSTER_RANGE_ACTION + 1
 PASS_FINAL_ACTION = PASS_BOOSTER_OFFSET + BOOSTER_COUNT
-ACTION_SIZE = PASS_FINAL_ACTION + 1
+BRAINSTONE_ACTION = PASS_FINAL_ACTION + 1
+ACTION_SIZE = BRAINSTONE_ACTION + 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -347,6 +358,8 @@ class PlayerState:
     bowl_one: int = 2
     bowl_two: int = 4
     bowl_three: int = 0
+    # 0: not present, 1/2/3: power bowl, 4: Gaia area.
+    brainstone_bowl: int = 0
     gaia_power: int = 0
     gaiaformers: int = 0
     tracks: tuple[int, ...] = (0, 0, 0, 0, 0, 0)
@@ -441,6 +454,7 @@ class GaiaState:
     pending_power_terraform_player: int = -1
     pending_booster_terraform_player: int = -1
     pending_booster_range_player: int = -1
+    brainstone_selected: bool = False
 
     @classmethod
     def initial(
@@ -560,9 +574,10 @@ class GaiaState:
             ore=faction.starting_ore,
             knowledge=faction.starting_knowledge,
             qic=faction.starting_qic,
-            bowl_one=faction.power[0],
+            bowl_one=faction.power[0] + int(faction.has_brainstone),
             bowl_two=faction.power[1],
             bowl_three=faction.power[2],
+            brainstone_bowl=1 if faction.has_brainstone else 0,
             tracks=(0,) * TRACK_COUNT,
             gaiaformers=0,
             colonized_types=0,
@@ -719,6 +734,26 @@ class GaiaState:
         if self.pending_tech_player >= 0:
             return self._legal_technology_actions(player)
 
+        if self.brainstone_selected:
+            actions: list[int] = []
+            if self._can_spend_selected_brainstone(player):
+                for power_action in PowerAction:
+                    cost = self._power_action_cost(player, power_action)
+                    has_target = (
+                        power_action != PowerAction.TERRAFORM_TWO
+                        or any(
+                            self._can_build_mine(player, planet, free_steps=2)
+                            for planet in range(N)
+                        )
+                    )
+                    if (
+                        self._can_spend_power(info, cost, use_brainstone=True)
+                        and not self.used_power_actions & (1 << power_action)
+                        and has_target
+                    ):
+                        actions.append(self.power_action(power_action))
+            return tuple(actions)
+
         actions: list[int] = []
         has_tech_choice = self._has_tech_choice(player)
         for planet in range(N):
@@ -808,7 +843,7 @@ class GaiaState:
                 )
             )
             if (
-                info.bowl_three >= cost
+                self._can_spend_power(info, cost)
                 and not self.used_power_actions & (1 << power_action)
                 and has_target
             ):
@@ -882,6 +917,8 @@ class GaiaState:
                 for booster, owner in enumerate(self.booster_owner)
                 if owner == -1
             )
+        if self._brainstone_action_available(player):
+            actions.append(BRAINSTONE_ACTION)
         return tuple(actions)
 
     def legal_action_mask(self) -> BoolArray:
@@ -895,6 +932,8 @@ class GaiaState:
             raise ValueError("cannot act in a terminal state")
         if action not in self.legal_actions():
             raise ValueError(f"illegal action {action}: {self.describe_action(action)}")
+        if action == BRAINSTONE_ACTION:
+            return replace(self, brainstone_selected=True)
         if self.pending_advanced_tech >= 0:
             return self._apply_advanced_tech_cover(action - TECH_OFFSET)._advance_turn()
         if self.pending_research_player >= 0:
@@ -1269,7 +1308,11 @@ class GaiaState:
         player = self.player_to_move
         info = self.players[player]
         cost = self._power_action_cost(player, power_action)
-        info = self._spend_power(info, cost)
+        info = self._spend_power(
+            info,
+            cost,
+            use_brainstone=self.brainstone_selected,
+        )
         pending_power_terraform_player = -1
         if power_action == PowerAction.KNOWLEDGE_THREE:
             info = replace(info, knowledge=min(15, info.knowledge + 3))
@@ -1290,6 +1333,7 @@ class GaiaState:
             players=self._replace_player(player, info),
             used_power_actions=self.used_power_actions | (1 << power_action),
             pending_power_terraform_player=pending_power_terraform_player,
+            brainstone_selected=False,
         )
 
     def _apply_qic_academy_action(self) -> GaiaState:
@@ -1505,7 +1549,11 @@ class GaiaState:
         for offset in range(1, self.num_players + 1):
             candidate = (self.player_to_move + offset) % self.num_players
             if not self.players[candidate].passed:
-                return replace(self, player_to_move=candidate)
+                return replace(
+                    self,
+                    player_to_move=candidate,
+                    brainstone_selected=False,
+                )
         raise RuntimeError("no active player after turn")
 
     def _grant_income(self) -> GaiaState:
@@ -1618,6 +1666,11 @@ class GaiaState:
                 info = replace(info, bowl_two=info.bowl_two + info.gaia_power, gaia_power=0)
             else:
                 info = replace(info, bowl_one=info.bowl_one + info.gaia_power, gaia_power=0)
+            if info.brainstone_bowl == 4:
+                info = replace(
+                    info,
+                    brainstone_bowl=2 if faction.gaia_to_bowl_two else 1,
+                )
             players.append(info)
         terrains = list(self.terrains)
         for planet, owner in enumerate(self.gaiaformer_owner):
@@ -1793,45 +1846,143 @@ class GaiaState:
             return (cost + 1) // 2
         return cost
 
+    def _brainstone_action_available(self, player: int) -> bool:
+        info = self.players[player]
+        return (
+            FACTIONS[info.faction].has_brainstone
+            and info.brainstone_bowl == 3
+            and any(
+                self._can_spend_power(
+                    info,
+                    self._power_action_cost(player, power_action),
+                    use_brainstone=True,
+                )
+                and not self.used_power_actions & (1 << power_action)
+                and (
+                    power_action != PowerAction.TERRAFORM_TWO
+                    or any(
+                        self._can_build_mine(player, planet, free_steps=2)
+                        for planet in range(N)
+                    )
+                )
+                for power_action in PowerAction
+            )
+        )
+
+    def _can_spend_selected_brainstone(self, player: int) -> bool:
+        info = self.players[player]
+        return FACTIONS[info.faction].has_brainstone and info.brainstone_bowl == 3
+
+    @staticmethod
+    def _can_spend_power(
+        info: PlayerState,
+        amount: int,
+        *,
+        use_brainstone: bool = False,
+    ) -> bool:
+        if not use_brainstone:
+            return info.bowl_three >= amount
+        return (
+            amount >= 3
+            and info.brainstone_bowl == 3
+            and info.bowl_three - 1 + 3 >= amount
+        )
+
     @staticmethod
     def _charge_power(info: PlayerState, amount: int) -> tuple[PlayerState, int]:
         one, two, three = info.bowl_one, info.bowl_two, info.bowl_three
+        brainstone = info.brainstone_bowl
         charged = 0
         for _ in range(amount):
             if one > 0:
+                moving_brainstone = brainstone == 1 and one == 1
                 one -= 1
                 two += 1
+                if moving_brainstone:
+                    brainstone = 2
             elif two > 0:
+                moving_brainstone = brainstone == 2 and two == 1
                 two -= 1
                 three += 1
+                if moving_brainstone:
+                    brainstone = 3
             else:
                 break
             charged += 1
-        return replace(info, bowl_one=one, bowl_two=two, bowl_three=three), charged
+        return replace(
+            info,
+            bowl_one=one,
+            bowl_two=two,
+            bowl_three=three,
+            brainstone_bowl=brainstone,
+        ), charged
 
     @staticmethod
-    def _spend_power(info: PlayerState, amount: int) -> PlayerState:
-        if info.bowl_three < amount:
+    def _spend_power(
+        info: PlayerState,
+        amount: int,
+        *,
+        use_brainstone: bool = False,
+    ) -> PlayerState:
+        if not GaiaState._can_spend_power(
+            info,
+            amount,
+            use_brainstone=use_brainstone,
+        ):
             raise ValueError("insufficient charged power")
-        return replace(info, bowl_one=info.bowl_one + amount, bowl_three=info.bowl_three - amount)
+        if use_brainstone:
+            ordinary = max(0, amount - 3)
+            physical_tokens = ordinary + 1
+            return replace(
+                info,
+                bowl_one=info.bowl_one + physical_tokens,
+                bowl_three=info.bowl_three - physical_tokens,
+                brainstone_bowl=1,
+            )
+        spends_brainstone = (
+            info.brainstone_bowl == 3
+            and info.bowl_three - 1 < amount
+        )
+        return replace(
+            info,
+            bowl_one=info.bowl_one + amount,
+            bowl_three=info.bowl_three - amount,
+            brainstone_bowl=1 if spends_brainstone else info.brainstone_bowl,
+        )
 
     @staticmethod
     def _discard_power(info: PlayerState, amount: int) -> PlayerState:
         if info.bowl_one + info.bowl_two + info.bowl_three < amount:
             raise ValueError("insufficient power tokens")
-        one, two, three = info.bowl_one, info.bowl_two, info.bowl_three
-        take = min(one, amount)
-        one -= take
-        amount -= take
-        take = min(two, amount)
-        two -= take
-        amount -= take
-        three -= amount
-        return replace(info, bowl_one=one, bowl_two=two, bowl_three=three)
+        brainstone = info.brainstone_bowl
+        bowls = [info.bowl_one, info.bowl_two, info.bowl_three]
+        for bowl_index in range(3):
+            ordinary = bowls[bowl_index] - int(brainstone == bowl_index + 1)
+            take = min(ordinary, amount)
+            bowls[bowl_index] -= take
+            amount -= take
+            if amount == 0:
+                break
+        if amount and 1 <= brainstone <= 3:
+            bowls[brainstone - 1] -= 1
+            amount -= 1
+            brainstone = 0
+        if amount:
+            raise ValueError("insufficient power tokens")
+        return replace(
+            info,
+            bowl_one=bowls[0],
+            bowl_two=bowls[1],
+            bowl_three=bowls[2],
+            brainstone_bowl=brainstone,
+        )
 
     @staticmethod
     def _move_power_to_gaia(info: PlayerState, amount: int) -> PlayerState:
+        brainstone_bowl = info.brainstone_bowl
         moved = GaiaState._discard_power(info, amount)
+        if brainstone_bowl and moved.brainstone_bowl == 0:
+            moved = replace(moved, brainstone_bowl=4)
         return replace(moved, gaia_power=info.gaia_power + amount)
 
     def _trigger_passive_charge(self, acting: int, planet: int, amount: int) -> GaiaState:
@@ -2235,6 +2386,7 @@ class GaiaState:
             float(self.is_starting_placement),
             float(self.is_booster_selection),
             self.booster_selection_step / max(1, self.num_players),
+            float(self.brainstone_selected),
         ]
         values.extend(float(self.player_to_move == player) for player in range(self.num_players))
         values.extend(float(self.first_player == player) for player in range(self.num_players))
@@ -2302,6 +2454,10 @@ class GaiaState:
                   for tile in range(ADVANCED_TECH_SPECIAL_COUNT)),
                 float(info.passed),
             ))
+            values.extend(
+                float(info.brainstone_bowl == bowl)
+                for bowl in range(5)
+            )
             values.extend(level / 5.0 for level in info.tracks)
             values.extend(float(info.faction == faction) for faction in range(len(FACTIONS)))
             values.extend(float(booster == candidate) for candidate in range(BOOSTER_COUNT))
@@ -2402,6 +2558,8 @@ class GaiaState:
             return f"pass and take booster {action - PASS_BOOSTER_OFFSET}"
         if action == PASS_FINAL_ACTION:
             return "pass"
+        if action == BRAINSTONE_ACTION:
+            return "select Brainstone as 3 power"
         return f"unknown action {action}"
 
     def render(self) -> str:
@@ -2429,7 +2587,8 @@ class GaiaState:
             lines.append(
                 f"P{player} {FACTIONS[info.faction].name} C{info.credits} O{info.ore} K{info.knowledge} "
                 f"Q{info.qic} VP{info.vp} power={info.bowl_one}/{info.bowl_two}/{info.bowl_three} "
-                f"tracks={info.tracks} fed={info.federation_tokens}"
+                f"brainstone={info.brainstone_bowl or '-'} tracks={info.tracks} "
+                f"fed={info.federation_tokens}"
             )
         if self.is_terminal:
             lines.append(f"Final scores: {self.final_scores()}")
@@ -2442,7 +2601,7 @@ class GaiaState:
                 self.round_scoring_tiles[self.round_number - 1]
             ].key
         return {
-            "ruleset": "standard-v9",
+            "ruleset": "standard-v10",
             "round": max(0, min(self.round_number, MAX_ROUNDS)),
             "max_rounds": MAX_ROUNDS,
             "phase": (
@@ -2488,6 +2647,10 @@ class GaiaState:
                     "vp": info.vp,
                     "power": [info.bowl_one, info.bowl_two, info.bowl_three],
                     "gaia_power": info.gaia_power,
+                    "brainstone_bowl": info.brainstone_bowl,
+                    "brainstone_selected": (
+                        player == self.player_to_move and self.brainstone_selected
+                    ),
                     "round_income": self._income_preview(player),
                     "gaiaformers": info.gaiaformers,
                     "gaiaformers_on_board": sum(
@@ -2601,6 +2764,9 @@ class GaiaState:
                         "starting_structures": FACTIONS[info.faction].starting_structures,
                         "starts_with_pi": FACTIONS[info.faction].starts_with_pi,
                         "places_last": FACTIONS[info.faction].places_last,
+                        "starting_brainstone_bowl": (
+                            1 if FACTIONS[info.faction].has_brainstone else 0
+                        ),
                         "starting_planets": list(self.starting_planets[player]),
                     }
                     for player, info in enumerate(self.players)
@@ -2687,6 +2853,7 @@ class GaiaState:
             ),
             "ability": faction.ability,
             "starting_power": list(faction.power),
+            "starting_brainstone_bowl": 1 if faction.has_brainstone else 0,
             "starting_credits": info.credits,
             "starting_ore": info.ore,
             "starting_knowledge": info.knowledge,

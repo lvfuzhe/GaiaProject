@@ -14,7 +14,12 @@ from gaiazero.dashboard import (
     create_dashboard_server,
 )
 from gaiazero.game import GaiaState, MiniGaiaState
-from gaiazero.game.gaia_state import QIC_ACADEMY_ACTION, Track
+from gaiazero.game.gaia_state import (
+    BRAINSTONE_ACTION,
+    QIC_ACADEMY_ACTION,
+    PowerAction,
+    Track,
+)
 from gaiazero.telemetry import JsonlTelemetry, build_history_index, read_events, read_game_trace
 
 
@@ -629,6 +634,71 @@ class DashboardTests(unittest.TestCase):
         self.assertTrue(any(
             change["kind"] == "tech" and change["id"] == tile
             for change in entry["effects"][0]["changes"]
+        ))
+
+    def test_interactive_action_ledger_tracks_brainstone_selection_and_spending(self) -> None:
+        state = GaiaState.initial(
+            2,
+            seed=7,
+            faction_indices=(4, 0),
+            first_player=0,
+        )
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            bowl_one=0,
+            bowl_two=0,
+            bowl_three=2,
+            brainstone_bowl=3,
+            ore=0,
+        )
+        state = replace(
+            state,
+            players=tuple(players),
+            round_number=1,
+            player_to_move=0,
+        )
+
+        selected = state.apply(BRAINSTONE_ACTION)
+        selection_entry = _interactive_action_record(
+            state,
+            selected,
+            BRAINSTONE_ACTION,
+            move=1,
+            player=0,
+            role="human",
+        )
+        self.assertEqual(selection_entry["kind"], "brainstone")
+        self.assertTrue(any(
+            component["code"] == "TAK-BRAINSTONE"
+            and component["relation"] == "selected"
+            for component in selection_entry["components"]
+        ))
+        self.assertTrue(any(
+            change["kind"] == "brainstone_selection" and change["after"]
+            for change in selection_entry["effects"][0]["changes"]
+        ))
+
+        action = selected.power_action(PowerAction.ORE_TWO)
+        after = selected.apply(action)
+        spending_entry = _interactive_action_record(
+            selected,
+            after,
+            action,
+            move=2,
+            player=0,
+            role="human",
+        )
+        self.assertTrue(any(
+            component["code"] == "TAK-BRAINSTONE"
+            and component["relation"] == "spent"
+            for component in spending_entry["components"]
+        ))
+        self.assertTrue(any(
+            change["kind"] == "brainstone"
+            and change["before"] == 3
+            and change["after"] == 1
+            for change in spending_entry["effects"][0]["changes"]
         ))
 
     def test_interactive_game_selects_starting_boosters_before_round_one(self) -> None:

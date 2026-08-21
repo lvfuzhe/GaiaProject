@@ -15,6 +15,7 @@ import numpy as np
 from gaiazero.game import GaiaHeuristicEvaluator, GaiaState
 from gaiazero.game.gaia_state import (
     ADVANCED_TECH_ACTION_OFFSET,
+    BRAINSTONE_ACTION,
     BOOSTER_LABELS,
     BOOSTER_RANGE_ACTION,
     BOOSTER_TERRAFORM_ACTION,
@@ -692,7 +693,9 @@ def _interactive_action_snapshot(state: GaiaState, action: int) -> dict[str, Any
     federation_tile: int | None = None
     power_action: int | None = None
     advanced_action_tile: int | None = None
-    if BUILD_OFFSET <= action < GAIA_OFFSET:
+    if action == BRAINSTONE_ACTION:
+        kind = "brainstone"
+    elif BUILD_OFFSET <= action < GAIA_OFFSET:
         kind = "starting_placement" if state.is_starting_placement else "build"
         target = action - BUILD_OFFSET
     elif GAIA_OFFSET <= action < UPGRADE_TRADING_OFFSET:
@@ -811,6 +814,18 @@ def _interactive_action_components(
     player: int,
 ) -> list[dict[str, Any]]:
     components: list[dict[str, Any]] = []
+    if action["kind"] == "brainstone" or (
+        action["kind"] == "power" and state.brainstone_selected
+    ):
+        components.append(
+            _component_ref(
+                "brainstone",
+                0,
+                "Brainstone",
+                "TAK-BRAINSTONE",
+                relation=("selected" if action["kind"] == "brainstone" else "spent"),
+            )
+        )
     target = action.get("target")
     if target is not None:
         components.append(
@@ -1163,6 +1178,21 @@ def _interactive_player_changes(
     new_power = [new.bowl_one, new.bowl_two, new.bowl_three]
     if old_power != new_power:
         changes.append({"kind": "power", "before": old_power, "after": new_power})
+    if old.brainstone_bowl != new.brainstone_bowl:
+        changes.append({
+            "kind": "brainstone",
+            "before": old.brainstone_bowl,
+            "after": new.brainstone_bowl,
+        })
+    if (
+        player == before.player_to_move
+        and before.brainstone_selected != after.brainstone_selected
+    ):
+        changes.append({
+            "kind": "brainstone_selection",
+            "before": before.brainstone_selected,
+            "after": after.brainstone_selected,
+        })
     for counter in (
         "gaia_power",
         "gaiaformers",
@@ -1382,7 +1412,7 @@ def _interactive_action_record(
             player,
             [],
             adjustments=adjustments,
-            change_kinds={"power", "counter"},
+            change_kinds={"power", "brainstone", "counter"},
         )
         for effect in income_effects:
             effect["sources"] = _income_sources(after, effect["player"])

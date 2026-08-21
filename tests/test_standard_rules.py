@@ -6,6 +6,7 @@ import numpy as np
 from gaiazero.game.gaia_state import (
     ADVANCED_TECH_ACTION_OFFSET,
     ADVANCED_TECH_TILES,
+    BRAINSTONE_ACTION,
     BOOSTER_RANGE_ACTION,
     BOOSTER_TERRAFORM_ACTION,
     BOOSTER_COUNT,
@@ -53,7 +54,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
     def test_setup_has_full_research_and_building_model(self) -> None:
         state = GaiaState.initial(4, seed=3)
 
-        self.assertEqual(state.action_size, 551)
+        self.assertEqual(state.action_size, 552)
         self.assertEqual(len(state.players[0].tracks), 6)
         self.assertEqual(state.first_player, 3)
         self.assertEqual(state.current_player, state.placement_order[0])
@@ -63,7 +64,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(sum(len(planets) for planets in state.starting_planets), 0)
         self.assertEqual(state.round_number, 0)
         self.assertTrue(state.is_starting_placement)
-        self.assertEqual(state.snapshot()["ruleset"], "standard-v9")
+        self.assertEqual(state.snapshot()["ruleset"], "standard-v10")
 
     def test_random_setup_is_seeded_and_respects_component_counts(self) -> None:
         first = GaiaState.initial(2, seed=19)
@@ -145,6 +146,101 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(gleens.tracks[Track.NAVIGATION], 1)
         self.assertEqual((gleens.ore, gleens.qic), (5, 0))
 
+    def test_taklons_brainstone_starts_in_bowl_one_and_charges_normally(self) -> None:
+        state = GaiaState.initial(
+            2,
+            faction_indices=(4, 0),
+            first_player=0,
+        )
+        taklons = state.players[0]
+
+        self.assertEqual(
+            (taklons.bowl_one, taklons.bowl_two, taklons.bowl_three),
+            (3, 4, 0),
+        )
+        self.assertEqual(taklons.brainstone_bowl, 1)
+        snapshot = state.snapshot()
+        self.assertEqual(snapshot["players"][0]["brainstone_bowl"], 1)
+        catalog = next(
+            faction
+            for faction in snapshot["setup"]["faction_catalog"]
+            if faction["name"] == "Taklons"
+        )
+        self.assertEqual(catalog["starting_power"], [2, 4, 0])
+        self.assertEqual(catalog["starting_brainstone_bowl"], 1)
+
+        brainstone_only = replace(
+            taklons,
+            bowl_one=1,
+            bowl_two=0,
+            bowl_three=0,
+            brainstone_bowl=1,
+        )
+        charged, amount = GaiaState._charge_power(brainstone_only, 2)
+        self.assertEqual(amount, 2)
+        self.assertEqual(
+            (charged.bowl_one, charged.bowl_two, charged.bowl_three),
+            (0, 0, 1),
+        )
+        self.assertEqual(charged.brainstone_bowl, 3)
+
+    def test_taklons_can_select_brainstone_as_three_power(self) -> None:
+        state = finish_starting_placement(GaiaState.initial(
+            2,
+            faction_indices=(4, 0),
+            first_player=0,
+        ))
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            bowl_one=0,
+            bowl_two=0,
+            bowl_three=2,
+            brainstone_bowl=3,
+            ore=0,
+        )
+        state = replace(state, players=tuple(players), player_to_move=0)
+        ore_action = state.power_action(PowerAction.ORE_TWO)
+
+        self.assertNotIn(ore_action, state.legal_actions())
+        self.assertIn(BRAINSTONE_ACTION, state.legal_actions())
+        selected = state.apply(BRAINSTONE_ACTION)
+        self.assertEqual(selected.player_to_move, 0)
+        self.assertTrue(selected.brainstone_selected)
+        self.assertNotIn(BRAINSTONE_ACTION, selected.legal_actions())
+        self.assertIn(ore_action, selected.legal_actions())
+
+        after = selected.apply(ore_action)
+        taklons = after.players[0]
+        self.assertFalse(after.brainstone_selected)
+        self.assertEqual(taklons.ore, 2)
+        self.assertEqual(
+            (taklons.bowl_one, taklons.bowl_two, taklons.bowl_three),
+            (2, 0, 0),
+        )
+        self.assertEqual(taklons.brainstone_bowl, 1)
+
+    def test_brainstone_counts_as_one_token_for_gaia_area(self) -> None:
+        info = PlayerState(
+            faction=4,
+            bowl_one=0,
+            bowl_two=0,
+            bowl_three=1,
+            brainstone_bowl=3,
+        )
+
+        moved = GaiaState._move_power_to_gaia(info, 1)
+        self.assertEqual(moved.gaia_power, 1)
+        self.assertEqual(moved.brainstone_bowl, 4)
+
+        state = GaiaState.initial(2, faction_indices=(4, 0), first_player=0)
+        players = list(state.players)
+        players[0] = moved
+        returned = replace(state, players=tuple(players))._gaia_phase().players[0]
+        self.assertEqual(returned.gaia_power, 0)
+        self.assertEqual(returned.bowl_one, 1)
+        self.assertEqual(returned.brainstone_bowl, 1)
+
     def test_factions_without_starting_research_begin_at_level_zero(self) -> None:
         no_starting_research = (1, 4, 7, 10, 11, 13)
         for faction_id in no_starting_research:
@@ -219,7 +315,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         snapshot = GaiaState.initial(3, seed=41).snapshot()
         setup = snapshot["setup"]
 
-        self.assertEqual(snapshot["ruleset"], "standard-v9")
+        self.assertEqual(snapshot["ruleset"], "standard-v10")
         self.assertEqual(setup["seed"], 41)
         self.assertEqual(setup["map"]["sector_count"], 10)
         self.assertEqual(len(setup["map"]["sectors"]), 10)

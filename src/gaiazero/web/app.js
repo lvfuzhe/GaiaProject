@@ -95,7 +95,7 @@ const BASE_FACTIONS = [
   { id: 1, board: 1, side: "B", name: "Lantids", home_terrain: 0, start_track: null, starting_power: [4, 0, 0], starting_credits: 13, starting_ore: 4, starting_knowledge: 3, starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
   { id: 2, board: 2, side: "A", name: "Xenos", home_terrain: 1, start_track: "artificial_intelligence", starting_power: [2, 4, 0], starting_credits: 15, starting_ore: 4, starting_knowledge: 3, starting_qic: 2, starting_structures: 3, starts_with_pi: false, federation_threshold: 7 },
   { id: 3, board: 2, side: "B", name: "Gleens", home_terrain: 1, start_track: "navigation", starting_power: [2, 4, 0], starting_credits: 15, starting_ore: 5, starting_knowledge: 3, starting_qic: 0, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
-  { id: 4, board: 3, side: "A", name: "Taklons", home_terrain: 2, start_track: null, starting_power: [2, 4, 0], starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
+  { id: 4, board: 3, side: "A", name: "Taklons", home_terrain: 2, start_track: null, starting_power: [2, 4, 0], starting_brainstone_bowl: 1, starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
   { id: 5, board: 3, side: "B", name: "Ambas", home_terrain: 2, start_track: "navigation", starting_power: [2, 4, 0], starting_qic: 2, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
   { id: 6, board: 4, side: "A", name: "Hadsch Hallas", home_terrain: 4, start_track: "economy", starting_power: [2, 4, 0], starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
   { id: 7, board: 4, side: "B", name: "Ivits", home_terrain: 4, start_track: null, starting_power: [2, 4, 0], starting_qic: 1, starting_structures: 1, starts_with_pi: true, places_last: true, federation_threshold: 7 },
@@ -633,6 +633,11 @@ function renderSetup(snapshot) {
   const catalogById = new Map(factionCatalog.map((faction) => [faction.id, faction]));
   const factionCard = (faction, assignment = null) => {
     const startingPower = faction.starting_power || [];
+    const startingPowerLabel = startingPower.map((value, index) => (
+      faction.starting_brainstone_bowl === index + 1
+        ? `${value} + 脑石`
+        : value
+    )).join(" / ");
     const startBuilding = faction.starts_with_pi
       ? (faction.places_last ? "最后放置行星研究院" : "起始行星研究院")
       : `起始 ${faction.starting_structures ?? 2} 座矿场`;
@@ -655,7 +660,7 @@ function renderSetup(snapshot) {
           <span class="setup-tag">信用点 ${faction.starting_credits ?? 15}</span>
           <span class="setup-tag">矿石 ${faction.starting_ore ?? 4}</span>
           <span class="setup-tag">知识 ${faction.starting_knowledge ?? 3}</span>
-          ${startingPower.length ? `<span class="setup-tag">能量 ${startingPower.join(" / ")}</span>` : ""}
+          ${startingPower.length ? `<span class="setup-tag">能量 ${startingPowerLabel}</span>` : ""}
           <span class="setup-tag">Q.I.C. ${faction.starting_qic ?? 1}</span>
           ${faction.federation_threshold === 6 ? `<span class="setup-tag">联邦强度 6</span>` : ""}
         </div>
@@ -2401,9 +2406,10 @@ function renderPersonalBoards(containerId, snapshot) {
       }).join("")
       : '<div class="owned-tech-empty">尚未获得科技</div>';
     const power = Array.isArray(player.power) ? player.power : [0, 0, 0];
+    const brainstoneBowl = Number(player.brainstone_bowl || 0);
     const powerAreas = [
-      ["I", power[0]], ["II", power[1]], ["III", power[2]], ["盖亚区", player.gaia_power],
-    ].map(([label, value]) => `<div><span>${label}</span><strong>${formatNumber(value)}</strong></div>`).join("");
+      ["I", power[0], 1], ["II", power[1], 2], ["III", power[2], 3], ["盖亚区", player.gaia_power, 4],
+    ].map(([label, value, bowl]) => `<div class="${brainstoneBowl === bowl ? "has-brainstone" : ""}"><span>${label}</span><strong>${formatNumber(value)}</strong>${brainstoneBowl === bowl ? '<small class="brainstone-marker">脑石</small>' : ""}</div>`).join("");
     const resources = resourceSpecs.map((resource) => `<div class="personal-resource">
       <span>${resource.label}</span><strong>${formatNumber(player[resource.key])}</strong>${resource.cap ? `<small>/ ${resource.cap}</small>` : ""}
     </div>`).join("");
@@ -2534,6 +2540,7 @@ const PLAY_ACTION_LABELS = {
   upgrade_credits_academy: "升级信用点学院",
   research: "推进科研轨",
   power: "执行能量行动",
+  brainstone: "选择脑石（按 3 能量）",
   technology: "获取科技板块",
   federation: "组建联邦",
   qic_academy_action: "使用 Q.I.C. 学院行动",
@@ -2578,6 +2585,7 @@ const PLAY_LOG_RELATION_LABELS = {
   income: "收入来源",
   round: "本轮",
   uses: "关联",
+  spent: "支付",
 };
 
 function renderPlayLogComponents(components = []) {
@@ -2607,6 +2615,13 @@ function renderPlayLogResources(label, items = [], tone = "gain") {
 function renderPlayLogChange(change) {
   if (change.kind === "power") {
     return `能量碗 ${change.before.join("/")} → ${change.after.join("/")}`;
+  }
+  if (change.kind === "brainstone") {
+    const bowlLabel = (value) => ["不在循环", "I 区", "II 区", "III 区", "盖亚区"][value] || `区域 ${value}`;
+    return `脑石 ${bowlLabel(change.before)} → ${bowlLabel(change.after)}`;
+  }
+  if (change.kind === "brainstone_selection") {
+    return change.after ? "已选择脑石按 3 点能量支付" : "已取消或完成脑石支付";
   }
   if (change.kind === "counter") {
     return `${PLAY_LOG_COUNTER_LABELS[change.counter] || change.counter} ${change.before} → ${change.after}`;
