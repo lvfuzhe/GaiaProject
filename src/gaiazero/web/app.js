@@ -82,7 +82,7 @@ const FACTION_ABILITIES = {
   Taklons: "脑石计作 1 个能量片，支付能量行动时可按 3 点使用；行星研究院在被动充能时额外获得 1 个能量片，可选择充能前或后获得",
   Ambas: "每轮一次，将行星研究院与自己的矿场交换；不算建造或升级，不获得 VP、能量或被动收益",
   "Hadsch Hallas": "起始经济科研并额外获得 3 信用点收入；建成行星研究院后，可用信用点按能量自由行动费率兑换矿石、知识和 Q.I.C.",
-  Ivits: "所有玩家放完起始矿场后，最后放置行星研究院",
+  Ivits: "最后放置行星研究院；仅扩建一个联邦，卫星消耗 Q.I.C.；每轮可放置 1 个空间站",
   Geodens: "殖民新星球类型时获得知识",
   "Bal T'aks": "盖亚塑形者可转换为 Q.I.C.",
   Firaks: "可降级研究所并推进科研",
@@ -587,7 +587,9 @@ function finalMetric(snapshot, key, playerId) {
   if (key === "sectors") {
     return new Set([...planets, ...coexisting].map((planet) => planet.sector)).size;
   }
-  if (key === "satellites") return Number(player.satellites || 0);
+  if (key === "satellites") {
+    return Number(player.satellites_and_space_stations ?? player.satellites ?? 0);
+  }
   return 0;
 }
 
@@ -2045,6 +2047,7 @@ function drawBoard(canvas, snapshot, options = {}) {
   const geometry = boardGeometry(width, height, snapshot, showSectors);
   const { compactMap, scale, size, offsetX, offsetY } = geometry;
   const legalPlanetIds = new Set((options.legalPlanetIds || []).map(Number));
+  const legalSpaceStations = options.legalSpaceStations || [];
 
   if (showSectors) {
     const sectors = snapshot.setup?.map?.sectors || [];
@@ -2064,6 +2067,17 @@ function drawBoard(canvas, snapshot, options = {}) {
         context.fillText(`S${String(sector.tile).padStart(2, "0")} · ${sector.rotation}°`, x, y - sectorSize * 0.68);
       }
     }
+  }
+
+  for (const space of legalSpaceStations) {
+    const x = offsetX + Math.sqrt(3) * (Number(space.q) + Number(space.r) / 2) * scale;
+    const y = offsetY + 1.5 * Number(space.r) * scale;
+    context.save();
+    context.strokeStyle = "rgba(117, 202, 255, 0.92)";
+    context.lineWidth = compactMap ? 1.6 : 2.3;
+    context.setLineDash(compactMap ? [3, 2] : [5, 3]);
+    drawHexOutline(context, x, y, size * 0.9);
+    context.restore();
   }
 
   for (const planet of points) {
@@ -2176,6 +2190,29 @@ function drawBoard(canvas, snapshot, options = {}) {
       context.arc(x, y, size + 9, 0, Math.PI * 2);
       context.stroke();
       context.setLineDash([]);
+    }
+  }
+
+  if (options.showPlayerPieces !== false) {
+    for (const station of snapshot.space_stations || []) {
+      const x = offsetX + Math.sqrt(3) * (Number(station.q) + Number(station.r) / 2) * scale;
+      const y = offsetY + 1.5 * Number(station.r) * scale;
+      const stationSize = compactMap ? size * 0.43 : size * 0.52;
+      drawHex(context, x, y, stationSize, PLAYER_COLORS[station.owner] || "#b7202b");
+      context.fillStyle = "#ffffff";
+      context.font = `800 ${Math.max(6, stationSize * 0.9)}px Segoe UI`;
+      context.textAlign = "center";
+      context.fillText("S", x, y + Math.max(2, stationSize * 0.3));
+      if (station.federated) {
+        context.save();
+        context.strokeStyle = "rgba(255,255,255,0.85)";
+        context.lineWidth = 1;
+        context.setLineDash([2, 2]);
+        context.beginPath();
+        context.arc(x, y, stationSize * 1.35, 0, Math.PI * 2);
+        context.stroke();
+        context.restore();
+      }
     }
   }
 }
@@ -2501,6 +2538,7 @@ function renderPersonalBoards(containerId, snapshot) {
                 ${Number(player.gleens_federation_tokens || 0) > 0 ? `<span>GLE-FED <strong>${formatNumber(player.gleens_federation_tokens)}</strong></span>` : ""}
                 <span>联邦门槛 <strong>${formatNumber(player.federation_threshold ?? 7)}</strong></span>
                 <span>卫星 <strong>${formatNumber(player.satellites)}</strong></span>
+                ${Number(player.space_stations || 0) > 0 ? `<span>空间站 <strong>${formatNumber(player.space_stations)}</strong></span>` : ""}
               </div>
             </div>
           </div>
@@ -2597,6 +2635,7 @@ const PLAY_ACTION_LABELS = {
   brainstone: "选择脑石（按 3 能量）",
   taklons_passive_before: "Taklons 研究院：先获得能量片，再被动充能",
   taklons_passive_after: "Taklons 研究院：先被动充能，再获得能量片",
+  ivits_space_station: "Ivits：放置空间站",
   terrans_gaia_credit: "Terrans 盖亚兑换：信用点",
   terrans_gaia_ore: "Terrans 盖亚兑换：矿石",
   terrans_gaia_knowledge: "Terrans 盖亚兑换：知识",
@@ -3157,8 +3196,13 @@ function renderPlay() {
   const legalPlanetIds = (session.legal_actions || [])
     .filter((action) => action.target !== null && action.target !== undefined)
     .map((action) => Number(action.target));
+  const legalSpaceStations = (session.legal_actions || [])
+    .filter((action) => action.kind === "ivits_space_station")
+    .map((action) => ({ q: Number(action.space_q), r: Number(action.space_r) }))
+    .filter((space) => Number.isFinite(space.q) && Number.isFinite(space.r));
   drawStarMapBoard(byId("play-board-canvas"), snapshot, true, {
     legalPlanetIds,
+    legalSpaceStations,
     selectedPlanetId: state.play.selectedPlanetId,
     showPlanetIds: true,
   });

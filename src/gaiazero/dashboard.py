@@ -24,6 +24,7 @@ from gaiazero.game.gaia_state import (
     FACTIONS,
     FEDERATION_TILES,
     FEDERATION_OFFSET,
+    IVITS_SPACE_STATION_OFFSET,
     QIC_ACADEMY_ACTION,
     QIC_FEDERATION_ACTION_OFFSET,
     QIC_PLANET_TYPES_ACTION,
@@ -702,6 +703,9 @@ def _interactive_action_snapshot(state: GaiaState, action: int) -> dict[str, Any
     federation_tile: int | None = None
     power_action: int | None = None
     advanced_action_tile: int | None = None
+    space_station_slot: int | None = None
+    space_q: int | None = None
+    space_r: int | None = None
     hadsch_credit_actions = state._hadsch_hallas_credit_actions(state.player_to_move)
     if action == BRAINSTONE_ACTION:
         kind = "brainstone"
@@ -709,6 +713,12 @@ def _interactive_action_snapshot(state: GaiaState, action: int) -> dict[str, Any
         kind = "taklons_passive_before"
     elif action == TAKLONS_PASSIVE_AFTER_ACTION:
         kind = "taklons_passive_after"
+    elif IVITS_SPACE_STATION_OFFSET <= action < state.action_size:
+        kind = "ivits_space_station"
+        space_station_slot = action - IVITS_SPACE_STATION_OFFSET
+        board_spaces = state._board_spaces()
+        if space_station_slot < len(board_spaces):
+            space_q, space_r = board_spaces[space_station_slot]
     elif action == TERRANS_GAIA_CREDIT_ACTION:
         kind = "terrans_gaia_credit"
     elif action == TERRANS_GAIA_ORE_ACTION:
@@ -812,6 +822,9 @@ def _interactive_action_snapshot(state: GaiaState, action: int) -> dict[str, Any
         "federation_tile": federation_tile,
         "power_action": power_action,
         "advanced_action_tile": advanced_action_tile,
+        "space_station_slot": space_station_slot,
+        "space_q": space_q,
+        "space_r": space_r,
     }
 
 
@@ -895,6 +908,19 @@ def _interactive_action_components(
                 "Ambas planetary institute swap",
                 "AMB-PI-SWAP",
                 relation="uses",
+            )
+        )
+    if action["kind"] == "ivits_space_station":
+        slot = action.get("space_station_slot")
+        q = action.get("space_q")
+        r = action.get("space_r")
+        components.append(
+            _component_ref(
+                "space_station",
+                int(slot or 0),
+                f"Ivits space station at ({q}, {r})",
+                f"IVI-SS-{int(slot or 0):03d}",
+                relation="placed",
             )
         )
     if action["kind"] in ("taklons_passive_before", "taklons_passive_after"):

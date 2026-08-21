@@ -10,7 +10,9 @@ import numpy as np
 from gaiazero.core import BoolArray, FloatArray
 from gaiazero.game.gaia_setup import (
     BOOSTER_COUNT,
+    MAX_BOARD_SPACES,
     MAX_PLANETS,
+    assembled_board_spaces,
     generate_setup,
     hex_distance,
 )
@@ -158,7 +160,7 @@ FACTIONS: tuple[FactionSpec, ...] = (
         income_credits=3,
         credits_for_free_actions=True,
     ),
-    FactionSpec("Ivits", Terrain.OXIDE, None, (2, 4, 0), 3, "Places its starting planetary institute after all starting mines", starting_structures=1, starts_with_pi=True, places_last=True, income_qic=1),
+    FactionSpec("Ivits", Terrain.OXIDE, None, (2, 4, 0), 3, "Places its planetary institute last; grows one federation with Q.I.C. satellites and can place one range-extending space station per round", starting_structures=1, starts_with_pi=True, places_last=True, income_qic=1),
     FactionSpec("Geodens", Terrain.VOLCANIC, Track.TERRAFORMING, (2, 4, 0), 4, "Knowledge for newly colonized planet types", knowledge_for_new_type=True),
     FactionSpec(
         "Bal T'aks",
@@ -394,7 +396,8 @@ TERRANS_GAIA_QIC_ACTION = TERRANS_GAIA_KNOWLEDGE_ACTION + 1
 TERRANS_GAIA_FINISH_ACTION = TERRANS_GAIA_QIC_ACTION + 1
 TAKLONS_PASSIVE_BEFORE_ACTION = TERRANS_GAIA_FINISH_ACTION + 1
 TAKLONS_PASSIVE_AFTER_ACTION = TAKLONS_PASSIVE_BEFORE_ACTION + 1
-ACTION_SIZE = TAKLONS_PASSIVE_AFTER_ACTION + 1
+IVITS_SPACE_STATION_OFFSET = TAKLONS_PASSIVE_AFTER_ACTION + 1
+ACTION_SIZE = IVITS_SPACE_STATION_OFFSET + MAX_BOARD_SPACES
 
 
 @dataclass(frozen=True, slots=True)
@@ -423,6 +426,7 @@ class PlayerState:
     used_advanced_tech_actions: int = 0
     used_booster_action: bool = False
     used_ambas_swap_action: bool = False
+    used_ivits_space_station_action: bool = False
     federation_tokens: int = 0
     federation_keys: int = 0
     board_federations: int = 0
@@ -491,6 +495,8 @@ class GaiaState:
     terrains: tuple[int, ...]
     gaiaformer_owner: tuple[int, ...]
     federated: tuple[bool, ...]
+    space_station_owner: tuple[int, ...]
+    space_station_federated: tuple[bool, ...]
     booster_owner: tuple[int, ...]
     booster_selection_order: tuple[int, ...]
     booster_selection_step: int
@@ -598,6 +604,8 @@ class GaiaState:
             terrains=setup.terrains,
             gaiaformer_owner=tuple([-1] * N),
             federated=tuple([False] * N),
+            space_station_owner=tuple([-1] * MAX_BOARD_SPACES),
+            space_station_federated=tuple([False] * MAX_BOARD_SPACES),
             booster_owner=setup.booster_owner,
             booster_selection_order=tuple(
                 (first - offset - 1) % num_players for offset in range(num_players)
@@ -723,6 +731,10 @@ class GaiaState:
     @staticmethod
     def federation_action(tile: int) -> int:
         return FEDERATION_OFFSET + int(tile)
+
+    @staticmethod
+    def ivits_space_station_action(space: int) -> int:
+        return IVITS_SPACE_STATION_OFFSET + int(space)
 
     @staticmethod
     def pass_booster_action(booster: int) -> int:
@@ -994,6 +1006,17 @@ class GaiaState:
         if self._brainstone_action_available(player):
             actions.append(BRAINSTONE_ACTION)
         actions.extend(self._hadsch_hallas_credit_actions(player))
+        if (
+            faction.name == "Ivits"
+            and self._has_pi(player)
+            and not info.used_ivits_space_station_action
+            and self._space_station_count(player) < MAX_ROUNDS
+        ):
+            actions.extend(
+                self.ivits_space_station_action(space)
+                for space in range(len(self._board_spaces()))
+                if self._can_place_ivits_space_station(player, space)
+            )
         return tuple(actions)
 
     def legal_action_mask(self) -> BoolArray:
@@ -1097,6 +1120,10 @@ class GaiaState:
                 state = self._apply_booster_range_action()
             else:
                 state = self._apply_federation(action - FEDERATION_OFFSET)
+        elif IVITS_SPACE_STATION_OFFSET <= action < ACTION_SIZE:
+            state = self._apply_ivits_space_station(
+                action - IVITS_SPACE_STATION_OFFSET
+            )
         else:
             raise ValueError(f"unknown action {action}")
         return state._advance_turn()
@@ -1588,6 +1615,51 @@ class GaiaState:
             pending_booster_range_player=player,
         )
 
+    def _board_spaces(self) -> tuple[tuple[int, int], ...]:
+        return assembled_board_spaces(self.sector_centers)
+
+    def _space_station_count(self, player: int) -> int:
+        return sum(owner == player for owner in self.space_station_owner)
+
+    def _can_place_ivits_space_station(self, player: int, space: int) -> bool:
+        board_spaces = self._board_spaces()
+        if not 0 <= space < len(board_spaces):
+            return False
+        q, r = board_spaces[space]
+        if self.space_station_owner[space] >= 0:
+            return False
+        if any(
+            active and planet_q == q and planet_r == r
+            for active, planet_q, planet_r in zip(
+                self.active_planets,
+                self.planet_q,
+                self.planet_r,
+                strict=True,
+            )
+        ):
+            return False
+        return self._is_coordinate_reachable(player, q, r)
+
+    def _apply_ivits_space_station(self, space: int) -> GaiaState:
+        player = self.player_to_move
+        info = self.players[player]
+        if FACTIONS[info.faction].name != "Ivits":
+            raise ValueError("only Ivits can place a space station")
+        if not self._has_pi(player) or info.used_ivits_space_station_action:
+            raise ValueError("Ivits space-station action is unavailable")
+        if not self._can_place_ivits_space_station(player, space):
+            raise ValueError("space station must be placed on an accessible empty space")
+        owners = list(self.space_station_owner)
+        owners[space] = player
+        return replace(
+            self,
+            players=self._replace_player(
+                player,
+                replace(info, used_ivits_space_station_action=True),
+            ),
+            space_station_owner=tuple(owners),
+        )
+
     def _apply_federation(self, reward: int = 0) -> GaiaState:
         player = self.player_to_move
         plan = self._federation_plan(player)
@@ -1613,11 +1685,14 @@ class GaiaState:
         info = self._score(info, "federation")
         federated = list(self.federated)
         coexisting_federated = list(self.coexisting_mine_federated)
+        space_station_federated = list(self.space_station_federated)
         for location in locations:
             if location < N:
                 federated[location] = True
-            else:
+            elif location < 2 * N:
                 coexisting_federated[location - N] = True
+            else:
+                space_station_federated[location - 2 * N] = True
         supply = list(self.federation_tile_supply)
         supply[reward] -= 1
         return replace(
@@ -1625,6 +1700,7 @@ class GaiaState:
             players=self._replace_player(player, info),
             federated=tuple(federated),
             coexisting_mine_federated=tuple(coexisting_federated),
+            space_station_federated=tuple(space_station_federated),
             federation_tile_supply=tuple(supply),
         )
 
@@ -1659,6 +1735,7 @@ class GaiaState:
                 used_advanced_tech_actions=0,
                 used_booster_action=False,
                 used_ambas_swap_action=False,
+                used_ivits_space_station_action=False,
             )
             for candidate in players
         )
@@ -2298,33 +2375,23 @@ class GaiaState:
         for size in range(minimum_size, len(candidates) + 1):
             for subset in combinations(candidates, size):
                 power = sum(
-                    self._structure_power(
-                        player,
-                        self._location_building(location),
-                        self._location_planet(location),
-                    )
+                    self._location_power(player, location)
                     for location in subset
                 )
                 if existing:
                     power += sum(
-                        self._structure_power(
-                            player,
-                            self._location_building(location),
-                            self._location_planet(location),
-                        )
+                        self._location_power(player, location)
                         for location in existing
                     )
                 if power < threshold:
                     continue
                 satellites = (
                     self._minimum_extension_satellites(
-                        tuple(self._location_planet(location) for location in existing),
-                        tuple(self._location_planet(location) for location in subset),
+                        existing,
+                        subset,
                     )
                     if existing
-                    else self._minimum_satellites(
-                        tuple(self._location_planet(location) for location in subset)
-                    )
+                    else self._minimum_satellites(subset)
                 )
                 if satellites > available_satellites or info.satellites + satellites > 25:
                     continue
@@ -2335,14 +2402,27 @@ class GaiaState:
                 break
         return None if best is None else (best[1], best[2])
 
-    @staticmethod
-    def _location_planet(location: int) -> int:
-        return location if location < N else location - N
+    def _location_coordinate(self, location: int) -> tuple[int, int]:
+        if location < 2 * N:
+            planet = location if location < N else location - N
+            return self.planet_q[planet], self.planet_r[planet]
+        return self._board_spaces()[location - 2 * N]
 
-    def _location_building(self, location: int) -> Building:
-        if location >= N:
-            return Building.MINE
-        return Building(self.buildings[location])
+    def _location_power(self, player: int, location: int) -> int:
+        if location >= 2 * N:
+            return 1
+        planet = location if location < N else location - N
+        building = (
+            Building(self.buildings[planet])
+            if location < N
+            else Building.MINE
+        )
+        return self._structure_power(player, building, planet)
+
+    def _location_distance(self, source: int, destination: int) -> int:
+        source_q, source_r = self._location_coordinate(source)
+        destination_q, destination_r = self._location_coordinate(destination)
+        return hex_distance(source_q, source_r, destination_q, destination_r)
 
     def _structure_locations(
         self,
@@ -2360,7 +2440,12 @@ class GaiaState:
             for planet, owner in enumerate(self.coexisting_mine_owner)
             if owner == player and self.coexisting_mine_federated[planet] == federated
         )
-        return (*primary, *coexisting)
+        space_stations = (
+            2 * N + space
+            for space, owner in enumerate(self.space_station_owner)
+            if owner == player and self.space_station_federated[space] == federated
+        )
+        return (*primary, *coexisting, *space_stations)
 
     def _minimum_extension_satellites(
         self,
@@ -2372,7 +2457,7 @@ class GaiaState:
         cost = 0
         while remaining:
             distance, target = min(
-                (self._distance(source, candidate), candidate)
+                (self._location_distance(source, candidate), candidate)
                 for source in connected
                 for candidate in remaining
             )
@@ -2381,15 +2466,15 @@ class GaiaState:
             remaining.remove(target)
         return cost
 
-    def _minimum_satellites(self, planets: tuple[int, ...]) -> int:
-        if len(planets) < 2:
+    def _minimum_satellites(self, locations: tuple[int, ...]) -> int:
+        if len(locations) < 2:
             return 0
-        connected = {planets[0]}
-        remaining = set(planets[1:])
+        connected = {locations[0]}
+        remaining = set(locations[1:])
         cost = 0
         while remaining:
             distance, target = min(
-                (self._distance(source, candidate), candidate)
+                (self._location_distance(source, candidate), candidate)
                 for source in connected
                 for candidate in remaining
             )
@@ -2417,14 +2502,40 @@ class GaiaState:
         *,
         range_bonus: int = 0,
     ) -> bool:
+        return self._is_coordinate_reachable(
+            player,
+            self.planet_q[destination],
+            self.planet_r[destination],
+            range_bonus=range_bonus,
+        )
+
+    def _is_coordinate_reachable(
+        self,
+        player: int,
+        q: int,
+        r: int,
+        *,
+        range_bonus: int = 0,
+    ) -> bool:
         reach = (
             (1, 1, 2, 2, 3, 4)[self.players[player].tracks[Track.NAVIGATION]]
             + range_bonus
         )
-        return any(
+        if any(
             self._player_has_structure(player, source)
-            and self._distance(source, destination) <= reach
+            and hex_distance(self.planet_q[source], self.planet_r[source], q, r)
+            <= reach
             for source in range(N)
+        ):
+            return True
+        return any(
+            owner == player
+            and hex_distance(source_q, source_r, q, r) <= reach
+            for owner, (source_q, source_r) in zip(
+                self.space_station_owner,
+                self._board_spaces(),
+                strict=False,
+            )
         )
 
     def _distance(self, source: int, destination: int) -> int:
@@ -2678,7 +2789,9 @@ class GaiaState:
             ))
         if tile == 4:
             return float(len(self._colonized_sectors(player)))
-        return float(self.players[player].satellites)
+        return float(
+            self.players[player].satellites + self._space_station_count(player)
+        )
 
     def _ranking_awards(
         self,
@@ -2814,6 +2927,7 @@ class GaiaState:
                 float(info.used_qic_academy_action),
                 float(info.used_standard_tech_action),
                 float(info.used_booster_action),
+                float(info.used_ivits_space_station_action),
                 *(float(info.used_advanced_tech_actions & (1 << tile) != 0)
                   for tile in range(ADVANCED_TECH_SPECIAL_COUNT)),
                 float(info.passed),
@@ -2853,6 +2967,17 @@ class GaiaState:
             values.append(float(self.gaiaformer_owner[planet] == -1))
             values.extend(float(self.gaiaformer_owner[planet] == player) for player in range(self.num_players))
             values.append(float(self.federated[planet]))
+        board_space_count = len(self._board_spaces())
+        for space in range(MAX_BOARD_SPACES):
+            present = space < board_space_count
+            owner = self.space_station_owner[space]
+            values.append(float(present))
+            values.append(float(present and owner == -1))
+            values.extend(
+                float(present and owner == player)
+                for player in range(self.num_players)
+            )
+            values.append(float(present and self.space_station_federated[space]))
         return np.asarray(values, dtype=np.float32)
 
     def describe_action(self, action: int) -> str:
@@ -2941,6 +3066,13 @@ class GaiaState:
             return "Taklons PI: gain 1 power token before passive charge"
         if action == TAKLONS_PASSIVE_AFTER_ACTION:
             return "Taklons PI: gain 1 power token after passive charge"
+        if IVITS_SPACE_STATION_OFFSET <= action < ACTION_SIZE:
+            space = action - IVITS_SPACE_STATION_OFFSET
+            board_spaces = self._board_spaces()
+            if space < len(board_spaces):
+                q, r = board_spaces[space]
+                return f"Ivits PI special action: place space station at ({q}, {r})"
+            return f"Ivits PI special action: unavailable board space {space}"
         if action in self._hadsch_hallas_credit_actions(self.player_to_move):
             if action == TERRANS_GAIA_ORE_ACTION:
                 return "Hadsch Hallas PI free action: 3 credits for 1 ore"
@@ -3020,7 +3152,7 @@ class GaiaState:
                 self.round_scoring_tiles[self.round_number - 1]
             ].key
         return {
-            "ruleset": "standard-v12",
+            "ruleset": "standard-v13",
             "round": max(0, min(self.round_number, MAX_ROUNDS)),
             "max_rounds": MAX_ROUNDS,
             "phase": (
@@ -3114,6 +3246,10 @@ class GaiaState:
                     },
                     "tracks": list(info.tracks),
                     "satellites": info.satellites,
+                    "space_stations": self._space_station_count(player),
+                    "satellites_and_space_stations": (
+                        info.satellites + self._space_station_count(player)
+                    ),
                     "colonized_types": info.colonized_types,
                     "tech_tiles": [
                         tile
@@ -3136,6 +3272,9 @@ class GaiaState:
                     "standard_tech_action_used": info.used_standard_tech_action,
                     "booster_action_used": info.used_booster_action,
                     "ambas_swap_action_used": info.used_ambas_swap_action,
+                    "ivits_space_station_action_used": (
+                        info.used_ivits_space_station_action
+                    ),
                     "advanced_tech_actions_used": info.used_advanced_tech_actions,
                     "federations": info.federation_tokens,
                     "federation_threshold": self._federation_threshold(player),
@@ -3167,6 +3306,17 @@ class GaiaState:
                 }
                 for index in range(N)
                 if self.active_planets[index]
+            ],
+            "space_stations": [
+                {
+                    "id": space,
+                    "q": q,
+                    "r": r,
+                    "owner": self.space_station_owner[space],
+                    "federated": self.space_station_federated[space],
+                }
+                for space, (q, r) in enumerate(self._board_spaces())
+                if self.space_station_owner[space] >= 0
             ],
             "setup": {
                 "seed": self.setup_seed,
@@ -3347,6 +3497,8 @@ class GaiaHeuristicEvaluator:
                 score = 1.0
             elif ADVANCED_TECH_ACTION_OFFSET <= action < PASS_BOOSTER_OFFSET:
                 score = 1.2
+            elif IVITS_SPACE_STATION_OFFSET <= action < ACTION_SIZE:
+                score = 1.1
             elif len(legal) == 1:
                 score = 0.5
             else:

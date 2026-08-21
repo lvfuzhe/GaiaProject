@@ -18,6 +18,7 @@ from gaiazero.game import GaiaState, MiniGaiaState
 from gaiazero.game.gaia_state import (
     BRAINSTONE_ACTION,
     Building,
+    IVITS_SPACE_STATION_OFFSET,
     QIC_ACADEMY_ACTION,
     PowerAction,
     TERRANS_GAIA_FINISH_ACTION,
@@ -250,6 +251,46 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(after.player_to_move, 0)
         self.assertIn(TERRANS_GAIA_ORE_ACTION, after.legal_actions())
         self.assertIn(TERRANS_GAIA_QIC_ACTION, after.legal_actions())
+
+    def test_ivits_space_station_is_identified_in_actions_and_history(self) -> None:
+        state = GaiaState.initial(
+            2,
+            seed=23,
+            faction_indices=(7, 0),
+            first_player=0,
+        )
+        while state.is_starting_placement or state.is_booster_selection:
+            state = state.apply(state.legal_actions()[0])
+        state = replace(state, player_to_move=0)
+        action = next(
+            action
+            for action in state.legal_actions()
+            if action >= IVITS_SPACE_STATION_OFFSET
+        )
+
+        summary = _interactive_action_snapshot(state, action)
+        self.assertEqual(summary["kind"], "ivits_space_station")
+        self.assertIsInstance(summary["space_station_slot"], int)
+        self.assertIsInstance(summary["space_q"], int)
+        self.assertIsInstance(summary["space_r"], int)
+
+        after = state.apply(action)
+        record = _interactive_action_record(
+            state,
+            after,
+            action,
+            move=1,
+            player=0,
+            role="human",
+        )
+        component = next(
+            component
+            for component in record["components"]
+            if component["kind"] == "space_station"
+        )
+        self.assertEqual(record["kind"], "ivits_space_station")
+        self.assertTrue(component["code"].startswith("IVI-SS-"))
+        self.assertEqual(len(after.snapshot()["space_stations"]), 1)
 
     def test_http_api_and_static_dashboard(self) -> None:
         telemetry = JsonlTelemetry(self.metrics, run_id="http-test")

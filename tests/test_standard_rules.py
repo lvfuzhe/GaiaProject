@@ -4,6 +4,7 @@ from dataclasses import replace
 import numpy as np
 
 from gaiazero.game.gaia_state import (
+    ACTION_SIZE,
     ADVANCED_TECH_ACTION_OFFSET,
     ADVANCED_TECH_TILES,
     BRAINSTONE_ACTION,
@@ -16,7 +17,10 @@ from gaiazero.game.gaia_state import (
     FEDERATION_TILES,
     FACTIONS,
     FINAL_SCORING_TILES,
+    IVITS_SPACE_STATION_OFFSET,
     MAX_BUILDINGS,
+    PASS_BOOSTER_OFFSET,
+    PASS_FINAL_ACTION,
     ROUND_SCORING_TILES,
     STANDARD_TECH_TILES,
     STANDARD_TECH_COUNT,
@@ -62,7 +66,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
     def test_setup_has_full_research_and_building_model(self) -> None:
         state = GaiaState.initial(4, seed=3)
 
-        self.assertEqual(state.action_size, 559)
+        self.assertEqual(state.action_size, ACTION_SIZE)
         self.assertEqual(len(state.players[0].tracks), 6)
         self.assertEqual(state.first_player, 3)
         self.assertEqual(state.current_player, state.placement_order[0])
@@ -72,7 +76,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(sum(len(planets) for planets in state.starting_planets), 0)
         self.assertEqual(state.round_number, 0)
         self.assertTrue(state.is_starting_placement)
-        self.assertEqual(state.snapshot()["ruleset"], "standard-v12")
+        self.assertEqual(state.snapshot()["ruleset"], "standard-v13")
 
     def test_random_setup_is_seeded_and_respects_component_counts(self) -> None:
         first = GaiaState.initial(2, seed=19)
@@ -297,6 +301,139 @@ class StandardGaiaRulesTests(unittest.TestCase):
         resumed = tech_pending.apply(TAKLONS_PASSIVE_AFTER_ACTION)
         self.assertEqual(resumed.player_to_move, 0)
         self.assertEqual(resumed.pending_tech_player, 0)
+
+    def test_ivits_pi_places_one_space_station_per_round_and_extends_range(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, seed=23, faction_indices=(7, 0), first_player=0)
+        )
+        state = replace(state, player_to_move=0)
+        actions = tuple(
+            action
+            for action in state.legal_actions()
+            if action >= IVITS_SPACE_STATION_OFFSET
+        )
+        self.assertTrue(actions)
+
+        planet_positions = {
+            (state.planet_q[planet], state.planet_r[planet])
+            for planet, active in enumerate(state.active_planets)
+            if active
+        }
+        extending_action = None
+        extended_planet = None
+        for action in actions:
+            space = action - IVITS_SPACE_STATION_OFFSET
+            coordinate = state._board_spaces()[space]
+            self.assertNotIn(coordinate, planet_positions)
+            self.assertTrue(state._can_place_ivits_space_station(0, space))
+            candidate = state.apply(action)
+            newly_reachable = [
+                planet
+                for planet, active in enumerate(state.active_planets)
+                if active
+                and not state._is_reachable(0, planet)
+                and candidate._is_reachable(0, planet)
+            ]
+            if newly_reachable and extending_action is None:
+                extending_action = action
+                extended_planet = newly_reachable[0]
+
+        self.assertIsNotNone(extending_action)
+        self.assertIsNotNone(extended_planet)
+        placed = state.apply(int(extending_action))
+        station = placed.snapshot()["space_stations"][0]
+        self.assertEqual(station["owner"], 0)
+        self.assertTrue(placed._is_reachable(0, int(extended_planet)))
+        self.assertTrue(placed.players[0].used_ivits_space_station_action)
+        self.assertFalse(any(
+            action >= IVITS_SPACE_STATION_OFFSET
+            for action in replace(placed, player_to_move=0).legal_actions()
+        ))
+        self.assertEqual(
+            placed._final_scoring_metric(0, 5),
+            placed.players[0].satellites + 1,
+        )
+
+        for expected_player in (1, 0):
+            self.assertEqual(placed.player_to_move, expected_player)
+            pass_action = next(
+                action
+                for action in placed.legal_actions()
+                if PASS_BOOSTER_OFFSET <= action < PASS_FINAL_ACTION
+            )
+            placed = placed.apply(pass_action)
+        self.assertEqual(placed.round_number, 2)
+        self.assertFalse(placed.players[0].used_ivits_space_station_action)
+        self.assertTrue(any(
+            action >= IVITS_SPACE_STATION_OFFSET
+            for action in replace(placed, player_to_move=0).legal_actions()
+        ))
+
+    def test_ivits_space_station_adds_federation_power_and_uses_qic_satellites(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, seed=31, faction_indices=(7, 0), first_player=0)
+        )
+        pi_planet, academy_planet = [
+            planet for planet, active in enumerate(state.active_planets) if active
+        ][:2]
+        owners = [-1] * len(state.owners)
+        buildings = [Building.EMPTY] * len(state.buildings)
+        owners[pi_planet] = 0
+        owners[academy_planet] = 0
+        buildings[pi_planet] = Building.PLANETARY_INSTITUTE
+        buildings[academy_planet] = Building.ACADEMY
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            qic=25,
+            board_federations=0,
+            federation_tokens=0,
+            federation_keys=0,
+            satellites=0,
+        )
+        state = replace(
+            state,
+            player_to_move=0,
+            players=tuple(players),
+            owners=tuple(owners),
+            buildings=tuple(int(value) for value in buildings),
+            federated=tuple(False for _ in state.federated),
+            coexisting_mine_owner=tuple(-1 for _ in state.coexisting_mine_owner),
+            coexisting_mine_federated=tuple(
+                False for _ in state.coexisting_mine_federated
+            ),
+        )
+        self.assertIsNone(state._federation_plan(0))
+
+        planet_positions = {
+            (state.planet_q[planet], state.planet_r[planet])
+            for planet, active in enumerate(state.active_planets)
+            if active
+        }
+        station_space = next(
+            space
+            for space, coordinate in enumerate(state._board_spaces())
+            if coordinate not in planet_positions
+        )
+        station_owners = list(state.space_station_owner)
+        station_owners[station_space] = 0
+        with_station = replace(
+            state,
+            space_station_owner=tuple(station_owners),
+        )
+        plan = with_station._federation_plan(0)
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        self.assertIn(2 * len(state.owners) + station_space, plan[0])
+
+        formed = with_station.apply(with_station.federation_action(0))
+        self.assertEqual(formed.players[0].qic, 25 - plan[1])
+        self.assertEqual(formed.players[0].satellites, plan[1])
+        self.assertTrue(formed.space_station_federated[station_space])
+        self.assertEqual(formed._federation_threshold(0), 14)
+        self.assertEqual(formed._final_scoring_metric(0, 0), 2)
+        self.assertEqual(formed._final_scoring_metric(0, 1), 2)
+        self.assertEqual(formed._final_scoring_metric(0, 5), plan[1] + 1)
 
     def test_ambas_pi_swap_is_once_per_round_and_has_no_upgrade_effects(self) -> None:
         state = finish_starting_placement(
@@ -630,7 +767,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         snapshot = GaiaState.initial(3, seed=41).snapshot()
         setup = snapshot["setup"]
 
-        self.assertEqual(snapshot["ruleset"], "standard-v12")
+        self.assertEqual(snapshot["ruleset"], "standard-v13")
         self.assertEqual(setup["seed"], 41)
         self.assertEqual(setup["map"]["sector_count"], 10)
         self.assertEqual(len(setup["map"]["sectors"]), 10)

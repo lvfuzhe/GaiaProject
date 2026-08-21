@@ -8,6 +8,13 @@ import numpy as np
 MAX_SECTORS = 10
 PLANET_SLOTS_PER_SECTOR = 7
 MAX_PLANETS = MAX_SECTORS * PLANET_SLOTS_PER_SECTOR
+SECTOR_HEXES: tuple[tuple[int, int], ...] = tuple(
+    (q, r)
+    for q in range(-2, 3)
+    for r in range(-2, 3)
+    if max(abs(q), abs(r), abs(q + r)) <= 2
+)
+MAX_BOARD_SPACES = MAX_SECTORS * len(SECTOR_HEXES)
 BOOSTER_COUNT = 10
 
 # Terrain integers mirror gaia_state.Terrain without introducing a circular import.
@@ -57,6 +64,17 @@ SECTOR_CENTERS_34P: tuple[tuple[int, int], ...] = (
     (0, 4),
     (5, 2),
 )
+
+
+def assembled_board_spaces(
+    centers: tuple[tuple[int, int], ...],
+) -> tuple[tuple[int, int], ...]:
+    """Return every playable hex in stable action-index order."""
+    return tuple(sorted(
+        (center_q + local_q, center_r + local_r)
+        for center_q, center_r in centers
+        for local_q, local_r in SECTOR_HEXES
+    ))
 
 
 @dataclass(frozen=True, slots=True)
@@ -496,13 +514,7 @@ def _apply_planet_positions(
     if len(set(ids)) != len(ids):
         raise ValueError("planet positions must not contain duplicate ids")
 
-    board_spaces = {
-        (center_q + local_q, center_r + local_r)
-        for center_q, center_r in centers
-        for local_q in range(-2, 3)
-        for local_r in range(-2, 3)
-        if max(abs(local_q), abs(local_r), abs(local_q + local_r)) <= 2
-    }
+    board_spaces = set(assembled_board_spaces(centers))
     destinations = [(q, r) for _planet, q, r in normalized]
     if any(destination not in board_spaces for destination in destinations):
         raise ValueError("planet position is outside the assembled map")
@@ -564,13 +576,7 @@ def _apply_planet_layout(
     ):
         raise ValueError("planet layout source_id must reference a printed sector planet")
 
-    board_spaces = {
-        (center_q + local_q, center_r + local_r)
-        for center_q, center_r in centers
-        for local_q in range(-2, 3)
-        for local_r in range(-2, 3)
-        if max(abs(local_q), abs(local_r), abs(local_q + local_r)) <= 2
-    }
+    board_spaces = set(assembled_board_spaces(centers))
     destinations = [(q, r) for _planet, q, r, _source in normalized]
     if any(destination not in board_spaces for destination in destinations):
         raise ValueError("planet position is outside the assembled map")
