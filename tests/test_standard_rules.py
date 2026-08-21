@@ -20,6 +20,11 @@ from gaiazero.game.gaia_state import (
     STANDARD_TECH_TILES,
     STANDARD_TECH_COUNT,
     STANDARD_TECH_ACTION,
+    TERRANS_GAIA_CREDIT_ACTION,
+    TERRANS_GAIA_FINISH_ACTION,
+    TERRANS_GAIA_KNOWLEDGE_ACTION,
+    TERRANS_GAIA_ORE_ACTION,
+    TERRANS_GAIA_QIC_ACTION,
     Building,
     GaiaHeuristicEvaluator,
     GaiaState,
@@ -54,7 +59,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
     def test_setup_has_full_research_and_building_model(self) -> None:
         state = GaiaState.initial(4, seed=3)
 
-        self.assertEqual(state.action_size, 552)
+        self.assertEqual(state.action_size, 557)
         self.assertEqual(len(state.players[0].tracks), 6)
         self.assertEqual(state.first_player, 3)
         self.assertEqual(state.current_player, state.placement_order[0])
@@ -64,7 +69,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(sum(len(planets) for planets in state.starting_planets), 0)
         self.assertEqual(state.round_number, 0)
         self.assertTrue(state.is_starting_placement)
-        self.assertEqual(state.snapshot()["ruleset"], "standard-v10")
+        self.assertEqual(state.snapshot()["ruleset"], "standard-v11")
 
     def test_random_setup_is_seeded_and_respects_component_counts(self) -> None:
         first = GaiaState.initial(2, seed=19)
@@ -315,7 +320,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         snapshot = GaiaState.initial(3, seed=41).snapshot()
         setup = snapshot["setup"]
 
-        self.assertEqual(snapshot["ruleset"], "standard-v10")
+        self.assertEqual(snapshot["ruleset"], "standard-v11")
         self.assertEqual(setup["seed"], 41)
         self.assertEqual(setup["map"]["sector_count"], 10)
         self.assertEqual(len(setup["map"]["sectors"]), 10)
@@ -1295,6 +1300,92 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(built.owners[target], 0)
         self.assertEqual(built.gaiaformer_owner[target], -1)
         self.assertEqual(built.players[0].gaiaformers, 1)
+
+    def test_terrans_pi_converts_gaia_power_before_it_returns_to_bowl_two(self) -> None:
+        state = GaiaState.initial(
+            2,
+            faction_indices=(0, 2),
+            first_player=1,
+        )
+        pi_planet = next(
+            planet for planet, active in enumerate(state.active_planets) if active
+        )
+        owners = list(state.owners)
+        buildings = list(state.buildings)
+        owners[pi_planet] = 0
+        buildings[pi_planet] = Building.PLANETARY_INSTITUTE
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            credits=20,
+            ore=4,
+            knowledge=3,
+            qic=1,
+            bowl_two=1,
+            gaia_power=8,
+        )
+        state = replace(
+            state,
+            round_number=2,
+            player_to_move=1,
+            owners=tuple(owners),
+            buildings=tuple(int(building) for building in buildings),
+            players=tuple(players),
+        )
+
+        pending = state._gaia_phase()
+
+        self.assertEqual(pending.player_to_move, 0)
+        self.assertEqual(pending.pending_gaia_conversion_player, 0)
+        self.assertEqual(pending.pending_gaia_conversion_power, 8)
+        self.assertEqual(pending.players[0].gaia_power, 8)
+        self.assertEqual(pending.players[0].bowl_two, 1)
+        self.assertEqual(pending.snapshot()["phase"], "gaia_conversion")
+        self.assertEqual(
+            set(pending.legal_actions()),
+            {
+                TERRANS_GAIA_CREDIT_ACTION,
+                TERRANS_GAIA_ORE_ACTION,
+                TERRANS_GAIA_KNOWLEDGE_ACTION,
+                TERRANS_GAIA_QIC_ACTION,
+                TERRANS_GAIA_FINISH_ACTION,
+            },
+        )
+
+        converted = pending.apply(TERRANS_GAIA_ORE_ACTION)
+        self.assertEqual(converted.players[0].ore, 5)
+        self.assertEqual(converted.pending_gaia_conversion_power, 5)
+        self.assertEqual(converted.players[0].gaia_power, 8)
+        converted = converted.apply(TERRANS_GAIA_QIC_ACTION)
+        self.assertEqual(converted.players[0].qic, 2)
+        self.assertEqual(converted.pending_gaia_conversion_power, 1)
+        converted = converted.apply(TERRANS_GAIA_CREDIT_ACTION)
+        self.assertEqual(converted.players[0].credits, 21)
+        self.assertEqual(converted.pending_gaia_conversion_power, 0)
+        self.assertEqual(converted.legal_actions(), (TERRANS_GAIA_FINISH_ACTION,))
+
+        finished = converted.apply(TERRANS_GAIA_FINISH_ACTION)
+        self.assertEqual(finished.pending_gaia_conversion_player, -1)
+        self.assertEqual(finished.pending_gaia_conversion_power, 0)
+        self.assertEqual(finished.players[0].gaia_power, 0)
+        self.assertEqual(finished.players[0].bowl_two, 9)
+        self.assertEqual(finished.player_to_move, 1)
+        self.assertEqual(finished.snapshot()["phase"], "round")
+
+    def test_terrans_without_pi_returns_gaia_power_directly_to_bowl_two(self) -> None:
+        state = GaiaState.initial(
+            2,
+            faction_indices=(0, 2),
+            first_player=0,
+        )
+        players = list(state.players)
+        players[0] = replace(players[0], bowl_two=2, gaia_power=4)
+
+        resolved = replace(state, players=tuple(players))._gaia_phase()
+
+        self.assertEqual(resolved.pending_gaia_conversion_player, -1)
+        self.assertEqual(resolved.players[0].gaia_power, 0)
+        self.assertEqual(resolved.players[0].bowl_two, 6)
 
     def test_research_lab_requires_immediate_tech_choice(self) -> None:
         state = finish_starting_placement(GaiaState.initial(2))

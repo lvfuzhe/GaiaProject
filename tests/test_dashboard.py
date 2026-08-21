@@ -18,6 +18,8 @@ from gaiazero.game.gaia_state import (
     BRAINSTONE_ACTION,
     QIC_ACADEMY_ACTION,
     PowerAction,
+    TERRANS_GAIA_FINISH_ACTION,
+    TERRANS_GAIA_ORE_ACTION,
     Track,
 )
 from gaiazero.telemetry import JsonlTelemetry, build_history_index, read_events, read_game_trace
@@ -700,6 +702,64 @@ class DashboardTests(unittest.TestCase):
             and change["after"] == 1
             for change in spending_entry["effects"][0]["changes"]
         ))
+
+    def test_interactive_action_ledger_tracks_terrans_gaia_conversion(self) -> None:
+        state = GaiaState.initial(
+            2,
+            seed=7,
+            faction_indices=(0, 2),
+            first_player=0,
+        )
+        players = list(state.players)
+        players[0] = replace(players[0], ore=4, bowl_two=1, gaia_power=4)
+        state = replace(
+            state,
+            players=tuple(players),
+            round_number=2,
+            player_to_move=0,
+            pending_gaia_conversion_player=0,
+            pending_gaia_conversion_power=4,
+        )
+
+        converted = state.apply(TERRANS_GAIA_ORE_ACTION)
+        entry = _interactive_action_record(
+            state,
+            converted,
+            TERRANS_GAIA_ORE_ACTION,
+            move=1,
+            player=0,
+            role="human",
+        )
+        self.assertEqual(entry["phase"], "gaia_conversion")
+        self.assertEqual(entry["kind"], "terrans_gaia_ore")
+        self.assertEqual(
+            entry["effects"][0]["costs"],
+            [{"resource": "gaia_conversion_power", "amount": 3}],
+        )
+        self.assertIn({"resource": "ore", "amount": 1}, entry["effects"][0]["gains"])
+        self.assertTrue(any(
+            component["code"] == "TER-PI"
+            for component in entry["components"]
+        ))
+        self.assertTrue(any(
+            change["kind"] == "gaia_conversion_budget"
+            and change["before"] == 4
+            and change["after"] == 1
+            for change in entry["effects"][0]["changes"]
+        ))
+
+        finished = converted.apply(TERRANS_GAIA_FINISH_ACTION)
+        finish_entry = _interactive_action_record(
+            converted,
+            finished,
+            TERRANS_GAIA_FINISH_ACTION,
+            move=2,
+            player=0,
+            role="human",
+        )
+        self.assertEqual(finish_entry["kind"], "terrans_gaia_finish")
+        self.assertEqual(finished.players[0].gaia_power, 0)
+        self.assertEqual(finished.players[0].bowl_two, 5)
 
     def test_interactive_game_selects_starting_boosters_before_round_one(self) -> None:
         server = create_dashboard_server(self.metrics, port=0, quiet=True)

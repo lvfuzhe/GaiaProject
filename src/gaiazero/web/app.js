@@ -75,7 +75,7 @@ const SETUP_LABELS = {
   "power-action": "特殊行动：充能 4"
 };
 const FACTION_ABILITIES = {
-  Terrans: "盖亚区能量回到能量碗 II",
+  Terrans: "盖亚区能量回到 II 区；行星研究院可在盖亚阶段兑换资源",
   Lantids: "可在对手已殖民星球共存",
   Xenos: "额外起始矿场；建成行星研究院后联邦强度需求降为 6",
   Gleens: "殖民盖亚星球时以矿石替代 Q.I.C.",
@@ -2541,6 +2541,11 @@ const PLAY_ACTION_LABELS = {
   research: "推进科研轨",
   power: "执行能量行动",
   brainstone: "选择脑石（按 3 能量）",
+  terrans_gaia_credit: "Terrans 盖亚兑换：信用点",
+  terrans_gaia_ore: "Terrans 盖亚兑换：矿石",
+  terrans_gaia_knowledge: "Terrans 盖亚兑换：知识",
+  terrans_gaia_qic: "Terrans 盖亚兑换：Q.I.C.",
+  terrans_gaia_finish: "结束 Terrans 盖亚兑换",
   technology: "获取科技板块",
   federation: "组建联邦",
   qic_academy_action: "使用 Q.I.C. 学院行动",
@@ -2566,6 +2571,7 @@ const PLAY_LOG_RESOURCE_LABELS = {
   power: "能量",
   power_tokens: "能量标记",
   power_to_gaia: "移入盖亚区",
+  gaia_conversion_power: "盖亚兑换额度",
   federation_key: "绿色联邦标记",
 };
 
@@ -2622,6 +2628,9 @@ function renderPlayLogChange(change) {
   }
   if (change.kind === "brainstone_selection") {
     return change.after ? "已选择脑石按 3 点能量支付" : "已取消或完成脑石支付";
+  }
+  if (change.kind === "gaia_conversion_budget") {
+    return `盖亚兑换额度 ${change.before} → ${change.after}`;
   }
   if (change.kind === "counter") {
     return `${PLAY_LOG_COUNTER_LABELS[change.counter] || change.counter} ${change.before} → ${change.after}`;
@@ -2982,6 +2991,9 @@ function playPhaseLabel(snapshot) {
   if (snapshot.phase === "booster_selection") {
     return `选择助推 ${snapshot.booster_selection.step + 1}/${snapshot.booster_selection.total}`;
   }
+  if (snapshot.phase === "gaia_conversion") {
+    return `Terrans 盖亚兑换 · 剩余 ${snapshot.gaia_conversion?.remaining_power ?? 0}`;
+  }
   return `第 ${snapshot.round}/${snapshot.max_rounds} 轮`;
 }
 
@@ -3030,6 +3042,8 @@ function renderPlayActions(session) {
   } else if (humanTurn) {
     notice.textContent = session.state.phase === "booster_selection"
       ? `P${session.state.current_player} 由人工选择一块起始助推板块`
+      : session.state.phase === "gaia_conversion"
+      ? `P${session.state.current_player} 结算 Terrans 盖亚兑换：剩余 ${session.state.gaia_conversion?.remaining_power ?? 0} 点`
       : `P${session.state.current_player} 由人工操作：点击星图筛选目标，再选择合法动作`;
     notice.className = "play-turn-notice human";
   } else {

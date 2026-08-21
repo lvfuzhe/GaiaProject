@@ -39,6 +39,11 @@ from gaiazero.game.gaia_state import (
     STANDARD_TECH_COUNT,
     STANDARD_TECH_ACTION,
     TECH_OFFSET,
+    TERRANS_GAIA_CREDIT_ACTION,
+    TERRANS_GAIA_FINISH_ACTION,
+    TERRANS_GAIA_KNOWLEDGE_ACTION,
+    TERRANS_GAIA_ORE_ACTION,
+    TERRANS_GAIA_QIC_ACTION,
     UPGRADE_ACADEMY_OFFSET,
     UPGRADE_QIC_ACADEMY_OFFSET,
     UPGRADE_LAB_OFFSET,
@@ -695,6 +700,16 @@ def _interactive_action_snapshot(state: GaiaState, action: int) -> dict[str, Any
     advanced_action_tile: int | None = None
     if action == BRAINSTONE_ACTION:
         kind = "brainstone"
+    elif action == TERRANS_GAIA_CREDIT_ACTION:
+        kind = "terrans_gaia_credit"
+    elif action == TERRANS_GAIA_ORE_ACTION:
+        kind = "terrans_gaia_ore"
+    elif action == TERRANS_GAIA_KNOWLEDGE_ACTION:
+        kind = "terrans_gaia_knowledge"
+    elif action == TERRANS_GAIA_QIC_ACTION:
+        kind = "terrans_gaia_qic"
+    elif action == TERRANS_GAIA_FINISH_ACTION:
+        kind = "terrans_gaia_finish"
     elif BUILD_OFFSET <= action < GAIA_OFFSET:
         kind = "starting_placement" if state.is_starting_placement else "build"
         target = action - BUILD_OFFSET
@@ -786,6 +801,8 @@ def _interactive_phase(state: GaiaState) -> str:
         return "starting_placement"
     if state.is_booster_selection:
         return "booster_selection"
+    if state.pending_gaia_conversion_player >= 0:
+        return "gaia_conversion"
     if state.is_terminal:
         return "terminal"
     return "round"
@@ -824,6 +841,16 @@ def _interactive_action_components(
                 "Brainstone",
                 "TAK-BRAINSTONE",
                 relation=("selected" if action["kind"] == "brainstone" else "spent"),
+            )
+        )
+    if action["kind"].startswith("terrans_gaia_"):
+        components.append(
+            _component_ref(
+                "faction_ability",
+                0,
+                "Terrans planetary institute",
+                "TER-PI",
+                relation="uses",
             )
         )
     target = action.get("target")
@@ -1144,6 +1171,12 @@ def _interactive_action_costs(
             costs["knowledge"] = 4
     elif kind == "power":
         costs["power"] = state._power_action_cost(player, action["power_action"])
+    elif kind == "terrans_gaia_credit":
+        costs["gaia_conversion_power"] = 1
+    elif kind == "terrans_gaia_ore":
+        costs["gaia_conversion_power"] = 3
+    elif kind in ("terrans_gaia_knowledge", "terrans_gaia_qic"):
+        costs["gaia_conversion_power"] = 4
     elif kind == "federation":
         plan = state._federation_plan(player)
         if plan is not None and plan[1] > 0:
@@ -1192,6 +1225,16 @@ def _interactive_player_changes(
             "kind": "brainstone_selection",
             "before": before.brainstone_selected,
             "after": after.brainstone_selected,
+        })
+    if (
+        player == before.player_to_move
+        and before.pending_gaia_conversion_power
+        != after.pending_gaia_conversion_power
+    ):
+        changes.append({
+            "kind": "gaia_conversion_budget",
+            "before": before.pending_gaia_conversion_power,
+            "after": after.pending_gaia_conversion_power,
         })
     for counter in (
         "gaia_power",

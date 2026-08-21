@@ -99,7 +99,15 @@ class FactionSpec:
 
 
 FACTIONS: tuple[FactionSpec, ...] = (
-    FactionSpec("Terrans", Terrain.TERRA, Track.GAIA_PROJECT, (4, 4, 0), 0, "Gaia power returns to bowl II", gaia_to_bowl_two=True),
+    FactionSpec(
+        "Terrans",
+        Terrain.TERRA,
+        Track.GAIA_PROJECT,
+        (4, 4, 0),
+        0,
+        "Gaia power returns to bowl II; the planetary institute converts it to resources",
+        gaia_to_bowl_two=True,
+    ),
     FactionSpec("Lantids", Terrain.TERRA, None, (4, 0, 0), 0, "May coexist on colonized planets", starting_credits=13),
     FactionSpec("Xenos", Terrain.DESERT, Track.ARTIFICIAL_INTELLIGENCE, (2, 4, 0), 1, "Starts with a third mine; its PI lowers federation power to 6", starting_structures=3),
     FactionSpec("Gleens", Terrain.DESERT, Track.NAVIGATION, (2, 4, 0), 1, "Ore replaces Q.I.C. for Gaia colonization", starting_qic=0),
@@ -344,7 +352,12 @@ BOOSTER_RANGE_ACTION = BOOSTER_TERRAFORM_ACTION + 1
 PASS_BOOSTER_OFFSET = BOOSTER_RANGE_ACTION + 1
 PASS_FINAL_ACTION = PASS_BOOSTER_OFFSET + BOOSTER_COUNT
 BRAINSTONE_ACTION = PASS_FINAL_ACTION + 1
-ACTION_SIZE = BRAINSTONE_ACTION + 1
+TERRANS_GAIA_CREDIT_ACTION = BRAINSTONE_ACTION + 1
+TERRANS_GAIA_ORE_ACTION = TERRANS_GAIA_CREDIT_ACTION + 1
+TERRANS_GAIA_KNOWLEDGE_ACTION = TERRANS_GAIA_ORE_ACTION + 1
+TERRANS_GAIA_QIC_ACTION = TERRANS_GAIA_KNOWLEDGE_ACTION + 1
+TERRANS_GAIA_FINISH_ACTION = TERRANS_GAIA_QIC_ACTION + 1
+ACTION_SIZE = TERRANS_GAIA_FINISH_ACTION + 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -455,6 +468,8 @@ class GaiaState:
     pending_booster_terraform_player: int = -1
     pending_booster_range_player: int = -1
     brainstone_selected: bool = False
+    pending_gaia_conversion_player: int = -1
+    pending_gaia_conversion_power: int = 0
 
     @classmethod
     def initial(
@@ -673,6 +688,18 @@ class GaiaState:
         player = self.player_to_move
         info = self.players[player]
         faction = FACTIONS[info.faction]
+        if self.pending_gaia_conversion_player >= 0:
+            actions = [TERRANS_GAIA_FINISH_ACTION]
+            available = self.pending_gaia_conversion_power
+            if available >= 1 and info.credits < 30:
+                actions.append(TERRANS_GAIA_CREDIT_ACTION)
+            if available >= 3 and info.ore < 15:
+                actions.append(TERRANS_GAIA_ORE_ACTION)
+            if available >= 4 and info.knowledge < 15:
+                actions.append(TERRANS_GAIA_KNOWLEDGE_ACTION)
+            if available >= 4:
+                actions.append(TERRANS_GAIA_QIC_ACTION)
+            return tuple(actions)
         if self.is_starting_placement:
             home = FACTIONS[info.faction].home
             return tuple(
@@ -932,6 +959,8 @@ class GaiaState:
             raise ValueError("cannot act in a terminal state")
         if action not in self.legal_actions():
             raise ValueError(f"illegal action {action}: {self.describe_action(action)}")
+        if self.pending_gaia_conversion_player >= 0:
+            return self._apply_terrans_gaia_conversion(action)
         if action == BRAINSTONE_ACTION:
             return replace(self, brainstone_selected=True)
         if self.pending_advanced_tech >= 0:
@@ -1538,7 +1567,8 @@ class GaiaState:
 
     def _advance_turn(self) -> GaiaState:
         if (
-            self.pending_tech_player >= 0
+            self.pending_gaia_conversion_player >= 0
+            or self.pending_tech_player >= 0
             or self.pending_advanced_tech >= 0
             or self.pending_research_player >= 0
             or self.pending_power_terraform_player >= 0
@@ -1660,10 +1690,19 @@ class GaiaState:
 
     def _gaia_phase(self) -> GaiaState:
         players: list[PlayerState] = []
-        for info in self.players:
+        pending_player = -1
+        for player, info in enumerate(self.players):
             faction = FACTIONS[info.faction]
             if faction.gaia_to_bowl_two:
-                info = replace(info, bowl_two=info.bowl_two + info.gaia_power, gaia_power=0)
+                if info.gaia_power and self._has_pi(player):
+                    if pending_player < 0:
+                        pending_player = player
+                else:
+                    info = replace(
+                        info,
+                        bowl_two=info.bowl_two + info.gaia_power,
+                        gaia_power=0,
+                    )
             else:
                 info = replace(info, bowl_one=info.bowl_one + info.gaia_power, gaia_power=0)
             if info.brainstone_bowl == 4:
@@ -1676,7 +1715,57 @@ class GaiaState:
         for planet, owner in enumerate(self.gaiaformer_owner):
             if owner >= 0 and Terrain(terrains[planet]) == Terrain.TRANSDIM:
                 terrains[planet] = Terrain.GAIA
-        return replace(self, players=tuple(players), terrains=tuple(int(value) for value in terrains))
+        return replace(
+            self,
+            players=tuple(players),
+            terrains=tuple(int(value) for value in terrains),
+            player_to_move=(pending_player if pending_player >= 0 else self.first_player),
+            pending_gaia_conversion_player=pending_player,
+            pending_gaia_conversion_power=(
+                players[pending_player].gaia_power if pending_player >= 0 else 0
+            ),
+        )
+
+    def _apply_terrans_gaia_conversion(self, action: int) -> GaiaState:
+        player = self.pending_gaia_conversion_player
+        if player < 0 or player != self.player_to_move:
+            raise ValueError("no Terrans Gaia conversion is pending")
+        info = self.players[player]
+        if action == TERRANS_GAIA_FINISH_ACTION:
+            info = replace(
+                info,
+                bowl_two=info.bowl_two + info.gaia_power,
+                gaia_power=0,
+            )
+            return replace(
+                self,
+                players=self._replace_player(player, info),
+                pending_gaia_conversion_player=-1,
+                pending_gaia_conversion_power=0,
+            )._gaia_phase()
+
+        costs = {
+            TERRANS_GAIA_CREDIT_ACTION: 1,
+            TERRANS_GAIA_ORE_ACTION: 3,
+            TERRANS_GAIA_KNOWLEDGE_ACTION: 4,
+            TERRANS_GAIA_QIC_ACTION: 4,
+        }
+        cost = costs.get(action)
+        if cost is None or self.pending_gaia_conversion_power < cost:
+            raise ValueError("invalid Terrans Gaia conversion")
+        if action == TERRANS_GAIA_CREDIT_ACTION:
+            info = replace(info, credits=min(30, info.credits + 1))
+        elif action == TERRANS_GAIA_ORE_ACTION:
+            info = replace(info, ore=min(15, info.ore + 1))
+        elif action == TERRANS_GAIA_KNOWLEDGE_ACTION:
+            info = replace(info, knowledge=min(15, info.knowledge + 1))
+        else:
+            info = self._gain_qic(info, 1)
+        return replace(
+            self,
+            players=self._replace_player(player, info),
+            pending_gaia_conversion_power=self.pending_gaia_conversion_power - cost,
+        )
 
     def _advance_research(
         self,
@@ -2406,6 +2495,8 @@ class GaiaState:
         )
         values.extend(count / 3.0 for count in self.federation_tile_supply)
         values.extend((
+            float(self.pending_gaia_conversion_player >= 0),
+            self.pending_gaia_conversion_power / 15.0,
             float(self.pending_tech_player >= 0),
             float(self.pending_advanced_tech >= 0),
             float(self.pending_research_player >= 0),
@@ -2413,6 +2504,10 @@ class GaiaState:
             float(self.pending_booster_terraform_player >= 0),
             float(self.pending_booster_range_player >= 0),
         ))
+        values.extend(
+            float(self.pending_gaia_conversion_player == player)
+            for player in range(self.num_players)
+        )
         values.extend(
             float(self.pending_advanced_tech == tile)
             for tile in range(len(ADVANCED_TECH_TILES))
@@ -2560,6 +2655,16 @@ class GaiaState:
             return "pass"
         if action == BRAINSTONE_ACTION:
             return "select Brainstone as 3 power"
+        if action == TERRANS_GAIA_CREDIT_ACTION:
+            return "Terrans Gaia conversion: 1 power for 1 credit"
+        if action == TERRANS_GAIA_ORE_ACTION:
+            return "Terrans Gaia conversion: 3 power for 1 ore"
+        if action == TERRANS_GAIA_KNOWLEDGE_ACTION:
+            return "Terrans Gaia conversion: 4 power for 1 knowledge"
+        if action == TERRANS_GAIA_QIC_ACTION:
+            return "Terrans Gaia conversion: 4 power for 1 Q.I.C."
+        if action == TERRANS_GAIA_FINISH_ACTION:
+            return "finish Terrans Gaia conversion and move power to bowl II"
         return f"unknown action {action}"
 
     def render(self) -> str:
@@ -2573,9 +2678,20 @@ class GaiaState:
                 f"Starting booster selection {self.booster_selection_step}/{len(self.booster_selection_order)}"
             ]
             lines[0] += f" | player {self.player_to_move} to choose"
+        elif self.pending_gaia_conversion_player >= 0:
+            lines = [
+                f"Round {min(self.round_number, MAX_ROUNDS)}/{MAX_ROUNDS}"
+                f" | player {self.player_to_move} Terrans Gaia conversion"
+                f" | budget {self.pending_gaia_conversion_power}"
+            ]
         else:
             lines = [f"Round {min(self.round_number, MAX_ROUNDS)}/{MAX_ROUNDS}"]
-        if not self.is_terminal and not self.is_starting_placement and not self.is_booster_selection:
+        if (
+            not self.is_terminal
+            and not self.is_starting_placement
+            and not self.is_booster_selection
+            and self.pending_gaia_conversion_player < 0
+        ):
             scoring = ROUND_SCORING_TILES[
                 self.round_scoring_tiles[self.round_number - 1]
             ]
@@ -2601,7 +2717,7 @@ class GaiaState:
                 self.round_scoring_tiles[self.round_number - 1]
             ].key
         return {
-            "ruleset": "standard-v10",
+            "ruleset": "standard-v11",
             "round": max(0, min(self.round_number, MAX_ROUNDS)),
             "max_rounds": MAX_ROUNDS,
             "phase": (
@@ -2609,8 +2725,19 @@ class GaiaState:
                 if self.is_starting_placement
                 else "booster_selection"
                 if self.is_booster_selection
+                else "gaia_conversion"
+                if self.pending_gaia_conversion_player >= 0
                 else "terminal" if self.is_terminal else "round"
             ),
+            "gaia_conversion": {
+                "active": self.pending_gaia_conversion_player >= 0,
+                "player": (
+                    self.pending_gaia_conversion_player
+                    if self.pending_gaia_conversion_player >= 0
+                    else None
+                ),
+                "remaining_power": self.pending_gaia_conversion_power,
+            },
             "placement": {
                 "active": self.is_starting_placement,
                 "step": self.placement_step,
