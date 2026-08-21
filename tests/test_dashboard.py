@@ -17,6 +17,7 @@ from gaiazero.dashboard import (
 from gaiazero.game import GaiaState, MiniGaiaState
 from gaiazero.game.gaia_state import (
     BRAINSTONE_ACTION,
+    Building,
     QIC_ACADEMY_ACTION,
     PowerAction,
     TERRANS_GAIA_FINISH_ACTION,
@@ -89,6 +90,63 @@ class DashboardTests(unittest.TestCase):
             changes,
         )
 
+    def test_gleens_pi_history_identifies_special_federation_tile(self) -> None:
+        before = GaiaState.initial(
+            2,
+            faction_indices=(3, 0),
+            first_player=0,
+            seed=43,
+        )
+        planet = next(
+            index for index, active in enumerate(before.active_planets) if active
+        )
+        owners = [-1] * len(before.owners)
+        buildings = [Building.EMPTY] * len(before.buildings)
+        owners[planet] = 0
+        buildings[planet] = Building.TRADING_STATION
+        players = list(before.players)
+        players[0] = replace(
+            players[0],
+            credits=10,
+            ore=10,
+            knowledge=0,
+            vp=10,
+        )
+        before = replace(
+            before,
+            round_number=1,
+            placement_step=len(before.placement_order),
+            booster_selection_step=len(before.booster_selection_order),
+            player_to_move=0,
+            owners=tuple(owners),
+            buildings=tuple(int(building) for building in buildings),
+            players=tuple(players),
+            round_scoring_tiles=(3, 0, 1, 2, 4, 5),
+        )
+        action = before.upgrade_pi_action(planet)
+        after = before.apply(action)
+
+        record = _interactive_action_record(
+            before,
+            after,
+            action,
+            move=1,
+            player=0,
+            role="human",
+        )
+
+        self.assertIn("GLE-FED", [item["code"] for item in record["components"]])
+        self.assertIn("RND-04", [item["code"] for item in record["components"]])
+        changes = record["effects"][0]["changes"]
+        self.assertIn(
+            {
+                "kind": "counter",
+                "counter": "gleens_federation_tokens",
+                "before": 0,
+                "after": 1,
+            },
+            changes,
+        )
     @staticmethod
     def post_json(url: str, payload: dict[str, object]) -> tuple[int, dict[str, object]]:
         request = Request(

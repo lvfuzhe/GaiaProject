@@ -126,7 +126,15 @@ FACTIONS: tuple[FactionSpec, ...] = (
         "Starts with a third mine; its PI lowers federation power to 6 and produces Q.I.C. instead of a power token",
         starting_structures=3,
     ),
-    FactionSpec("Gleens", Terrain.DESERT, Track.NAVIGATION, (2, 4, 0), 1, "Ore replaces Q.I.C. for Gaia colonization", starting_qic=0),
+    FactionSpec(
+        "Gleens",
+        Terrain.DESERT,
+        Track.NAVIGATION,
+        (2, 4, 0),
+        1,
+        "Q.I.C. gains become ore until the Q.I.C. academy is built; Gaia colonization costs ore and grants 2 VP; the PI grants the Gleens federation tile",
+        starting_qic=0,
+    ),
     FactionSpec(
         "Taklons",
         Terrain.SWAMP,
@@ -1680,6 +1688,10 @@ class GaiaState:
         )
         qic = booster_qic + faction.income_qic
         power_tokens = faction.income_power_tokens
+
+        if faction.name == "Gleens" and not info.qic_academies:
+            ore += qic
+            qic = 0
 
         if institutes:
             if faction.name == "Xenos":

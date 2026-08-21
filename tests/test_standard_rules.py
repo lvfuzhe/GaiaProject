@@ -13,6 +13,7 @@ from gaiazero.game.gaia_state import (
     BOOSTER_LABELS,
     FEDERATION_OFFSET,
     FEDERATION_ACTION,
+    FEDERATION_TILES,
     FACTIONS,
     FINAL_SCORING_TILES,
     MAX_BUILDINGS,
@@ -1800,6 +1801,108 @@ class StandardGaiaRulesTests(unittest.TestCase):
         )
         built = gleens._apply_build(gaia)
         self.assertEqual(built.players[0].vp, 12)
+
+        qic_academy = replace(
+            gleens,
+            players=(replace(gleens.players[0], qic_academies=1), gleens.players[1]),
+        )
+        self.assertEqual(qic_academy._build_cost(0, gaia), (2, 2, 0))
+
+    def test_gleens_qic_conversion_stops_after_qic_academy(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(3, 0), first_player=0, seed=31)
+        )
+        info = replace(state.players[0], ore=5, qic=0)
+
+        converted = state._gain_qic(info, 2)
+        enabled = state._gain_qic(replace(info, qic_academies=1), 2)
+
+        self.assertEqual((converted.ore, converted.qic), (7, 0))
+        self.assertEqual((enabled.ore, enabled.qic), (5, 2))
+
+        boosters = [owner if owner != 0 else -1 for owner in state.booster_owner]
+        without_booster = replace(state, booster_owner=tuple(boosters))
+        base_income = without_booster._income_preview(0)
+        boosters[4] = 0
+        qic_booster = replace(state, booster_owner=tuple(boosters))
+        converted_income = qic_booster._income_preview(0)
+        self.assertEqual(converted_income["qic"], 0)
+        self.assertEqual(converted_income["ore"], base_income["ore"] + 1)
+
+        players = list(qic_booster.players)
+        players[0] = replace(players[0], qic_academies=1)
+        academy_income = replace(qic_booster, players=tuple(players))._income_preview(0)
+        self.assertEqual(academy_income["qic"], 1)
+        self.assertEqual(academy_income["ore"], base_income["ore"])
+
+    def test_gleens_pi_grants_special_federation_tile_and_income(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(3, 0), first_player=0, seed=37)
+        )
+        planet = state.starting_planets[0][0]
+        buildings = list(state.buildings)
+        buildings[planet] = Building.TRADING_STATION
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            credits=10,
+            ore=10,
+            knowledge=0,
+            vp=10,
+            federation_tokens=0,
+            federation_keys=0,
+            gleens_federation_tokens=0,
+        )
+        state = replace(
+            state,
+            player_to_move=0,
+            players=tuple(players),
+            buildings=tuple(int(building) for building in buildings),
+            round_scoring_tiles=(3, 0, 1, 2, 4, 5),
+        )
+        income_before = state._income_preview(0)
+        action = state.upgrade_pi_action(planet)
+
+        self.assertIn(action, state.legal_actions())
+        built = state.apply(action)
+        gleens = built.players[0]
+
+        self.assertEqual((gleens.credits, gleens.ore, gleens.knowledge), (6, 7, 1))
+        self.assertEqual(gleens.vp, 15)
+        self.assertEqual(gleens.federation_tokens, 1)
+        self.assertEqual(gleens.federation_keys, 1)
+        self.assertEqual(gleens.gleens_federation_tokens, 1)
+        self.assertFalse(built.federated[planet])
+        income = built._income_preview(0)
+        self.assertEqual(income["ore"], income_before["ore"] + 1)
+        self.assertEqual(income["power_tokens"], 0)
+        self.assertEqual(
+            income["power_charge"],
+            income_before["power_charge"] + 4,
+        )
+
+        players = list(built.players)
+        players[0] = replace(
+            players[0],
+            credits=0,
+            ore=0,
+            knowledge=0,
+            qic=3,
+            qic_academies=1,
+        )
+        repeat_state = replace(
+            built,
+            player_to_move=0,
+            players=tuple(players),
+            used_qic_actions=0,
+        )
+        repeat_action = QIC_FEDERATION_ACTION_OFFSET + len(FEDERATION_TILES)
+        self.assertIn(repeat_action, repeat_state.legal_actions())
+        repeated = repeat_state.apply(repeat_action).players[0]
+        self.assertEqual((repeated.credits, repeated.ore, repeated.knowledge), (2, 1, 1))
+        self.assertEqual(repeated.qic, 0)
+        self.assertEqual(repeated.federation_tokens, 1)
+        self.assertEqual(repeated.gleens_federation_tokens, 1)
 
     def test_all_seven_public_power_actions_use_bga_costs_and_rewards(self) -> None:
         state = finish_starting_placement(

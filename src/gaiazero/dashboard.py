@@ -860,6 +860,19 @@ def _interactive_action_components(
         components.append(
             _component_ref("planet", target, f"Planet {target}", f"P-{target}")
         )
+    if (
+        action["kind"] == "upgrade_pi"
+        and FACTIONS[state.players[player].faction].name == "Gleens"
+    ):
+        components.append(
+            _component_ref(
+                "gleens_federation",
+                0,
+                "Gleens federation tile: 2 credits, 1 ore, and 1 knowledge",
+                "GLE-FED",
+                relation="gained",
+            )
+        )
 
     booster = action.get("booster")
     if booster is not None and booster >= 0:
@@ -1032,15 +1045,26 @@ def _interactive_action_components(
         )
     elif action["kind"] == "qic_federation_action":
         tile = action.get("federation_tile", 0)
-        components.append(
-            _component_ref(
-                "federation",
-                tile,
-                "Repeat federation reward",
-                f"FED-{tile + 1:02d}",
-                relation="repeated",
+        if tile == len(FEDERATION_TILES):
+            components.append(
+                _component_ref(
+                    "gleens_federation",
+                    0,
+                    "Repeat Gleens federation reward",
+                    "GLE-FED",
+                    relation="repeated",
+                )
             )
-        )
+        else:
+            components.append(
+                _component_ref(
+                    "federation",
+                    tile,
+                    "Repeat federation reward",
+                    f"FED-{tile + 1:02d}",
+                    relation="repeated",
+                )
+            )
     elif action["kind"] == "qic_planet_types_action":
         components.append(
             _component_ref(
@@ -1105,6 +1129,11 @@ def _interactive_action_components(
             "upgrade_credits_academy",
         ):
             scored_kinds.add("big")
+            if (
+                action["kind"] == "upgrade_pi"
+                and FACTIONS[state.players[player].faction].name == "Gleens"
+            ):
+                scored_kinds.add("federation")
         elif action["kind"] in ("research", "technology"):
             scored_kinds.add("research")
             if track == Track.TERRAFORMING and state.players[player].tracks[track] == 4:
@@ -1243,6 +1272,7 @@ def _interactive_player_changes(
         "gaiaformers",
         "federation_tokens",
         "federation_keys",
+        "gleens_federation_tokens",
         "satellites",
     ):
         old_value = int(getattr(old, counter))

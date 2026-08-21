@@ -78,7 +78,7 @@ const FACTION_ABILITIES = {
   Terrans: "盖亚区能量回到 II 区；行星研究院可在盖亚阶段兑换资源",
   Lantids: "可在对手已殖民星球共存；建成行星研究院后，每次放置共存矿场获得 2 知识",
   Xenos: "额外起始矿场；行星研究院使联邦门槛降为 6，并以 1 Q.I.C. 替代 1 能量片收入",
-  Gleens: "殖民盖亚星球时以矿石替代 Q.I.C.",
+  Gleens: "建造右侧学院前，获得 Q.I.C. 时改为获得等量矿石；殖民盖亚星球以 1 矿石替代 1 Q.I.C. 并额外获得 2 VP；行星研究院立即获得专属联邦板块",
   Taklons: "脑石强化能量循环",
   Ambas: "行星研究院可与矿场交换",
   "Hadsch Hallas": "信用点可执行扩展自由行动",
@@ -2498,6 +2498,7 @@ function renderPersonalBoards(containerId, snapshot) {
                 <span>盖亚塑形者 <strong>${formatNumber(player.gaiaformers)}</strong></span>
                 <span>场上塑形者 <strong>${formatNumber(player.gaiaformers_on_board ?? planets.filter((planet) => planet.gaiaformer === player.id).length)}</strong></span>
                 <span>联邦 <strong>${formatNumber(player.federations)}</strong></span>
+                ${Number(player.gleens_federation_tokens || 0) > 0 ? `<span>GLE-FED <strong>${formatNumber(player.gleens_federation_tokens)}</strong></span>` : ""}
                 <span>联邦门槛 <strong>${formatNumber(player.federation_threshold ?? 7)}</strong></span>
                 <span>卫星 <strong>${formatNumber(player.satellites)}</strong></span>
               </div>
@@ -2632,6 +2633,7 @@ const PLAY_LOG_COUNTER_LABELS = {
   gaiaformers: "可用盖亚塑形者",
   federation_tokens: "联邦板块",
   federation_keys: "绿色联邦标记",
+  gleens_federation_tokens: "Gleens 专属联邦板块",
   satellites: "卫星",
 };
 
