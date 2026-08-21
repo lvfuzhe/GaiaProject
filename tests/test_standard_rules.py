@@ -1573,11 +1573,61 @@ class StandardGaiaRulesTests(unittest.TestCase):
             buildings=tuple(int(value) for value in buildings),
             federated=tuple(federated),
         )
+        self.assertEqual(state._federation_threshold(0), 7)
+        self.assertEqual(state.snapshot()["players"][0]["federation_threshold"], 7)
         self.assertIsNone(state._federation_plan(0))
 
         buildings[planets[0]] = Building.PLANETARY_INSTITUTE
         with_pi = replace(state, buildings=tuple(int(value) for value in buildings))
+        self.assertEqual(with_pi._federation_threshold(0), 6)
+        self.assertEqual(
+            with_pi.snapshot()["players"][0]["federation_threshold"],
+            6,
+        )
         self.assertIsNotNone(with_pi._federation_plan(0))
+
+    def test_xenos_pi_income_replaces_power_token_with_qic(self) -> None:
+        state = GaiaState.initial(
+            2,
+            faction_indices=(2, 0),
+            first_player=0,
+        )
+        pi_planet = next(
+            planet for planet, active in enumerate(state.active_planets) if active
+        )
+        owners = [-1] * len(state.owners)
+        buildings = [Building.EMPTY] * len(state.buildings)
+        owners[pi_planet] = 0
+        buildings[pi_planet] = Building.PLANETARY_INSTITUTE
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            credits=0,
+            ore=0,
+            knowledge=0,
+            qic=0,
+            bowl_one=2,
+            bowl_two=4,
+            bowl_three=0,
+        )
+        state = replace(
+            state,
+            players=tuple(players),
+            owners=tuple(owners),
+            buildings=tuple(int(building) for building in buildings),
+        )
+
+        income = state._income_preview(0)
+
+        self.assertEqual(income["qic"], 1)
+        self.assertEqual(income["power_tokens"], 0)
+        self.assertEqual(income["power_charge"], 4)
+        after = state._grant_income().players[0]
+        self.assertEqual(after.qic, 1)
+        self.assertEqual(
+            (after.bowl_one, after.bowl_two, after.bowl_three),
+            (0, 4, 2),
+        )
 
     def test_faction_specific_power_and_gaia_rules(self) -> None:
         nevlas = finish_starting_placement(

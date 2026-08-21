@@ -109,7 +109,15 @@ FACTIONS: tuple[FactionSpec, ...] = (
         gaia_to_bowl_two=True,
     ),
     FactionSpec("Lantids", Terrain.TERRA, None, (4, 0, 0), 0, "May coexist on colonized planets", starting_credits=13),
-    FactionSpec("Xenos", Terrain.DESERT, Track.ARTIFICIAL_INTELLIGENCE, (2, 4, 0), 1, "Starts with a third mine; its PI lowers federation power to 6", starting_structures=3),
+    FactionSpec(
+        "Xenos",
+        Terrain.DESERT,
+        Track.ARTIFICIAL_INTELLIGENCE,
+        (2, 4, 0),
+        1,
+        "Starts with a third mine; its PI lowers federation power to 6 and produces Q.I.C. instead of a power token",
+        starting_structures=3,
+    ),
     FactionSpec("Gleens", Terrain.DESERT, Track.NAVIGATION, (2, 4, 0), 1, "Ore replaces Q.I.C. for Gaia colonization", starting_qic=0),
     FactionSpec(
         "Taklons",
@@ -2110,11 +2118,7 @@ class GaiaState:
             for planet, owner in enumerate(self.owners)
             if owner == player and not self.federated[planet]
         ]
-        threshold = (
-            7 * (info.board_federations + 1)
-            if is_ivits
-            else 6 if faction.name == "Xenos" and self._has_pi(player) else 7
-        )
+        threshold = self._federation_threshold(player)
         available_satellites = info.qic if faction.name == "Ivits" else self._cycle_power(info)
         best: tuple[tuple[int, int, int], tuple[int, ...], int] | None = None
         minimum_size = 0 if existing else 1
@@ -2314,6 +2318,15 @@ class GaiaState:
 
     def _has_pi(self, player: int) -> bool:
         return self._building_count(player, Building.PLANETARY_INSTITUTE) > 0
+
+    def _federation_threshold(self, player: int) -> int:
+        info = self.players[player]
+        faction = FACTIONS[info.faction]
+        if faction.name == "Ivits":
+            return 7 * (info.board_federations + 1)
+        if faction.name == "Xenos" and self._has_pi(player):
+            return 6
+        return faction.federation_threshold
 
     def _has_nearby_opponent(self, player: int, planet: int) -> bool:
         return any(
@@ -2816,6 +2829,7 @@ class GaiaState:
                     "booster_action_used": info.used_booster_action,
                     "advanced_tech_actions_used": info.used_advanced_tech_actions,
                     "federations": info.federation_tokens,
+                    "federation_threshold": self._federation_threshold(player),
                     "board_federations": info.board_federations,
                     "federation_keys": info.federation_keys,
                     "gleens_federation_tokens": info.gleens_federation_tokens,

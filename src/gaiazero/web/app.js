@@ -77,7 +77,7 @@ const SETUP_LABELS = {
 const FACTION_ABILITIES = {
   Terrans: "盖亚区能量回到 II 区；行星研究院可在盖亚阶段兑换资源",
   Lantids: "可在对手已殖民星球共存",
-  Xenos: "额外起始矿场；建成行星研究院后联邦强度需求降为 6",
+  Xenos: "额外起始矿场；行星研究院使联邦门槛降为 6，并以 1 Q.I.C. 替代 1 能量片收入",
   Gleens: "殖民盖亚星球时以矿石替代 Q.I.C.",
   Taklons: "脑石强化能量循环",
   Ambas: "行星研究院可与矿场交换",
@@ -2447,6 +2447,7 @@ function renderPersonalBoards(containerId, snapshot) {
                 <span>盖亚塑形者 <strong>${formatNumber(player.gaiaformers)}</strong></span>
                 <span>场上塑形者 <strong>${formatNumber(player.gaiaformers_on_board ?? planets.filter((planet) => planet.gaiaformer === player.id).length)}</strong></span>
                 <span>联邦 <strong>${formatNumber(player.federations)}</strong></span>
+                <span>联邦门槛 <strong>${formatNumber(player.federation_threshold ?? 7)}</strong></span>
                 <span>卫星 <strong>${formatNumber(player.satellites)}</strong></span>
               </div>
             </div>
