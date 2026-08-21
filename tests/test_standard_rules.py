@@ -345,6 +345,65 @@ class StandardGaiaRulesTests(unittest.TestCase):
         )
         self.assertIn(reset.upgrade_pi_action(pi_planet), reset.legal_actions())
 
+    def test_hadsch_hallas_pi_converts_credits_without_ending_turn(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(6, 0), first_player=0)
+        )
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            credits=12,
+            ore=0,
+            knowledge=0,
+            qic=0,
+        )
+        state = replace(state, player_to_move=0, players=tuple(players))
+        conversions = (
+            TERRANS_GAIA_ORE_ACTION,
+            TERRANS_GAIA_KNOWLEDGE_ACTION,
+            TERRANS_GAIA_QIC_ACTION,
+        )
+        self.assertTrue(all(action not in state.legal_actions() for action in conversions))
+        income_without_pi = state._income_preview(0)
+
+        pi_planet = state.starting_planets[0][0]
+        buildings = list(state.buildings)
+        buildings[pi_planet] = Building.PLANETARY_INSTITUTE
+        state = replace(state, buildings=tuple(int(value) for value in buildings))
+        income_with_pi = state._income_preview(0)
+        self.assertEqual(
+            income_with_pi["power_tokens"],
+            income_without_pi["power_tokens"] + 1,
+        )
+        self.assertEqual(
+            income_with_pi["power_charge"],
+            income_without_pi["power_charge"] + 4,
+        )
+        self.assertTrue(all(action in state.legal_actions() for action in conversions))
+
+        ore = state.apply(TERRANS_GAIA_ORE_ACTION)
+        self.assertEqual(ore.player_to_move, 0)
+        self.assertEqual((ore.players[0].credits, ore.players[0].ore), (9, 1))
+        knowledge = ore.apply(TERRANS_GAIA_KNOWLEDGE_ACTION)
+        self.assertEqual(knowledge.player_to_move, 0)
+        self.assertEqual(
+            (knowledge.players[0].credits, knowledge.players[0].knowledge),
+            (5, 1),
+        )
+        qic = knowledge.apply(TERRANS_GAIA_QIC_ACTION)
+        self.assertEqual(qic.player_to_move, 0)
+        self.assertEqual((qic.players[0].credits, qic.players[0].qic), (1, 1))
+        self.assertEqual(qic.used_power_actions, 0)
+        self.assertTrue(all(action not in qic.legal_actions() for action in conversions))
+
+        capped = replace(
+            state,
+            players=(replace(state.players[0], ore=15, knowledge=15), state.players[1]),
+        )
+        self.assertNotIn(TERRANS_GAIA_ORE_ACTION, capped.legal_actions())
+        self.assertNotIn(TERRANS_GAIA_KNOWLEDGE_ACTION, capped.legal_actions())
+        self.assertIn(TERRANS_GAIA_QIC_ACTION, capped.legal_actions())
+
     def test_brainstone_counts_as_one_token_for_gaia_area(self) -> None:
         info = PlayerState(
             faction=4,

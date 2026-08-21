@@ -702,6 +702,7 @@ def _interactive_action_snapshot(state: GaiaState, action: int) -> dict[str, Any
     federation_tile: int | None = None
     power_action: int | None = None
     advanced_action_tile: int | None = None
+    hadsch_credit_actions = state._hadsch_hallas_credit_actions(state.player_to_move)
     if action == BRAINSTONE_ACTION:
         kind = "brainstone"
     elif action == TAKLONS_PASSIVE_BEFORE_ACTION:
@@ -711,11 +712,23 @@ def _interactive_action_snapshot(state: GaiaState, action: int) -> dict[str, Any
     elif action == TERRANS_GAIA_CREDIT_ACTION:
         kind = "terrans_gaia_credit"
     elif action == TERRANS_GAIA_ORE_ACTION:
-        kind = "terrans_gaia_ore"
+        kind = (
+            "hadsch_credit_ore"
+            if action in hadsch_credit_actions
+            else "terrans_gaia_ore"
+        )
     elif action == TERRANS_GAIA_KNOWLEDGE_ACTION:
-        kind = "terrans_gaia_knowledge"
+        kind = (
+            "hadsch_credit_knowledge"
+            if action in hadsch_credit_actions
+            else "terrans_gaia_knowledge"
+        )
     elif action == TERRANS_GAIA_QIC_ACTION:
-        kind = "terrans_gaia_qic"
+        kind = (
+            "hadsch_credit_qic"
+            if action in hadsch_credit_actions
+            else "terrans_gaia_qic"
+        )
     elif action == TERRANS_GAIA_FINISH_ACTION:
         kind = "terrans_gaia_finish"
     elif BUILD_OFFSET <= action < GAIA_OFFSET:
@@ -861,6 +874,16 @@ def _interactive_action_components(
                 0,
                 "Terrans planetary institute",
                 "TER-PI",
+                relation="uses",
+            )
+        )
+    if action["kind"].startswith("hadsch_credit_"):
+        components.append(
+            _component_ref(
+                "faction_ability",
+                6,
+                "Hadsch Hallas planetary institute credit conversion",
+                "HAD-PI-CREDIT",
                 relation="uses",
             )
         )
@@ -1231,6 +1254,10 @@ def _interactive_action_costs(
             costs["knowledge"] = 4
     elif kind == "power":
         costs["power"] = state._power_action_cost(player, action["power_action"])
+    elif kind == "hadsch_credit_ore":
+        costs["credits"] = 3
+    elif kind in ("hadsch_credit_knowledge", "hadsch_credit_qic"):
+        costs["credits"] = 4
     elif kind == "terrans_gaia_credit":
         costs["gaia_conversion_power"] = 1
     elif kind == "terrans_gaia_ore":

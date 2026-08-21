@@ -21,7 +21,9 @@ from gaiazero.game.gaia_state import (
     QIC_ACADEMY_ACTION,
     PowerAction,
     TERRANS_GAIA_FINISH_ACTION,
+    TERRANS_GAIA_KNOWLEDGE_ACTION,
     TERRANS_GAIA_ORE_ACTION,
+    TERRANS_GAIA_QIC_ACTION,
     Track,
 )
 from gaiazero.telemetry import JsonlTelemetry, build_history_index, read_events, read_game_trace
@@ -210,6 +212,44 @@ class DashboardTests(unittest.TestCase):
         )
         self.assertEqual(upgrade["kind"], "upgrade_credits_academy")
         self.assertIn("credit academy", upgrade["label"])
+
+    def test_hadsch_hallas_credit_conversion_is_detailed_in_history(self) -> None:
+        state = GaiaState.initial(2, faction_indices=(6, 0), first_player=0)
+        planet = next(index for index, active in enumerate(state.active_planets) if active)
+        owners = list(state.owners)
+        buildings = list(state.buildings)
+        owners[planet] = 0
+        buildings[planet] = Building.PLANETARY_INSTITUTE
+        players = list(state.players)
+        players[0] = replace(players[0], credits=8, knowledge=0)
+        state = replace(
+            state,
+            round_number=1,
+            placement_step=len(state.placement_order),
+            booster_selection_step=len(state.booster_selection_order),
+            player_to_move=0,
+            owners=tuple(owners),
+            buildings=tuple(int(building) for building in buildings),
+            players=tuple(players),
+        )
+
+        after = state.apply(TERRANS_GAIA_KNOWLEDGE_ACTION)
+        record = _interactive_action_record(
+            state,
+            after,
+            TERRANS_GAIA_KNOWLEDGE_ACTION,
+            move=1,
+            player=0,
+            role="human",
+        )
+
+        self.assertEqual(record["kind"], "hadsch_credit_knowledge")
+        self.assertIn("HAD-PI-CREDIT", [item["code"] for item in record["components"]])
+        self.assertEqual(record["effects"][0]["costs"], [{"resource": "credits", "amount": 4}])
+        self.assertEqual(record["effects"][0]["gains"], [{"resource": "knowledge", "amount": 1}])
+        self.assertEqual(after.player_to_move, 0)
+        self.assertIn(TERRANS_GAIA_ORE_ACTION, after.legal_actions())
+        self.assertIn(TERRANS_GAIA_QIC_ACTION, after.legal_actions())
 
     def test_http_api_and_static_dashboard(self) -> None:
         telemetry = JsonlTelemetry(self.metrics, run_id="http-test")

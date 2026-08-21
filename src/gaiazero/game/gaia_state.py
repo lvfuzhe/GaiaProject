@@ -82,6 +82,7 @@ class FactionSpec:
     qic_academy_credit_action: int = 0
     swapped_pi_academy: bool = False
     ambas_swap_pi: bool = False
+    credits_for_free_actions: bool = False
     starts_with_pi: bool = False
     places_last: bool = False
     federation_threshold: int = 7
@@ -147,7 +148,16 @@ FACTIONS: tuple[FactionSpec, ...] = (
         has_brainstone=True,
     ),
     FactionSpec("Ambas", Terrain.SWAMP, Track.NAVIGATION, (2, 4, 0), 2, "Once per round, swap the planetary institute with one of your mines", income_ore=1, ambas_swap_pi=True),
-    FactionSpec("Hadsch Hallas", Terrain.OXIDE, Track.ECONOMY, (2, 4, 0), 3, "Credits unlock expanded free actions", income_credits=3),
+    FactionSpec(
+        "Hadsch Hallas",
+        Terrain.OXIDE,
+        Track.ECONOMY,
+        (2, 4, 0),
+        3,
+        "The planetary institute allows credits to replace power in resource free actions",
+        income_credits=3,
+        credits_for_free_actions=True,
+    ),
     FactionSpec("Ivits", Terrain.OXIDE, None, (2, 4, 0), 3, "Places its starting planetary institute after all starting mines", starting_structures=1, starts_with_pi=True, places_last=True, income_qic=1),
     FactionSpec("Geodens", Terrain.VOLCANIC, Track.TERRAFORMING, (2, 4, 0), 4, "Knowledge for newly colonized planet types", knowledge_for_new_type=True),
     FactionSpec(
@@ -983,6 +993,7 @@ class GaiaState:
             )
         if self._brainstone_action_available(player):
             actions.append(BRAINSTONE_ACTION)
+        actions.extend(self._hadsch_hallas_credit_actions(player))
         return tuple(actions)
 
     def legal_action_mask(self) -> BoolArray:
@@ -1002,6 +1013,8 @@ class GaiaState:
             return self._apply_taklons_passive_charge(action)
         if action == BRAINSTONE_ACTION:
             return replace(self, brainstone_selected=True)
+        if action in self._hadsch_hallas_credit_actions(self.player_to_move):
+            return self._apply_hadsch_hallas_credit_action(action)
         if self.pending_advanced_tech >= 0:
             return self._apply_advanced_tech_cover(action - TECH_OFFSET)._advance_turn()
         if self.pending_research_player >= 0:
@@ -1825,6 +1838,33 @@ class GaiaState:
                 players[pending_player].gaia_power if pending_player >= 0 else 0
             ),
         )
+
+    def _hadsch_hallas_credit_actions(self, player: int) -> tuple[int, ...]:
+        info = self.players[player]
+        faction = FACTIONS[info.faction]
+        if not faction.credits_for_free_actions or not self._has_pi(player):
+            return ()
+        actions: list[int] = []
+        if info.credits >= 3 and info.ore < 15:
+            actions.append(TERRANS_GAIA_ORE_ACTION)
+        if info.credits >= 4 and info.knowledge < 15:
+            actions.append(TERRANS_GAIA_KNOWLEDGE_ACTION)
+        if info.credits >= 4:
+            actions.append(TERRANS_GAIA_QIC_ACTION)
+        return tuple(actions)
+
+    def _apply_hadsch_hallas_credit_action(self, action: int) -> GaiaState:
+        player = self.player_to_move
+        if action not in self._hadsch_hallas_credit_actions(player):
+            raise ValueError("Hadsch Hallas credit conversion is unavailable")
+        info = self.players[player]
+        if action == TERRANS_GAIA_ORE_ACTION:
+            info = replace(info.spend(credits=3), ore=info.ore + 1)
+        elif action == TERRANS_GAIA_KNOWLEDGE_ACTION:
+            info = replace(info.spend(credits=4), knowledge=info.knowledge + 1)
+        else:
+            info = self._gain_qic(info.spend(credits=4), 1)
+        return replace(self, players=self._replace_player(player, info))
 
     def _apply_terrans_gaia_conversion(self, action: int) -> GaiaState:
         player = self.pending_gaia_conversion_player
@@ -2901,6 +2941,12 @@ class GaiaState:
             return "Taklons PI: gain 1 power token before passive charge"
         if action == TAKLONS_PASSIVE_AFTER_ACTION:
             return "Taklons PI: gain 1 power token after passive charge"
+        if action in self._hadsch_hallas_credit_actions(self.player_to_move):
+            if action == TERRANS_GAIA_ORE_ACTION:
+                return "Hadsch Hallas PI free action: 3 credits for 1 ore"
+            if action == TERRANS_GAIA_KNOWLEDGE_ACTION:
+                return "Hadsch Hallas PI free action: 4 credits for 1 knowledge"
+            return "Hadsch Hallas PI free action: 4 credits for 1 Q.I.C."
         if action == TERRANS_GAIA_CREDIT_ACTION:
             return "Terrans Gaia conversion: 1 power for 1 credit"
         if action == TERRANS_GAIA_ORE_ACTION:
