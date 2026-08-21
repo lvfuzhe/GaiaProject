@@ -158,6 +158,74 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(gleens.tracks[Track.NAVIGATION], 1)
         self.assertEqual((gleens.ore, gleens.qic), (5, 0))
 
+    def test_geodens_pi_rewards_only_new_planet_types_colonized_after_it_is_built(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, seed=37, faction_indices=(8, 0), first_player=0)
+        )
+        targets_by_terrain: dict[Terrain, list[int]] = {}
+        for planet, active in enumerate(state.active_planets):
+            terrain = Terrain(state.terrains[planet])
+            if (
+                active
+                and state.owners[planet] == -1
+                and terrain not in (Terrain.VOLCANIC, Terrain.TRANSDIM)
+                and int(terrain) < 7
+            ):
+                targets_by_terrain.setdefault(terrain, []).append(planet)
+        repeated_terrain, repeated_targets = next(
+            (terrain, planets)
+            for terrain, planets in targets_by_terrain.items()
+            if len(planets) >= 2
+        )
+        different_target = next(
+            planets[0]
+            for terrain, planets in targets_by_terrain.items()
+            if terrain != repeated_terrain
+        )
+
+        tracks = list(state.players[0].tracks)
+        tracks[Track.TERRAFORMING] = 5
+        tracks[Track.NAVIGATION] = 5
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            credits=30,
+            ore=15,
+            knowledge=0,
+            qic=10,
+            tracks=tuple(tracks),
+        )
+        state = replace(state, player_to_move=0, players=tuple(players))
+
+        before_pi = state._apply_build(repeated_targets[0])
+        self.assertEqual(before_pi.players[0].knowledge, 0)
+        self.assertTrue(
+            before_pi.players[0].colonized_types & (1 << int(repeated_terrain))
+        )
+
+        pi_planet = next(
+            planet for planet, owner in enumerate(before_pi.owners) if owner == 0
+        )
+        buildings = list(before_pi.buildings)
+        buildings[pi_planet] = Building.PLANETARY_INSTITUTE
+        with_pi = replace(
+            before_pi,
+            buildings=tuple(int(building) for building in buildings),
+            booster_owner=tuple(-2 for _ in before_pi.booster_owner),
+        )
+        self.assertEqual(with_pi._income_preview(0)["power_tokens"], 1)
+        self.assertEqual(with_pi._income_preview(0)["power_charge"], 4)
+
+        repeated = with_pi._apply_build(repeated_targets[1])
+        self.assertEqual(repeated.players[0].knowledge, 0)
+
+        rewarded = repeated._apply_build(different_target)
+        self.assertEqual(rewarded.players[0].knowledge, 3)
+        self.assertTrue(
+            rewarded.players[0].colonized_types
+            & (1 << int(Terrain(rewarded.terrains[different_target])))
+        )
+
     def test_taklons_brainstone_starts_in_bowl_one_and_charges_normally(self) -> None:
         state = GaiaState.initial(
             2,

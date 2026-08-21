@@ -25,6 +25,7 @@ from gaiazero.game.gaia_state import (
     TERRANS_GAIA_KNOWLEDGE_ACTION,
     TERRANS_GAIA_ORE_ACTION,
     TERRANS_GAIA_QIC_ACTION,
+    Terrain,
     Track,
 )
 from gaiazero.telemetry import JsonlTelemetry, build_history_index, read_events, read_game_trace
@@ -291,6 +292,71 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(record["kind"], "ivits_space_station")
         self.assertTrue(component["code"].startswith("IVI-SS-"))
         self.assertEqual(len(after.snapshot()["space_stations"]), 1)
+
+    def test_geodens_pi_knowledge_reward_is_identified_in_history(self) -> None:
+        state = GaiaState.initial(
+            2,
+            seed=37,
+            faction_indices=(8, 0),
+            first_player=0,
+        )
+        pi_planet = next(
+            planet
+            for planet, active in enumerate(state.active_planets)
+            if active and Terrain(state.terrains[planet]) == Terrain.VOLCANIC
+        )
+        target = next(
+            planet
+            for planet, active in enumerate(state.active_planets)
+            if active
+            and Terrain(state.terrains[planet])
+            not in (Terrain.VOLCANIC, Terrain.TRANSDIM)
+            and state._distance(pi_planet, planet) <= 4
+        )
+        owners = [-1] * len(state.owners)
+        buildings = [Building.EMPTY] * len(state.buildings)
+        owners[pi_planet] = 0
+        buildings[pi_planet] = Building.PLANETARY_INSTITUTE
+        tracks = list(state.players[0].tracks)
+        tracks[Track.TERRAFORMING] = 5
+        tracks[Track.NAVIGATION] = 5
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            credits=30,
+            ore=15,
+            knowledge=0,
+            qic=10,
+            tracks=tuple(tracks),
+            colonized_types=1 << int(Terrain.VOLCANIC),
+        )
+        state = replace(
+            state,
+            round_number=1,
+            placement_step=len(state.placement_order),
+            booster_selection_step=len(state.booster_selection_order),
+            player_to_move=0,
+            owners=tuple(owners),
+            buildings=tuple(int(building) for building in buildings),
+            players=tuple(players),
+        )
+        action = state.build_action(target)
+        self.assertIn(action, state.legal_actions())
+
+        after = state.apply(action)
+        record = _interactive_action_record(
+            state,
+            after,
+            action,
+            move=1,
+            player=0,
+            role="human",
+        )
+        self.assertIn("GEO-PI", [item["code"] for item in record["components"]])
+        self.assertIn(
+            {"resource": "knowledge", "amount": 3},
+            record["effects"][0]["gains"],
+        )
 
     def test_http_api_and_static_dashboard(self) -> None:
         telemetry = JsonlTelemetry(self.metrics, run_id="http-test")

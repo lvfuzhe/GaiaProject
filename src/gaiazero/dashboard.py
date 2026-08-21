@@ -939,6 +939,20 @@ def _interactive_action_components(
             _component_ref("planet", target, f"Planet {target}", f"P-{target}")
         )
     if (
+        action["kind"] == "build"
+        and target is not None
+        and state._geodens_new_type_knowledge(player, target)
+    ):
+        components.append(
+            _component_ref(
+                "faction_ability",
+                8,
+                "Geodens planetary institute: first mine on this planet type gains 3 knowledge",
+                "GEO-PI",
+                relation="gained",
+            )
+        )
+    if (
         action["kind"] == "upgrade_pi"
         and FACTIONS[state.players[player].faction].name == "Gleens"
     ):

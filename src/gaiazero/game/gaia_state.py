@@ -161,7 +161,7 @@ FACTIONS: tuple[FactionSpec, ...] = (
         credits_for_free_actions=True,
     ),
     FactionSpec("Ivits", Terrain.OXIDE, None, (2, 4, 0), 3, "Places its planetary institute last; grows one federation with Q.I.C. satellites and can place one range-extending space station per round", starting_structures=1, starts_with_pi=True, places_last=True, income_qic=1),
-    FactionSpec("Geodens", Terrain.VOLCANIC, Track.TERRAFORMING, (2, 4, 0), 4, "Knowledge for newly colonized planet types", knowledge_for_new_type=True),
+    FactionSpec("Geodens", Terrain.VOLCANIC, Track.TERRAFORMING, (2, 4, 0), 4, "After building its planetary institute, the first mine built on each previously uncolonized planet type grants 3 knowledge", knowledge_for_new_type=True),
     FactionSpec(
         "Bal T'aks",
         Terrain.VOLCANIC,
@@ -1210,17 +1210,13 @@ class GaiaState:
                 info = replace(info, vp=info.vp + 2)
         if info.advanced_tech_tiles & (1 << 13):
             info = replace(info, vp=info.vp + 3)
-        new_type = (
-            not coexisting
-            and terrain not in (Terrain.TRANSDIM,)
-            and not info.colonized_types & (1 << int(terrain))
-        )
+        geodens_knowledge = self._geodens_new_type_knowledge(player, planet)
         if not coexisting:
             info = replace(
                 info,
                 colonized_types=info.colonized_types | (1 << int(terrain)),
             )
-        if new_type and FACTIONS[info.faction].knowledge_for_new_type and self._has_pi(player):
+        if geodens_knowledge:
             info = replace(info, knowledge=min(15, info.knowledge + 3))
         if coexisting and self._has_pi(player):
             info = replace(info, knowledge=min(15, info.knowledge + 2))
@@ -2602,6 +2598,16 @@ class GaiaState:
             and self.owners[planet] != player
             and Building(self.buildings[planet]) != Building.EMPTY
             and self.coexisting_mine_owner[planet] == -1
+        )
+
+    def _geodens_new_type_knowledge(self, player: int, planet: int) -> bool:
+        info = self.players[player]
+        terrain = Terrain(self.terrains[planet])
+        return (
+            FACTIONS[info.faction].knowledge_for_new_type
+            and self._has_pi(player)
+            and terrain != Terrain.TRANSDIM
+            and not info.colonized_types & (1 << int(terrain))
         )
 
     @staticmethod
