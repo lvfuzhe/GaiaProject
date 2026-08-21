@@ -728,7 +728,8 @@ def _interactive_action_snapshot(state: GaiaState, action: int) -> dict[str, Any
     elif UPGRADE_LAB_OFFSET <= action < UPGRADE_PI_OFFSET:
         kind, target = "upgrade_lab", action - UPGRADE_LAB_OFFSET
     elif UPGRADE_PI_OFFSET <= action < UPGRADE_ACADEMY_OFFSET:
-        kind, target = "upgrade_pi", action - UPGRADE_PI_OFFSET
+        target = action - UPGRADE_PI_OFFSET
+        kind = "ambas_swap" if state._is_ambas_swap_action(target) else "upgrade_pi"
     elif UPGRADE_ACADEMY_OFFSET <= action < UPGRADE_QIC_ACADEMY_OFFSET:
         kind, target = "upgrade_academy", action - UPGRADE_ACADEMY_OFFSET
     elif UPGRADE_QIC_ACADEMY_OFFSET <= action < RESEARCH_OFFSET:
@@ -860,6 +861,16 @@ def _interactive_action_components(
                 0,
                 "Terrans planetary institute",
                 "TER-PI",
+                relation="uses",
+            )
+        )
+    if action["kind"] == "ambas_swap":
+        components.append(
+            _component_ref(
+                "faction_ability",
+                5,
+                "Ambas planetary institute swap",
+                "AMB-PI-SWAP",
                 relation="uses",
             )
         )

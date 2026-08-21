@@ -81,6 +81,7 @@ class FactionSpec:
     knowledge_academy_knowledge_income: int = 2
     qic_academy_credit_action: int = 0
     swapped_pi_academy: bool = False
+    ambas_swap_pi: bool = False
     starts_with_pi: bool = False
     places_last: bool = False
     federation_threshold: int = 7
@@ -145,7 +146,7 @@ FACTIONS: tuple[FactionSpec, ...] = (
         passive_power_token=True,
         has_brainstone=True,
     ),
-    FactionSpec("Ambas", Terrain.SWAMP, Track.NAVIGATION, (2, 4, 0), 2, "Planetary institute can swap with a mine", income_ore=1),
+    FactionSpec("Ambas", Terrain.SWAMP, Track.NAVIGATION, (2, 4, 0), 2, "Once per round, swap the planetary institute with one of your mines", income_ore=1, ambas_swap_pi=True),
     FactionSpec("Hadsch Hallas", Terrain.OXIDE, Track.ECONOMY, (2, 4, 0), 3, "Credits unlock expanded free actions", income_credits=3),
     FactionSpec("Ivits", Terrain.OXIDE, None, (2, 4, 0), 3, "Places its starting planetary institute after all starting mines", starting_structures=1, starts_with_pi=True, places_last=True, income_qic=1),
     FactionSpec("Geodens", Terrain.VOLCANIC, Track.TERRAFORMING, (2, 4, 0), 4, "Knowledge for newly colonized planet types", knowledge_for_new_type=True),
@@ -411,6 +412,7 @@ class PlayerState:
     used_standard_tech_action: bool = False
     used_advanced_tech_actions: int = 0
     used_booster_action: bool = False
+    used_ambas_swap_action: bool = False
     federation_tokens: int = 0
     federation_keys: int = 0
     board_federations: int = 0
@@ -837,6 +839,13 @@ class GaiaState:
             if self.owners[planet] != player:
                 continue
             level = Building(self.buildings[planet])
+            if (
+                level == Building.MINE
+                and faction.ambas_swap_pi
+                and self._has_pi(player)
+                and not info.used_ambas_swap_action
+            ):
+                actions.append(self.upgrade_pi_action(planet))
             if level == Building.MINE and self._building_count(player, Building.TRADING_STATION) < 4:
                 credits = 3 if self._has_nearby_opponent(player, planet) else 6
                 if info.credits >= credits and info.ore >= 2:
@@ -1031,7 +1040,11 @@ class GaiaState:
         elif UPGRADE_LAB_OFFSET <= action < UPGRADE_PI_OFFSET:
             return self._apply_upgrade(action - UPGRADE_LAB_OFFSET, Building.RESEARCH_LAB)
         elif UPGRADE_PI_OFFSET <= action < UPGRADE_ACADEMY_OFFSET:
-            state = self._apply_upgrade(action - UPGRADE_PI_OFFSET, Building.PLANETARY_INSTITUTE)
+            planet = action - UPGRADE_PI_OFFSET
+            if self._is_ambas_swap_action(planet):
+                state = self._apply_ambas_swap(planet)
+            else:
+                state = self._apply_upgrade(planet, Building.PLANETARY_INSTITUTE)
         elif UPGRADE_ACADEMY_OFFSET <= action < RESEARCH_OFFSET:
             if action < UPGRADE_QIC_ACADEMY_OFFSET:
                 return self._apply_upgrade(
@@ -1210,6 +1223,40 @@ class GaiaState:
             self,
             players=self._replace_player(player, info),
             gaiaformer_owner=tuple(gaiaformers),
+        )
+
+    def _is_ambas_swap_action(self, planet: int, player: int | None = None) -> bool:
+        player = self.player_to_move if player is None else player
+        if not 0 <= planet < N:
+            return False
+        info = self.players[player]
+        faction = FACTIONS[info.faction]
+        return (
+            faction.ambas_swap_pi
+            and not info.used_ambas_swap_action
+            and self._has_pi(player)
+            and self.owners[planet] == player
+            and Building(self.buildings[planet]) == Building.MINE
+        )
+
+    def _apply_ambas_swap(self, mine_planet: int) -> GaiaState:
+        player = self.player_to_move
+        if not self._is_ambas_swap_action(mine_planet, player):
+            raise ValueError("Ambas PI swap is unavailable")
+        pi_planet = next(
+            planet
+            for planet, owner in enumerate(self.owners)
+            if owner == player
+            and Building(self.buildings[planet]) == Building.PLANETARY_INSTITUTE
+        )
+        buildings = list(self.buildings)
+        buildings[pi_planet] = Building.MINE
+        buildings[mine_planet] = Building.PLANETARY_INSTITUTE
+        info = replace(self.players[player], used_ambas_swap_action=True)
+        return replace(
+            self,
+            players=self._replace_player(player, info),
+            buildings=tuple(int(value) for value in buildings),
         )
 
     def _apply_upgrade(
@@ -1598,6 +1645,7 @@ class GaiaState:
                 used_standard_tech_action=False,
                 used_advanced_tech_actions=0,
                 used_booster_action=False,
+                used_ambas_swap_action=False,
             )
             for candidate in players
         )
@@ -2798,6 +2846,10 @@ class GaiaState:
         )
         for start, end, target in ranges:
             if start <= action < end:
+                if target == "planetary institute" and self._is_ambas_swap_action(
+                    action - start
+                ):
+                    return f"Ambas swap planetary institute with mine at planet {action - start}"
                 return f"upgrade planet {action - start} to {target}"
         if RESEARCH_OFFSET <= action < POWER_OFFSET:
             return f"research {Track(action - RESEARCH_OFFSET).name.lower()}"
@@ -3037,6 +3089,7 @@ class GaiaState:
                     "qic_academy_action_used": info.used_qic_academy_action,
                     "standard_tech_action_used": info.used_standard_tech_action,
                     "booster_action_used": info.used_booster_action,
+                    "ambas_swap_action_used": info.used_ambas_swap_action,
                     "advanced_tech_actions_used": info.used_advanced_tech_actions,
                     "federations": info.federation_tokens,
                     "federation_threshold": self._federation_threshold(player),

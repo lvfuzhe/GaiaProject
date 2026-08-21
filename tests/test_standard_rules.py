@@ -298,6 +298,53 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(resumed.player_to_move, 0)
         self.assertEqual(resumed.pending_tech_player, 0)
 
+    def test_ambas_pi_swap_is_once_per_round_and_has_no_upgrade_effects(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(5, 0), first_player=0)
+        )
+        pi_planet, mine_planet = state.starting_planets[0]
+        buildings = list(state.buildings)
+        buildings[pi_planet] = Building.PLANETARY_INSTITUTE
+        federated = list(state.federated)
+        federated[pi_planet] = True
+        federated[mine_planet] = True
+        state = replace(
+            state,
+            player_to_move=0,
+            buildings=tuple(int(value) for value in buildings),
+            federated=tuple(federated),
+        )
+
+        swap = state.upgrade_pi_action(mine_planet)
+        self.assertIn(swap, state.legal_actions())
+        self.assertIn("Ambas swap", state.describe_action(swap))
+        before = state.players[0]
+        income_before = state._income_preview(0)
+        swapped = state.apply(swap)
+        after = swapped.players[0]
+
+        self.assertEqual(swapped.buildings[pi_planet], Building.MINE)
+        self.assertEqual(swapped.buildings[mine_planet], Building.PLANETARY_INSTITUTE)
+        self.assertTrue(swapped.federated[pi_planet])
+        self.assertTrue(swapped.federated[mine_planet])
+        self.assertTrue(after.used_ambas_swap_action)
+        self.assertEqual(
+            (after.credits, after.ore, after.knowledge, after.vp),
+            (before.credits, before.ore, before.knowledge, before.vp),
+        )
+        self.assertEqual(swapped._income_preview(0), income_before)
+        self.assertNotIn(
+            swap,
+            replace(swapped, player_to_move=0).legal_actions(),
+        )
+
+        reset = replace(
+            swapped,
+            player_to_move=0,
+            players=(replace(after, used_ambas_swap_action=False), swapped.players[1]),
+        )
+        self.assertIn(reset.upgrade_pi_action(pi_planet), reset.legal_actions())
+
     def test_brainstone_counts_as_one_token_for_gaia_area(self) -> None:
         info = PlayerState(
             faction=4,
