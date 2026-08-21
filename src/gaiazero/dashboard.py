@@ -15,6 +15,7 @@ import numpy as np
 from gaiazero.game import GaiaHeuristicEvaluator, GaiaState
 from gaiazero.game.gaia_state import (
     ADVANCED_TECH_ACTION_OFFSET,
+    BAL_TAKS_GAIAFORMER_QIC_ACTION,
     BRAINSTONE_ACTION,
     BOOSTER_LABELS,
     BOOSTER_RANGE_ACTION,
@@ -25,6 +26,7 @@ from gaiazero.game.gaia_state import (
     FEDERATION_TILES,
     FEDERATION_OFFSET,
     IVITS_SPACE_STATION_OFFSET,
+    IVITS_SPACE_STATION_LIMIT,
     QIC_ACADEMY_ACTION,
     QIC_FEDERATION_ACTION_OFFSET,
     QIC_PLANET_TYPES_ACTION,
@@ -709,11 +711,13 @@ def _interactive_action_snapshot(state: GaiaState, action: int) -> dict[str, Any
     hadsch_credit_actions = state._hadsch_hallas_credit_actions(state.player_to_move)
     if action == BRAINSTONE_ACTION:
         kind = "brainstone"
+    elif action == BAL_TAKS_GAIAFORMER_QIC_ACTION:
+        kind = "bal_taks_gaiaformer_qic"
     elif action == TAKLONS_PASSIVE_BEFORE_ACTION:
         kind = "taklons_passive_before"
     elif action == TAKLONS_PASSIVE_AFTER_ACTION:
         kind = "taklons_passive_after"
-    elif IVITS_SPACE_STATION_OFFSET <= action < state.action_size:
+    elif IVITS_SPACE_STATION_OFFSET <= action < IVITS_SPACE_STATION_LIMIT:
         kind = "ivits_space_station"
         space_station_slot = action - IVITS_SPACE_STATION_OFFSET
         board_spaces = state._board_spaces()
@@ -897,6 +901,16 @@ def _interactive_action_components(
                 6,
                 "Hadsch Hallas planetary institute credit conversion",
                 "HAD-PI-CREDIT",
+                relation="uses",
+            )
+        )
+    if action["kind"] == "bal_taks_gaiaformer_qic":
+        components.append(
+            _component_ref(
+                "faction_ability",
+                9,
+                "Bal T'aks Gaiaformer conversion",
+                "BAL-GF-QIC",
                 relation="uses",
             )
         )
@@ -1298,6 +1312,8 @@ def _interactive_action_costs(
         costs["credits"] = 3
     elif kind in ("hadsch_credit_knowledge", "hadsch_credit_qic"):
         costs["credits"] = 4
+    elif kind == "bal_taks_gaiaformer_qic":
+        costs["gaiaformers"] = 1
     elif kind == "terrans_gaia_credit":
         costs["gaia_conversion_power"] = 1
     elif kind == "terrans_gaia_ore":
@@ -1366,6 +1382,7 @@ def _interactive_player_changes(
     for counter in (
         "gaia_power",
         "gaiaformers",
+        "gaiaformers_in_gaia",
         "federation_tokens",
         "federation_keys",
         "gleens_federation_tokens",

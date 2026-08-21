@@ -84,7 +84,7 @@ const FACTION_ABILITIES = {
   "Hadsch Hallas": "起始经济科研并额外获得 3 信用点收入；建成行星研究院后，可用信用点按能量自由行动费率兑换矿石、知识和 Q.I.C.",
   Ivits: "最后放置行星研究院；仅扩建一个联邦，卫星消耗 Q.I.C.；每轮可放置 1 个空间站",
   Geodens: "起始位于地形改造 1；建成行星研究院后，每种此前未殖民的星球类型首次建矿获得 3 知识，研究院建成前的类型不追溯",
-  "Bal T'aks": "盖亚塑形者可转换为 Q.I.C.",
+  "Bal T'aks": "建成行星研究院前不能推进航行轨；可将可用盖亚塑形者移入盖亚区换取 1 Q.I.C.，下一盖亚阶段归还；研究院建成后解锁航行轨；右侧学院提供 4 信用点行动",
   Firaks: "可降级研究所并推进科研",
   Bescods: "最低等级科研轨可同步推进",
   Nevlas: "能量碗 III 的能量可双倍计算",
@@ -2534,6 +2534,7 @@ function renderPersonalBoards(containerId, snapshot) {
               <div class="personal-board-counters">
                 <span>盖亚塑形者 <strong>${formatNumber(player.gaiaformers)}</strong></span>
                 <span>场上塑形者 <strong>${formatNumber(player.gaiaformers_on_board ?? planets.filter((planet) => planet.gaiaformer === player.id).length)}</strong></span>
+                ${Number(player.gaiaformers_in_gaia || 0) > 0 ? `<span>盖亚区塑形者 <strong>${formatNumber(player.gaiaformers_in_gaia)}</strong></span>` : ""}
                 <span>联邦 <strong>${formatNumber(player.federations)}</strong></span>
                 ${Number(player.gleens_federation_tokens || 0) > 0 ? `<span>GLE-FED <strong>${formatNumber(player.gleens_federation_tokens)}</strong></span>` : ""}
                 <span>联邦门槛 <strong>${formatNumber(player.federation_threshold ?? 7)}</strong></span>
@@ -2636,6 +2637,7 @@ const PLAY_ACTION_LABELS = {
   taklons_passive_before: "Taklons 研究院：先获得能量片，再被动充能",
   taklons_passive_after: "Taklons 研究院：先被动充能，再获得能量片",
   ivits_space_station: "Ivits：放置空间站",
+  bal_taks_gaiaformer_qic: "Bal T'aks：盖亚塑形者兑换 Q.I.C.",
   terrans_gaia_credit: "Terrans 盖亚兑换：信用点",
   terrans_gaia_ore: "Terrans 盖亚兑换：矿石",
   terrans_gaia_knowledge: "Terrans 盖亚兑换：知识",
@@ -2670,12 +2672,14 @@ const PLAY_LOG_RESOURCE_LABELS = {
   power_tokens: "能量标记",
   power_to_gaia: "移入盖亚区",
   gaia_conversion_power: "盖亚兑换额度",
+  gaiaformers: "盖亚塑形者",
   federation_key: "绿色联邦标记",
 };
 
 const PLAY_LOG_COUNTER_LABELS = {
   gaia_power: "盖亚区能量",
   gaiaformers: "可用盖亚塑形者",
+  gaiaformers_in_gaia: "盖亚区塑形者",
   federation_tokens: "联邦板块",
   federation_keys: "绿色联邦标记",
   gleens_federation_tokens: "Gleens 专属联邦板块",

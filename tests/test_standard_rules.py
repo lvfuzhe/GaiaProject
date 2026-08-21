@@ -7,6 +7,7 @@ from gaiazero.game.gaia_state import (
     ACTION_SIZE,
     ADVANCED_TECH_ACTION_OFFSET,
     ADVANCED_TECH_TILES,
+    BAL_TAKS_GAIAFORMER_QIC_ACTION,
     BRAINSTONE_ACTION,
     BOOSTER_RANGE_ACTION,
     BOOSTER_TERRAFORM_ACTION,
@@ -76,7 +77,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(sum(len(planets) for planets in state.starting_planets), 0)
         self.assertEqual(state.round_number, 0)
         self.assertTrue(state.is_starting_placement)
-        self.assertEqual(state.snapshot()["ruleset"], "standard-v13")
+        self.assertEqual(state.snapshot()["ruleset"], "standard-v14")
 
     def test_random_setup_is_seeded_and_respects_component_counts(self) -> None:
         first = GaiaState.initial(2, seed=19)
@@ -111,6 +112,77 @@ class StandardGaiaRulesTests(unittest.TestCase):
         catalog = state.snapshot()["setup"]["faction_catalog"]
         self.assertEqual(next(f["starting_qic"] for f in catalog if f["name"] == "Itars"), 1)
         self.assertEqual(next(f["starting_qic"] for f in catalog if f["name"] == "Bal T'aks"), 0)
+
+    def test_bal_taks_starting_state_and_navigation_lock_match_bga(self) -> None:
+        initial = GaiaState.initial(2, faction_indices=(9, 0), first_player=0)
+        income_planet = next(
+            planet for planet, active in enumerate(initial.active_planets) if active
+        )
+        income_owners = list(initial.owners)
+        income_buildings = list(initial.buildings)
+        income_owners[income_planet] = 0
+        income_buildings[income_planet] = Building.PLANETARY_INSTITUTE
+        income_state = replace(
+            initial,
+            owners=tuple(income_owners),
+            buildings=tuple(int(value) for value in income_buildings),
+        )
+        income = income_state._income_preview(0)
+        self.assertEqual(income["power_tokens"], 1)
+        self.assertEqual(income["power_charge"], 4)
+
+        state = finish_starting_placement(initial)
+        bal_taks = state.players[0]
+        self.assertEqual(
+            (bal_taks.bowl_one, bal_taks.bowl_two, bal_taks.bowl_three),
+            (2, 2, 0),
+        )
+        self.assertEqual(bal_taks.qic, 0)
+        self.assertEqual(bal_taks.tracks[Track.GAIA_PROJECT], 1)
+        self.assertEqual(bal_taks.gaiaformers, 1)
+
+        players = list(state.players)
+        players[0] = replace(players[0], knowledge=4)
+        state = replace(state, players=tuple(players), player_to_move=0)
+        navigation_action = state.research_action(Track.NAVIGATION)
+        self.assertNotIn(navigation_action, state.legal_actions())
+
+        tech_state = replace(state, pending_tech_player=0)
+        navigation_tech_action = tech_state.tech_action(Track.NAVIGATION)
+        self.assertIn(navigation_tech_action, tech_state.legal_actions())
+        navigation_tile = tech_state.standard_tech_tiles[Track.NAVIGATION]
+        claimed = tech_state.apply(navigation_tech_action)
+        self.assertTrue(claimed.players[0].tech_tiles & (1 << navigation_tile))
+        self.assertEqual(claimed.players[0].tracks[Track.NAVIGATION], 0)
+
+        pi_planet = state.starting_planets[0][0]
+        buildings = list(state.buildings)
+        buildings[pi_planet] = Building.PLANETARY_INSTITUTE
+        pi_state = replace(state, buildings=tuple(int(value) for value in buildings))
+        self.assertIn(navigation_action, pi_state.legal_actions())
+        advanced = pi_state.apply(navigation_action)
+        self.assertEqual(advanced.players[0].tracks[Track.NAVIGATION], 1)
+        self.assertEqual(advanced.players[0].qic, 1)
+
+    def test_bal_taks_gaiaformer_conversion_is_free_and_returns_next_gaia_phase(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(9, 0), first_player=0)
+        )
+        state = replace(state, player_to_move=0)
+        self.assertIn(BAL_TAKS_GAIAFORMER_QIC_ACTION, state.legal_actions())
+
+        converted = state.apply(BAL_TAKS_GAIAFORMER_QIC_ACTION)
+        self.assertEqual(converted.player_to_move, 0)
+        self.assertEqual(converted.players[0].qic, 1)
+        self.assertEqual(converted.players[0].gaiaformers, 0)
+        self.assertEqual(converted.players[0].gaiaformers_in_gaia, 1)
+        self.assertNotIn(BAL_TAKS_GAIAFORMER_QIC_ACTION, converted.legal_actions())
+        self.assertEqual(converted.snapshot()["players"][0]["gaiaformers_in_gaia"], 1)
+
+        returned = converted._gaia_phase()
+        self.assertEqual(returned.players[0].gaiaformers, 1)
+        self.assertEqual(returned.players[0].gaiaformers_in_gaia, 0)
+        self.assertEqual(returned.players[0].qic, 1)
 
     def test_ambas_and_ivits_use_default_starting_power(self) -> None:
         state = GaiaState.initial(
@@ -835,7 +907,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         snapshot = GaiaState.initial(3, seed=41).snapshot()
         setup = snapshot["setup"]
 
-        self.assertEqual(snapshot["ruleset"], "standard-v13")
+        self.assertEqual(snapshot["ruleset"], "standard-v14")
         self.assertEqual(setup["seed"], 41)
         self.assertEqual(setup["map"]["sector_count"], 10)
         self.assertEqual(len(setup["map"]["sectors"]), 10)
@@ -870,6 +942,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertTrue(all(isinstance(player["colonized_types"], int) for player in snapshot["players"]))
         for player in snapshot["players"]:
             self.assertIsInstance(player["gaiaformers_on_board"], int)
+            self.assertIsInstance(player["gaiaformers_in_gaia"], int)
             for building, maximum in MAX_BUILDINGS.items():
                 inventory = player["structures"][building.name.lower()]
                 self.assertEqual(inventory["built"] + inventory["supply"], maximum)

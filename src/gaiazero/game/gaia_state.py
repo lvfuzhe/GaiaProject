@@ -168,7 +168,7 @@ FACTIONS: tuple[FactionSpec, ...] = (
         Track.GAIA_PROJECT,
         (2, 2, 0),
         4,
-        "Gaiaformers can be converted to Q.I.C.",
+        "Cannot advance Navigation until its planetary institute is built; as a free action, move an available Gaiaformer to the Gaia area to gain 1 Q.I.C., returning it in the next Gaia phase",
         starting_qic=0,
         qic_academy_credit_action=4,
     ),
@@ -397,7 +397,9 @@ TERRANS_GAIA_FINISH_ACTION = TERRANS_GAIA_QIC_ACTION + 1
 TAKLONS_PASSIVE_BEFORE_ACTION = TERRANS_GAIA_FINISH_ACTION + 1
 TAKLONS_PASSIVE_AFTER_ACTION = TAKLONS_PASSIVE_BEFORE_ACTION + 1
 IVITS_SPACE_STATION_OFFSET = TAKLONS_PASSIVE_AFTER_ACTION + 1
-ACTION_SIZE = IVITS_SPACE_STATION_OFFSET + MAX_BOARD_SPACES
+IVITS_SPACE_STATION_LIMIT = IVITS_SPACE_STATION_OFFSET + MAX_BOARD_SPACES
+BAL_TAKS_GAIAFORMER_QIC_ACTION = IVITS_SPACE_STATION_LIMIT
+ACTION_SIZE = BAL_TAKS_GAIAFORMER_QIC_ACTION + 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -415,6 +417,7 @@ class PlayerState:
     brainstone_bowl: int = 0
     gaia_power: int = 0
     gaiaformers: int = 0
+    gaiaformers_in_gaia: int = 0
     tracks: tuple[int, ...] = (0, 0, 0, 0, 0, 0)
     tech_tiles: int = 0
     advanced_tech_tiles: int = 0
@@ -1017,6 +1020,8 @@ class GaiaState:
                 for space in range(len(self._board_spaces()))
                 if self._can_place_ivits_space_station(player, space)
             )
+        if faction.name == "Bal T'aks" and info.gaiaformers > 0:
+            actions.append(BAL_TAKS_GAIAFORMER_QIC_ACTION)
         return tuple(actions)
 
     def legal_action_mask(self) -> BoolArray:
@@ -1038,6 +1043,8 @@ class GaiaState:
             return replace(self, brainstone_selected=True)
         if action in self._hadsch_hallas_credit_actions(self.player_to_move):
             return self._apply_hadsch_hallas_credit_action(action)
+        if action == BAL_TAKS_GAIAFORMER_QIC_ACTION:
+            return self._apply_bal_taks_gaiaformer_qic_action()
         if self.pending_advanced_tech >= 0:
             return self._apply_advanced_tech_cover(action - TECH_OFFSET)._advance_turn()
         if self.pending_research_player >= 0:
@@ -1120,7 +1127,7 @@ class GaiaState:
                 state = self._apply_booster_range_action()
             else:
                 state = self._apply_federation(action - FEDERATION_OFFSET)
-        elif IVITS_SPACE_STATION_OFFSET <= action < ACTION_SIZE:
+        elif IVITS_SPACE_STATION_OFFSET <= action < IVITS_SPACE_STATION_LIMIT:
             state = self._apply_ivits_space_station(
                 action - IVITS_SPACE_STATION_OFFSET
             )
@@ -1879,6 +1886,12 @@ class GaiaState:
         pending_player = -1
         for player, info in enumerate(self.players):
             faction = FACTIONS[info.faction]
+            if faction.name == "Bal T'aks" and info.gaiaformers_in_gaia:
+                info = replace(
+                    info,
+                    gaiaformers=info.gaiaformers + info.gaiaformers_in_gaia,
+                    gaiaformers_in_gaia=0,
+                )
             if faction.gaia_to_bowl_two:
                 if info.gaia_power and self._has_pi(player):
                     if pending_player < 0:
@@ -1937,6 +1950,18 @@ class GaiaState:
             info = replace(info.spend(credits=4), knowledge=info.knowledge + 1)
         else:
             info = self._gain_qic(info.spend(credits=4), 1)
+        return replace(self, players=self._replace_player(player, info))
+
+    def _apply_bal_taks_gaiaformer_qic_action(self) -> GaiaState:
+        player = self.player_to_move
+        info = self.players[player]
+        if FACTIONS[info.faction].name != "Bal T'aks" or info.gaiaformers < 1:
+            raise ValueError("Bal T'aks Gaiaformer conversion is unavailable")
+        info = replace(
+            self._gain_qic(info, 1),
+            gaiaformers=info.gaiaformers - 1,
+            gaiaformers_in_gaia=info.gaiaformers_in_gaia + 1,
+        )
         return replace(self, players=self._replace_player(player, info))
 
     def _apply_terrans_gaia_conversion(self, action: int) -> GaiaState:
@@ -2924,6 +2949,7 @@ class GaiaState:
                 info.bowl_three / 15.0,
                 info.gaia_power / 15.0,
                 info.gaiaformers / 3.0,
+                info.gaiaformers_in_gaia / 3.0,
                 info.federation_tokens / 6.0,
                 info.federation_keys / 3.0,
                 info.gleens_federation_tokens,
@@ -3072,13 +3098,15 @@ class GaiaState:
             return "Taklons PI: gain 1 power token before passive charge"
         if action == TAKLONS_PASSIVE_AFTER_ACTION:
             return "Taklons PI: gain 1 power token after passive charge"
-        if IVITS_SPACE_STATION_OFFSET <= action < ACTION_SIZE:
+        if IVITS_SPACE_STATION_OFFSET <= action < IVITS_SPACE_STATION_LIMIT:
             space = action - IVITS_SPACE_STATION_OFFSET
             board_spaces = self._board_spaces()
             if space < len(board_spaces):
                 q, r = board_spaces[space]
                 return f"Ivits PI special action: place space station at ({q}, {r})"
             return f"Ivits PI special action: unavailable board space {space}"
+        if action == BAL_TAKS_GAIAFORMER_QIC_ACTION:
+            return "Bal T'aks free action: move 1 Gaiaformer to the Gaia area for 1 Q.I.C."
         if action in self._hadsch_hallas_credit_actions(self.player_to_move):
             if action == TERRANS_GAIA_ORE_ACTION:
                 return "Hadsch Hallas PI free action: 3 credits for 1 ore"
@@ -3140,7 +3168,7 @@ class GaiaState:
                 f"P{player} {FACTIONS[info.faction].name} C{info.credits} O{info.ore} K{info.knowledge} "
                 f"Q{info.qic} VP{info.vp} power={info.bowl_one}/{info.bowl_two}/{info.bowl_three} "
                 f"brainstone={info.brainstone_bowl or '-'} tracks={info.tracks} "
-                f"fed={info.federation_tokens}"
+                f"gaiaformers={info.gaiaformers}/{info.gaiaformers_in_gaia} fed={info.federation_tokens}"
             )
         if self.is_terminal:
             lines.append(f"Final scores: {self.final_scores()}")
@@ -3158,7 +3186,7 @@ class GaiaState:
                 self.round_scoring_tiles[self.round_number - 1]
             ].key
         return {
-            "ruleset": "standard-v13",
+            "ruleset": "standard-v14",
             "round": max(0, min(self.round_number, MAX_ROUNDS)),
             "max_rounds": MAX_ROUNDS,
             "phase": (
@@ -3239,6 +3267,7 @@ class GaiaState:
                     ),
                     "round_income": self._income_preview(player),
                     "gaiaformers": info.gaiaformers,
+                    "gaiaformers_in_gaia": info.gaiaformers_in_gaia,
                     "gaiaformers_on_board": sum(
                         owner == player for owner in self.gaiaformer_owner
                     ),
@@ -3503,8 +3532,10 @@ class GaiaHeuristicEvaluator:
                 score = 1.0
             elif ADVANCED_TECH_ACTION_OFFSET <= action < PASS_BOOSTER_OFFSET:
                 score = 1.2
-            elif IVITS_SPACE_STATION_OFFSET <= action < ACTION_SIZE:
+            elif IVITS_SPACE_STATION_OFFSET <= action < IVITS_SPACE_STATION_LIMIT:
                 score = 1.1
+            elif action == BAL_TAKS_GAIAFORMER_QIC_ACTION:
+                score = 0.8
             elif len(legal) == 1:
                 score = 0.5
             else:

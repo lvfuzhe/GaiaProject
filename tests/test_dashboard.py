@@ -16,6 +16,7 @@ from gaiazero.dashboard import (
 )
 from gaiazero.game import GaiaState, MiniGaiaState
 from gaiazero.game.gaia_state import (
+    BAL_TAKS_GAIAFORMER_QIC_ACTION,
     BRAINSTONE_ACTION,
     Building,
     IVITS_SPACE_STATION_OFFSET,
@@ -214,6 +215,52 @@ class DashboardTests(unittest.TestCase):
         )
         self.assertEqual(upgrade["kind"], "upgrade_credits_academy")
         self.assertIn("credit academy", upgrade["label"])
+
+    def test_bal_taks_gaiaformer_conversion_is_detailed_in_history(self) -> None:
+        state = GaiaState.initial(
+            2,
+            faction_indices=(9, 0),
+            first_player=0,
+        )
+        state = replace(
+            state,
+            round_number=1,
+            placement_step=len(state.placement_order),
+            booster_selection_step=len(state.booster_selection_order),
+            player_to_move=0,
+        )
+
+        after = state.apply(BAL_TAKS_GAIAFORMER_QIC_ACTION)
+        record = _interactive_action_record(
+            state,
+            after,
+            BAL_TAKS_GAIAFORMER_QIC_ACTION,
+            move=1,
+            player=0,
+            role="human",
+        )
+
+        self.assertEqual(record["kind"], "bal_taks_gaiaformer_qic")
+        self.assertIn("BAL-GF-QIC", [item["code"] for item in record["components"]])
+        self.assertEqual(
+            record["effects"][0]["costs"],
+            [{"resource": "gaiaformers", "amount": 1}],
+        )
+        self.assertEqual(
+            record["effects"][0]["gains"],
+            [{"resource": "qic", "amount": 1}],
+        )
+        changes = record["effects"][0]["changes"]
+        self.assertIn(
+            {
+                "kind": "counter",
+                "counter": "gaiaformers_in_gaia",
+                "before": 0,
+                "after": 1,
+            },
+            changes,
+        )
+        self.assertEqual(after.player_to_move, 0)
 
     def test_hadsch_hallas_credit_conversion_is_detailed_in_history(self) -> None:
         state = GaiaState.initial(2, faction_indices=(6, 0), first_player=0)
