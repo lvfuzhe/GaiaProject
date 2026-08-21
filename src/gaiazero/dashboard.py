@@ -44,6 +44,8 @@ from gaiazero.game.gaia_state import (
     TERRANS_GAIA_KNOWLEDGE_ACTION,
     TERRANS_GAIA_ORE_ACTION,
     TERRANS_GAIA_QIC_ACTION,
+    TAKLONS_PASSIVE_AFTER_ACTION,
+    TAKLONS_PASSIVE_BEFORE_ACTION,
     UPGRADE_ACADEMY_OFFSET,
     UPGRADE_QIC_ACADEMY_OFFSET,
     UPGRADE_LAB_OFFSET,
@@ -702,6 +704,10 @@ def _interactive_action_snapshot(state: GaiaState, action: int) -> dict[str, Any
     advanced_action_tile: int | None = None
     if action == BRAINSTONE_ACTION:
         kind = "brainstone"
+    elif action == TAKLONS_PASSIVE_BEFORE_ACTION:
+        kind = "taklons_passive_before"
+    elif action == TAKLONS_PASSIVE_AFTER_ACTION:
+        kind = "taklons_passive_after"
     elif action == TERRANS_GAIA_CREDIT_ACTION:
         kind = "terrans_gaia_credit"
     elif action == TERRANS_GAIA_ORE_ACTION:
@@ -803,6 +809,8 @@ def _interactive_phase(state: GaiaState) -> str:
         return "starting_placement"
     if state.is_booster_selection:
         return "booster_selection"
+    if state.pending_taklons_charge_player >= 0:
+        return "taklons_passive_charge"
     if state.pending_gaia_conversion_player >= 0:
         return "gaia_conversion"
     if state.is_terminal:
@@ -853,6 +861,16 @@ def _interactive_action_components(
                 "Terrans planetary institute",
                 "TER-PI",
                 relation="uses",
+            )
+        )
+    if action["kind"] in ("taklons_passive_before", "taklons_passive_after"):
+        components.append(
+            _component_ref(
+                "faction_ability",
+                4,
+                "Taklons planetary institute: passive charge token",
+                "TAK-PI",
+                relation="gained",
             )
         )
     target = action.get("target")

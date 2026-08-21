@@ -79,7 +79,7 @@ const FACTION_ABILITIES = {
   Lantids: "可在对手已殖民星球共存；建成行星研究院后，每次放置共存矿场获得 2 知识",
   Xenos: "额外起始矿场；行星研究院使联邦门槛降为 6，并以 1 Q.I.C. 替代 1 能量片收入",
   Gleens: "建造右侧学院前，获得 Q.I.C. 时改为获得等量矿石；殖民盖亚星球以 1 矿石替代 1 Q.I.C. 并额外获得 2 VP；行星研究院立即获得专属联邦板块",
-  Taklons: "脑石强化能量循环",
+  Taklons: "脑石计作 1 个能量片，支付能量行动时可按 3 点使用；行星研究院在被动充能时额外获得 1 个能量片，可选择充能前或后获得",
   Ambas: "行星研究院可与矿场交换",
   "Hadsch Hallas": "信用点可执行扩展自由行动",
   Ivits: "所有玩家放完起始矿场后，最后放置行星研究院",
@@ -2594,6 +2594,8 @@ const PLAY_ACTION_LABELS = {
   research: "推进科研轨",
   power: "执行能量行动",
   brainstone: "选择脑石（按 3 能量）",
+  taklons_passive_before: "Taklons 研究院：先获得能量片，再被动充能",
+  taklons_passive_after: "Taklons 研究院：先被动充能，再获得能量片",
   terrans_gaia_credit: "Terrans 盖亚兑换：信用点",
   terrans_gaia_ore: "Terrans 盖亚兑换：矿石",
   terrans_gaia_knowledge: "Terrans 盖亚兑换：知识",
@@ -3051,6 +3053,9 @@ function playPhaseLabel(snapshot) {
   if (snapshot.phase === "booster_selection") {
     return `选择助推 ${snapshot.booster_selection.step + 1}/${snapshot.booster_selection.total}`;
   }
+  if (snapshot.phase === "taklons_passive_charge") {
+    return `Taklons 研究院：选择被动充能顺序（${snapshot.taklons_passive_charge?.amount ?? 0} 点）`;
+  }
   if (snapshot.phase === "gaia_conversion") {
     return `Terrans 盖亚兑换 · 剩余 ${snapshot.gaia_conversion?.remaining_power ?? 0}`;
   }
@@ -3102,6 +3107,8 @@ function renderPlayActions(session) {
   } else if (humanTurn) {
     notice.textContent = session.state.phase === "booster_selection"
       ? `P${session.state.current_player} 由人工选择一块起始助推板块`
+      : session.state.phase === "taklons_passive_charge"
+      ? `P${session.state.current_player} 选择 Taklons 研究院的被动充能顺序`
       : session.state.phase === "gaia_conversion"
       ? `P${session.state.current_player} 结算 Terrans 盖亚兑换：剩余 ${session.state.gaia_conversion?.remaining_power ?? 0} 点`
       : `P${session.state.current_player} 由人工操作：点击星图筛选目标，再选择合法动作`;

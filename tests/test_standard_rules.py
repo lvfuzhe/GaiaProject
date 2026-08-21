@@ -21,6 +21,8 @@ from gaiazero.game.gaia_state import (
     STANDARD_TECH_TILES,
     STANDARD_TECH_COUNT,
     STANDARD_TECH_ACTION,
+    TAKLONS_PASSIVE_AFTER_ACTION,
+    TAKLONS_PASSIVE_BEFORE_ACTION,
     TERRANS_GAIA_CREDIT_ACTION,
     TERRANS_GAIA_FINISH_ACTION,
     TERRANS_GAIA_KNOWLEDGE_ACTION,
@@ -60,7 +62,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
     def test_setup_has_full_research_and_building_model(self) -> None:
         state = GaiaState.initial(4, seed=3)
 
-        self.assertEqual(state.action_size, 557)
+        self.assertEqual(state.action_size, 559)
         self.assertEqual(len(state.players[0].tracks), 6)
         self.assertEqual(state.first_player, 3)
         self.assertEqual(state.current_player, state.placement_order[0])
@@ -225,6 +227,76 @@ class StandardGaiaRulesTests(unittest.TestCase):
             (2, 0, 0),
         )
         self.assertEqual(taklons.brainstone_bowl, 1)
+
+    def test_taklons_pi_keeps_normal_token_income(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(4, 0), first_player=0)
+        )
+        pi_planet = next(
+            planet for planet, owner in enumerate(state.owners) if owner == 1
+        )
+        buildings = list(state.buildings)
+        buildings[pi_planet] = Building.PLANETARY_INSTITUTE
+        state = replace(state, buildings=tuple(int(value) for value in buildings))
+
+        income = state._income_preview(1)
+        self.assertEqual(income["power_tokens"], 1)
+        self.assertEqual(income["power_charge"], 4)
+
+    def test_taklons_pi_can_take_passive_token_before_or_after_charge(self) -> None:
+        state = GaiaState.initial(2, faction_indices=(0, 4), first_player=0)
+        target = next(planet for planet, active in enumerate(state.active_planets) if active)
+        pi_planet = next(
+            planet
+            for planet, active in enumerate(state.active_planets)
+            if active and planet != target and state._distance(target, planet) <= 2
+        )
+        owners = [-1] * len(state.owners)
+        buildings = [Building.EMPTY] * len(state.buildings)
+        owners[pi_planet] = 1
+        buildings[pi_planet] = Building.PLANETARY_INSTITUTE
+        players = list(state.players)
+        players[1] = replace(
+            players[1],
+            bowl_one=1,
+            bowl_two=2,
+            bowl_three=0,
+            brainstone_bowl=1,
+            vp=10,
+        )
+        state = replace(
+            state,
+            owners=tuple(owners),
+            buildings=tuple(int(value) for value in buildings),
+            players=tuple(players),
+            player_to_move=0,
+            round_number=1,
+            placement_step=len(state.placement_order),
+        )
+
+        pending = state._trigger_passive_charge(0, target, 2)
+        self.assertEqual(pending.player_to_move, 1)
+        self.assertEqual(pending.pending_taklons_charge_player, 1)
+        self.assertEqual(
+            pending.legal_actions(),
+            (TAKLONS_PASSIVE_BEFORE_ACTION, TAKLONS_PASSIVE_AFTER_ACTION),
+        )
+        self.assertEqual(pending.snapshot()["phase"], "taklons_passive_charge")
+
+        before = pending.apply(TAKLONS_PASSIVE_BEFORE_ACTION).players[1]
+        after = pending.apply(TAKLONS_PASSIVE_AFTER_ACTION).players[1]
+        self.assertEqual(before.vp, 9)
+        self.assertEqual(after.vp, 9)
+        self.assertEqual(before.brainstone_bowl, 2)
+        self.assertEqual(after.brainstone_bowl, 2)
+        self.assertEqual((before.bowl_one, before.bowl_two, before.bowl_three), (0, 4, 0))
+        self.assertEqual((after.bowl_one, after.bowl_two, after.bowl_three), (1, 2, 1))
+        self.assertEqual(pending.apply(TAKLONS_PASSIVE_AFTER_ACTION).player_to_move, 1)
+
+        tech_pending = replace(pending, pending_tech_player=0)
+        resumed = tech_pending.apply(TAKLONS_PASSIVE_AFTER_ACTION)
+        self.assertEqual(resumed.player_to_move, 0)
+        self.assertEqual(resumed.pending_tech_player, 0)
 
     def test_brainstone_counts_as_one_token_for_gaia_area(self) -> None:
         info = PlayerState(

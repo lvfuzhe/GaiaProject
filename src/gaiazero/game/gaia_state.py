@@ -141,7 +141,7 @@ FACTIONS: tuple[FactionSpec, ...] = (
         None,
         (2, 4, 0),
         2,
-        "Brainstone strengthens the power cycle",
+        "Brainstone counts as one power token, may be spent as three power; the PI grants a power token whenever you accept passive charge, before or after charging",
         passive_power_token=True,
         has_brainstone=True,
     ),
@@ -381,7 +381,9 @@ TERRANS_GAIA_ORE_ACTION = TERRANS_GAIA_CREDIT_ACTION + 1
 TERRANS_GAIA_KNOWLEDGE_ACTION = TERRANS_GAIA_ORE_ACTION + 1
 TERRANS_GAIA_QIC_ACTION = TERRANS_GAIA_KNOWLEDGE_ACTION + 1
 TERRANS_GAIA_FINISH_ACTION = TERRANS_GAIA_QIC_ACTION + 1
-ACTION_SIZE = TERRANS_GAIA_FINISH_ACTION + 1
+TAKLONS_PASSIVE_BEFORE_ACTION = TERRANS_GAIA_FINISH_ACTION + 1
+TAKLONS_PASSIVE_AFTER_ACTION = TAKLONS_PASSIVE_BEFORE_ACTION + 1
+ACTION_SIZE = TAKLONS_PASSIVE_AFTER_ACTION + 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -442,8 +444,9 @@ class GaiaState:
     """Deterministic standard-rules core for neural perfect-information search.
 
     The state implements the shared Gaia Project rules. Optional out-of-turn
-    charging is resolved by a deterministic accept-when-affordable policy, and
-    federation building uses a canonical minimum-satellite plan so that both
+    charging uses a deterministic accept-when-affordable policy for ordinary
+    factions; Taklons PI charging exposes the official before/after choice.
+    Federation building uses a canonical minimum-satellite plan so both
     mechanics fit a fixed AlphaZero action space.
     """
 
@@ -496,6 +499,9 @@ class GaiaState:
     brainstone_selected: bool = False
     pending_gaia_conversion_player: int = -1
     pending_gaia_conversion_power: int = 0
+    pending_taklons_charge_player: int = -1
+    pending_taklons_charge_acting: int = -1
+    pending_taklons_charge_amount: int = 0
 
     @classmethod
     def initial(
@@ -728,6 +734,8 @@ class GaiaState:
             if available >= 4:
                 actions.append(TERRANS_GAIA_QIC_ACTION)
             return tuple(actions)
+        if self.pending_taklons_charge_player >= 0:
+            return (TAKLONS_PASSIVE_BEFORE_ACTION, TAKLONS_PASSIVE_AFTER_ACTION)
         if self.is_starting_placement:
             home = FACTIONS[info.faction].home
             return tuple(
@@ -981,6 +989,8 @@ class GaiaState:
             raise ValueError(f"illegal action {action}: {self.describe_action(action)}")
         if self.pending_gaia_conversion_player >= 0:
             return self._apply_terrans_gaia_conversion(action)
+        if self.pending_taklons_charge_player >= 0:
+            return self._apply_taklons_passive_charge(action)
         if action == BRAINSTONE_ACTION:
             return replace(self, brainstone_selected=True)
         if self.pending_advanced_tech >= 0:
@@ -1605,6 +1615,7 @@ class GaiaState:
     def _advance_turn(self) -> GaiaState:
         if (
             self.pending_gaia_conversion_player >= 0
+            or self.pending_taklons_charge_player >= 0
             or self.pending_tech_player >= 0
             or self.pending_advanced_tech >= 0
             or self.pending_research_player >= 0
@@ -2128,15 +2139,63 @@ class GaiaState:
             if not adjacent:
                 continue
             affordable = min(amount, info.vp + 1)
+            if affordable <= 0:
+                continue
+            _, chargeable = self._charge_power(info, affordable)
+            if chargeable == 0:
+                continue
+            faction = FACTIONS[info.faction]
+            if faction.passive_power_token and self._has_pi(opponent):
+                return replace(
+                    self,
+                    players=tuple(players),
+                    player_to_move=opponent,
+                    pending_taklons_charge_player=opponent,
+                    pending_taklons_charge_acting=acting,
+                    pending_taklons_charge_amount=affordable,
+                )
             charged_info, charged = self._charge_power(info, affordable)
             if charged == 0:
                 continue
             charged_info = replace(charged_info, vp=charged_info.vp - max(0, charged - 1))
-            faction = FACTIONS[charged_info.faction]
-            if faction.passive_power_token and self._has_pi(opponent):
-                charged_info = replace(charged_info, bowl_one=charged_info.bowl_one + 1)
             players[opponent] = charged_info
         return replace(self, players=tuple(players))
+
+    def _apply_taklons_passive_charge(self, action: int) -> GaiaState:
+        if action not in (TAKLONS_PASSIVE_BEFORE_ACTION, TAKLONS_PASSIVE_AFTER_ACTION):
+            raise ValueError("invalid Taklons passive-charge choice")
+        player = self.pending_taklons_charge_player
+        acting = self.pending_taklons_charge_acting
+        amount = self.pending_taklons_charge_amount
+        if player < 0 or acting < 0 or amount <= 0:
+            raise ValueError("Taklons passive charge is not pending")
+        info = self.players[player]
+        before = action == TAKLONS_PASSIVE_BEFORE_ACTION
+        if before:
+            info = replace(info, bowl_one=info.bowl_one + 1)
+        info, charged = self._charge_power(info, amount)
+        info = replace(info, vp=info.vp - max(0, charged - 1))
+        if not before:
+            info = replace(info, bowl_one=info.bowl_one + 1)
+        state = replace(
+            self,
+            players=self._replace_player(player, info),
+            player_to_move=acting,
+            pending_taklons_charge_player=-1,
+            pending_taklons_charge_acting=-1,
+            pending_taklons_charge_amount=0,
+        )
+        if (
+            state.pending_gaia_conversion_player >= 0
+            or state.pending_tech_player >= 0
+            or state.pending_advanced_tech >= 0
+            or state.pending_research_player >= 0
+            or state.pending_power_terraform_player >= 0
+            or state.pending_booster_terraform_player >= 0
+            or state.pending_booster_range_player >= 0
+        ):
+            return state
+        return state._advance_turn()
 
     def _federation_plan(self, player: int) -> tuple[tuple[int, ...], int] | None:
         info = self.players[player]
@@ -2613,6 +2672,8 @@ class GaiaState:
         values.extend((
             float(self.pending_gaia_conversion_player >= 0),
             self.pending_gaia_conversion_power / 15.0,
+            float(self.pending_taklons_charge_player >= 0),
+            self.pending_taklons_charge_amount / 7.0,
             float(self.pending_tech_player >= 0),
             float(self.pending_advanced_tech >= 0),
             float(self.pending_research_player >= 0),
@@ -2622,6 +2683,10 @@ class GaiaState:
         ))
         values.extend(
             float(self.pending_gaia_conversion_player == player)
+            for player in range(self.num_players)
+        )
+        values.extend(
+            float(self.pending_taklons_charge_player == player)
             for player in range(self.num_players)
         )
         values.extend(
@@ -2780,6 +2845,10 @@ class GaiaState:
             return "pass"
         if action == BRAINSTONE_ACTION:
             return "select Brainstone as 3 power"
+        if action == TAKLONS_PASSIVE_BEFORE_ACTION:
+            return "Taklons PI: gain 1 power token before passive charge"
+        if action == TAKLONS_PASSIVE_AFTER_ACTION:
+            return "Taklons PI: gain 1 power token after passive charge"
         if action == TERRANS_GAIA_CREDIT_ACTION:
             return "Terrans Gaia conversion: 1 power for 1 credit"
         if action == TERRANS_GAIA_ORE_ACTION:
@@ -2803,6 +2872,11 @@ class GaiaState:
                 f"Starting booster selection {self.booster_selection_step}/{len(self.booster_selection_order)}"
             ]
             lines[0] += f" | player {self.player_to_move} to choose"
+        elif self.pending_taklons_charge_player >= 0:
+            lines = [
+                f"Round {min(self.round_number, MAX_ROUNDS)}"
+                f" | Taklons player {self.pending_taklons_charge_player} chooses passive charge order"
+            ]
         elif self.pending_gaia_conversion_player >= 0:
             lines = [
                 f"Round {min(self.round_number, MAX_ROUNDS)}/{MAX_ROUNDS}"
@@ -2815,6 +2889,7 @@ class GaiaState:
             not self.is_terminal
             and not self.is_starting_placement
             and not self.is_booster_selection
+            and self.pending_taklons_charge_player < 0
             and self.pending_gaia_conversion_player < 0
         ):
             scoring = ROUND_SCORING_TILES[
@@ -2837,7 +2912,12 @@ class GaiaState:
 
     def snapshot(self) -> dict[str, object]:
         current_scoring = None
-        if not self.is_terminal and not self.is_starting_placement and not self.is_booster_selection:
+        if (
+            not self.is_terminal
+            and not self.is_starting_placement
+            and not self.is_booster_selection
+            and self.pending_taklons_charge_player < 0
+        ):
             current_scoring = ROUND_SCORING_TILES[
                 self.round_scoring_tiles[self.round_number - 1]
             ].key
@@ -2850,10 +2930,28 @@ class GaiaState:
                 if self.is_starting_placement
                 else "booster_selection"
                 if self.is_booster_selection
+                else "taklons_passive_charge"
+                if self.pending_taklons_charge_player >= 0
                 else "gaia_conversion"
                 if self.pending_gaia_conversion_player >= 0
                 else "terminal" if self.is_terminal else "round"
             ),
+            "taklons_passive_charge": {
+                "active": self.pending_taklons_charge_player >= 0,
+                "player": (
+                    self.pending_taklons_charge_player
+                    if self.pending_taklons_charge_player >= 0
+                    else None
+                ),
+                "acting_player": (
+                    self.pending_taklons_charge_acting
+                    if self.pending_taklons_charge_acting >= 0
+                    else None
+                ),
+                "amount": self.pending_taklons_charge_amount,
+                "before_action": TAKLONS_PASSIVE_BEFORE_ACTION,
+                "after_action": TAKLONS_PASSIVE_AFTER_ACTION,
+            },
             "gaia_conversion": {
                 "active": self.pending_gaia_conversion_player >= 0,
                 "player": (
