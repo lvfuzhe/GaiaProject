@@ -76,7 +76,7 @@ const SETUP_LABELS = {
 };
 const FACTION_ABILITIES = {
   Terrans: "盖亚区能量回到 II 区；行星研究院可在盖亚阶段兑换资源",
-  Lantids: "可在对手已殖民星球共存",
+  Lantids: "可在对手已殖民星球共存；建成行星研究院后，每次放置共存矿场获得 2 知识",
   Xenos: "额外起始矿场；行星研究院使联邦门槛降为 6，并以 1 Q.I.C. 替代 1 能量片收入",
   Gleens: "殖民盖亚星球时以矿石替代 Q.I.C.",
   Taklons: "脑石强化能量循环",
@@ -568,8 +568,14 @@ function factionPlayerBoardAsset(id) {
 function finalMetric(snapshot, key, playerId) {
   const player = snapshot.players?.[playerId] || {};
   const planets = (snapshot.planets || []).filter((planet) => planet.owner === playerId);
-  if (key === "federation-structures") return planets.filter((planet) => planet.federated).length;
-  if (key === "structures") return planets.length;
+  const coexisting = (snapshot.planets || []).filter(
+    (planet) => planet.coexisting_mine_owner === playerId,
+  );
+  if (key === "federation-structures") {
+    return planets.filter((planet) => planet.federated).length
+      + coexisting.filter((planet) => planet.coexisting_mine_federated).length;
+  }
+  if (key === "structures") return planets.length + coexisting.length;
   if (key === "planet-types") {
     const encodedTypes = player.colonized_types;
     if (encodedTypes !== null && encodedTypes !== undefined && Number.isFinite(Number(encodedTypes))) {
@@ -578,7 +584,9 @@ function finalMetric(snapshot, key, playerId) {
     return new Set(planets.map((planet) => planet.terrain).filter((terrain) => terrain < 7)).size;
   }
   if (key === "gaia-planets") return planets.filter((planet) => planet.terrain === 8).length;
-  if (key === "sectors") return new Set(planets.map((planet) => planet.sector)).size;
+  if (key === "sectors") {
+    return new Set([...planets, ...coexisting].map((planet) => planet.sector)).size;
+  }
   if (key === "satellites") return Number(player.satellites || 0);
   return 0;
 }
@@ -2112,12 +2120,41 @@ function drawBoard(canvas, snapshot, options = {}) {
       context.stroke();
       drawBuilding(
         context,
-        x,
-        y,
+        planet.coexisting_mine_owner >= 0 ? x - size * 0.2 : x,
+        planet.coexisting_mine_owner >= 0 ? y - size * 0.12 : y,
         planet.building,
         PLAYER_COLORS[planet.owner],
-        compactMap ? 0.68 : 1,
+        planet.coexisting_mine_owner >= 0
+          ? (compactMap ? 0.54 : 0.78)
+          : (compactMap ? 0.68 : 1),
       );
+    }
+    if (options.showPlayerPieces !== false && planet.coexisting_mine_owner >= 0) {
+      const coexistingX = x + size * 0.38;
+      const coexistingY = y + size * 0.24;
+      context.strokeStyle = PLAYER_COLORS[planet.coexisting_mine_owner] || "#17211d";
+      context.lineWidth = compactMap ? 1.5 : 2.5;
+      context.beginPath();
+      context.arc(coexistingX, coexistingY, size * 0.42, 0, Math.PI * 2);
+      context.stroke();
+      drawBuilding(
+        context,
+        coexistingX,
+        coexistingY,
+        "mine",
+        PLAYER_COLORS[planet.coexisting_mine_owner],
+        compactMap ? 0.42 : 0.58,
+      );
+      if (planet.coexisting_mine_federated) {
+        context.save();
+        context.strokeStyle = "rgba(255,255,255,0.82)";
+        context.lineWidth = 1;
+        context.setLineDash([2, 2]);
+        context.beginPath();
+        context.arc(coexistingX, coexistingY, size * 0.55, 0, Math.PI * 2);
+        context.stroke();
+        context.restore();
+      }
     }
     if (options.showPlayerPieces !== false && planet.gaiaformer >= 0 && planet.owner < 0) {
       context.strokeStyle = PLAYER_COLORS[planet.gaiaformer] || "#17211d";
@@ -2331,6 +2368,7 @@ function renderPersonalBoards(containerId, snapshot) {
     players,
     planets: (snapshot.planets || []).map((planet) => [
       planet.id, planet.owner, planet.building, planet.q, planet.r, planet.gaiaformer,
+      planet.coexisting_mine_owner, planet.coexisting_mine_federated,
     ]),
   });
   if (container.dataset.signature === signature) return;
@@ -2360,9 +2398,21 @@ function renderPersonalBoards(containerId, snapshot) {
       ? Number(player.faction_id)
       : (factionIdByName.get(player.faction) ?? 0);
     const faction = BASE_FACTIONS.find((item) => item.id === factionId) || BASE_FACTIONS[0];
-    const colonies = planets.filter(
-      (planet) => Number(planet.owner) === Number(player.id) && planet.building !== "empty",
-    );
+    const colonies = planets.flatMap((planet) => {
+      if (Number(planet.owner) === Number(player.id) && planet.building !== "empty") {
+        return [planet];
+      }
+      if (Number(planet.coexisting_mine_owner) === Number(player.id)) {
+        return [{
+          ...planet,
+          owner: player.id,
+          building: "mine",
+          federated: Boolean(planet.coexisting_mine_federated),
+          coexisting: true,
+        }];
+      }
+      return [];
+    });
     const structureRows = BUILDING_SPECS.map((spec) => {
       const fallbackBuilt = colonies.filter((planet) => planet.building === spec.key).length;
       const recorded = player.structures?.[spec.key];
@@ -2383,7 +2433,8 @@ function renderPersonalBoards(containerId, snapshot) {
     const baseLocations = colonies.length
       ? colonies.map((planet) => {
         const spec = BUILDING_SPECS.find((item) => item.key === planet.building);
-        return `<span class="base-location">#${planet.id} ${spec?.short || "--"} · ${planet.q},${planet.r}</span>`;
+        const coexistence = planet.coexisting ? " · 共存" : "";
+        return `<span class="base-location">#${planet.id} ${spec?.short || "--"}${coexistence} · ${planet.q},${planet.r}</span>`;
       }).join("")
       : '<span class="base-location empty">尚未部署基地</span>';
     const acquiredTech = Array.isArray(player.tech_tiles) ? player.tech_tiles : [];
@@ -2649,6 +2700,12 @@ function renderPlayLogChange(change) {
   if (change.kind === "building") {
     const building = BUILDING_SPECS.find((item) => item.key === change.building_after)?.label || change.building_after;
     return `星球 P-${change.planet}：P${change.owner_after} 放置${building}`;
+  }
+  if (change.kind === "coexisting_mine") {
+    return `星球 P-${change.planet}：P${change.owner_after} 放置共存矿场`;
+  }
+  if (change.kind === "coexisting_federated") {
+    return `星球 P-${change.planet}：P${change.owner} 的共存矿场${change.after ? "加入" : "离开"}联邦`;
   }
   if (change.kind === "gaiaformer") return `星球 P-${change.planet}：盖亚塑形者 ${change.before} → ${change.after}`;
   if (change.kind === "terrain") {

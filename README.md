@@ -12,7 +12,7 @@ GaiaZero 是一个面向《盖亚计划》类确定性多人策略游戏的 Alph
     -> 竞技场评测与检查点
 ```
 
-默认的 `standard-v11` 规则引擎已覆盖六轮主流程、完整建筑链、六条科研轨、能量碗、
+默认的 `standard-v12` 规则引擎已覆盖六轮主流程、完整建筑链、六条科研轨、能量碗、
 盖亚计划、科技选择、联邦、助推板块和计分，并加入可复现的随机地图、种族、计分与科技设置。
 它是面向固定动作空间的 AI 规则核心，不是对实体桌游所有图案与种族能力的逐项复刻。
 早期 `MiniGaia` 规则仍保留用于快速回归。
@@ -152,7 +152,7 @@ V(s) = [v0, v1, ..., vn]
 ```text
 src/gaiazero/core.py            通用游戏和评估器协议
 src/gaiazero/game/gaia_setup.py 随机初始设置生成器
-src/gaiazero/game/gaia_state.py standard-v11 AI 规则核心
+src/gaiazero/game/gaia_state.py standard-v12 AI 规则核心
 src/gaiazero/game/mini_gaia.py  旧版轻量规则切片
 src/gaiazero/mcts.py            多玩家 PUCT/PIMCTS
 src/gaiazero/model.py           PyTorch 策略/价值网络与检查点
@@ -190,8 +190,8 @@ tests/                          规则、搜索和训练回归测试
 但星球数量和地形配额按 BGA/实体组件（42 颗母星、12 颗超维星、7 颗盖亚星）建模；
 被动充能采用“可承受时自动接受”；资源支付和
 联邦连接只生成一个规范方案。14 个种族均可参与随机设置，但多数种族特殊行动、高级科技效果、
-完整 QIC 自由转换、失落星球和部分种族特殊行动仍未实现。训练结果应视为 `standard-v11` 环境内的策略，不应直接
-作为官方比赛裁决器。`standard-v11` 统一了 BGA 板块编号、科研逐级收益、初始科研收益、公共能量与 Q.I.C. 行动、学院类型及助推特殊行动，并加入 Taklons 脑石规则和 Terrans 行星研究院的盖亚阶段资源兑换；旧版检查点的状态语义不同，不能直接沿用。
+完整 QIC 自由转换、失落星球和部分种族特殊行动仍未实现。训练结果应视为 `standard-v12` 环境内的策略，不应直接
+作为官方比赛裁决器。`standard-v12` 统一了 BGA 板块编号、科研逐级收益、初始科研收益、公共能量与 Q.I.C. 行动、学院类型及助推特殊行动，并加入 Taklons 脑石、Terrans 行星研究院的盖亚阶段资源兑换，以及 Lantids 共存矿场和行星研究院奖励；旧版检查点的状态语义不同，不能直接沿用。
 
 人工对战入口为 `http://127.0.0.1:8765/play`；旧的
 `http://127.0.0.1:8765/setup/random` 和 `http://127.0.0.1:8765/setup/manual` 路径仍会兼容打开

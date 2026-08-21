@@ -69,7 +69,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(sum(len(planets) for planets in state.starting_planets), 0)
         self.assertEqual(state.round_number, 0)
         self.assertTrue(state.is_starting_placement)
-        self.assertEqual(state.snapshot()["ruleset"], "standard-v11")
+        self.assertEqual(state.snapshot()["ruleset"], "standard-v12")
 
     def test_random_setup_is_seeded_and_respects_component_counts(self) -> None:
         first = GaiaState.initial(2, seed=19)
@@ -316,11 +316,142 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(catalog["Bal T'aks"]["starting_gaiaformers"], 1)
         self.assertEqual(catalog["Itars"]["starting_gaiaformers"], 0)
 
+    def test_lantids_pi_rewards_coexisting_mines_without_replacing_host(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(1, 2), first_player=0, seed=17)
+        )
+        source = state.starting_planets[0][0]
+        target = next(
+            planet
+            for planet, active in enumerate(state.active_planets)
+            if active
+            and state.owners[planet] != 0
+            and state._distance(source, planet) <= 4
+        )
+        owners = list(state.owners)
+        buildings = list(state.buildings)
+        terrains = list(state.terrains)
+        owners[target] = 1
+        buildings[target] = Building.MINE
+        terrains[target] = Terrain.GAIA
+        tracks = list(state.players[0].tracks)
+        tracks[Track.NAVIGATION] = 5
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            credits=10,
+            ore=10,
+            knowledge=0,
+            qic=1,
+            tracks=tuple(tracks),
+        )
+        state = replace(
+            state,
+            player_to_move=0,
+            players=tuple(players),
+            owners=tuple(owners),
+            buildings=tuple(int(value) for value in buildings),
+            terrains=tuple(int(value) for value in terrains),
+        )
+        action = state.build_action(target)
+
+        self.assertIn(action, state.legal_actions())
+        self.assertEqual(state._build_cost(0, target), (2, 1, 0))
+        self.assertIn("coexisting mine", state.describe_action(action))
+        without_pi = state.apply(action)
+        self.assertEqual(without_pi.players[0].knowledge, 0)
+
+        buildings[source] = Building.PLANETARY_INSTITUTE
+        with_pi = replace(
+            state,
+            buildings=tuple(int(value) for value in buildings),
+        )
+        types_before = with_pi.players[0].colonized_types
+        gaia_before = with_pi._final_scoring_metric(0, 3)
+        mines_before = with_pi._building_count(0, Building.MINE)
+        ore_income_before = with_pi._income_preview(0)["ore"]
+        built = with_pi.apply(action)
+
+        self.assertEqual((built.players[0].credits, built.players[0].ore), (8, 9))
+        self.assertEqual(built.players[0].knowledge, 2)
+        self.assertEqual(built.players[0].qic, 1)
+        self.assertEqual(built.owners[target], 1)
+        self.assertEqual(built.buildings[target], Building.MINE)
+        self.assertEqual(built.coexisting_mine_owner[target], 0)
+        self.assertEqual(built._building_count(0, Building.MINE), mines_before + 1)
+        self.assertEqual(built._income_preview(0)["ore"], ore_income_before + 1)
+        self.assertEqual(built.players[0].colonized_types, types_before)
+        self.assertEqual(built._final_scoring_metric(0, 3), gaia_before)
+        self.assertNotIn(
+            built.upgrade_trading_action(target),
+            replace(built, player_to_move=0).legal_actions(),
+        )
+        host_upgrade = built.upgrade_trading_action(target)
+        self.assertIn(host_upgrade, built.legal_actions())
+        host_upgraded = built.apply(host_upgrade)
+        self.assertEqual(host_upgraded.buildings[target], Building.TRADING_STATION)
+        self.assertEqual(host_upgraded.coexisting_mine_owner[target], 0)
+        self.assertEqual(
+            built._income_preview(0)["power_tokens"],
+            0,
+        )
+        self.assertEqual(built._income_preview(0)["power_charge"], 4)
+        planet = next(item for item in built.snapshot()["planets"] if item["id"] == target)
+        self.assertEqual(planet["coexisting_mine_owner"], 0)
+        self.assertFalse(planet["coexisting_mine_federated"])
+
+    def test_lantids_coexisting_mine_can_join_a_federation(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(1, 2), first_player=0, seed=23)
+        )
+        planets = [
+            planet
+            for planet, active in enumerate(state.active_planets)
+            if active
+        ][:3]
+        pi_planet, academy_planet, target = planets
+        owners = [-1] * len(state.owners)
+        buildings = [Building.EMPTY] * len(state.buildings)
+        owners[pi_planet] = 0
+        owners[academy_planet] = 0
+        owners[target] = 1
+        buildings[pi_planet] = Building.PLANETARY_INSTITUTE
+        buildings[academy_planet] = Building.ACADEMY
+        buildings[target] = Building.MINE
+        coexisting = [-1] * len(state.coexisting_mine_owner)
+        coexisting[target] = 0
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            bowl_one=30,
+            bowl_two=0,
+            bowl_three=0,
+        )
+        state = replace(
+            state,
+            player_to_move=0,
+            players=tuple(players),
+            owners=tuple(owners),
+            buildings=tuple(int(value) for value in buildings),
+            coexisting_mine_owner=tuple(coexisting),
+        )
+
+        plan = state._federation_plan(0)
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        self.assertIn(len(state.owners) + target, plan[0])
+        formed = state.apply(state.federation_action(0))
+
+        self.assertTrue(formed.coexisting_mine_federated[target])
+        self.assertTrue(formed.federated[pi_planet])
+        self.assertTrue(formed.federated[academy_planet])
+        self.assertEqual(formed._final_scoring_metric(0, 0), 3)
+
     def test_snapshot_preserves_complete_initial_setup(self) -> None:
         snapshot = GaiaState.initial(3, seed=41).snapshot()
         setup = snapshot["setup"]
 
-        self.assertEqual(snapshot["ruleset"], "standard-v11")
+        self.assertEqual(snapshot["ruleset"], "standard-v12")
         self.assertEqual(setup["seed"], 41)
         self.assertEqual(setup["map"]["sector_count"], 10)
         self.assertEqual(len(setup["map"]["sectors"]), 10)
@@ -364,6 +495,14 @@ class StandardGaiaRulesTests(unittest.TestCase):
                         planet["owner"] == player["id"]
                         and planet["building"] == building.name.lower()
                         for planet in snapshot["planets"]
+                    )
+                    + (
+                        sum(
+                            planet["coexisting_mine_owner"] == player["id"]
+                            for planet in snapshot["planets"]
+                        )
+                        if building == Building.MINE
+                        else 0
                     ),
                 )
 

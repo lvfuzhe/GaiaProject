@@ -108,7 +108,15 @@ FACTIONS: tuple[FactionSpec, ...] = (
         "Gaia power returns to bowl II; the planetary institute converts it to resources",
         gaia_to_bowl_two=True,
     ),
-    FactionSpec("Lantids", Terrain.TERRA, None, (4, 0, 0), 0, "May coexist on colonized planets", starting_credits=13),
+    FactionSpec(
+        "Lantids",
+        Terrain.TERRA,
+        None,
+        (4, 0, 0),
+        0,
+        "May coexist on colonized planets; its PI grants 2 knowledge for each coexisting mine",
+        starting_credits=13,
+    ),
     FactionSpec(
         "Xenos",
         Terrain.DESERT,
@@ -455,6 +463,8 @@ class GaiaState:
     map_mode: str
     owners: tuple[int, ...]
     buildings: tuple[int, ...]
+    coexisting_mine_owner: tuple[int, ...]
+    coexisting_mine_federated: tuple[bool, ...]
     terrains: tuple[int, ...]
     gaiaformer_owner: tuple[int, ...]
     federated: tuple[bool, ...]
@@ -557,6 +567,8 @@ class GaiaState:
             map_mode=setup.map_mode,
             owners=tuple(owners),
             buildings=tuple(int(value) for value in buildings),
+            coexisting_mine_owner=tuple([-1] * N),
+            coexisting_mine_federated=tuple([False] * N),
             terrains=setup.terrains,
             gaiaformer_owner=tuple([-1] * N),
             federated=tuple([False] * N),
@@ -795,16 +807,8 @@ class GaiaState:
             if not self.active_planets[planet]:
                 continue
             terrain = Terrain(self.terrains[planet])
-            if self.owners[planet] == -1 and terrain != Terrain.TRANSDIM:
-                credits, ore, qic = self._build_cost(player, planet)
-                if (
-                    self._building_count(player, Building.MINE) < MAX_BUILDINGS[Building.MINE]
-                    and info.credits >= credits
-                    and info.ore >= ore
-                    and info.qic >= qic
-                    and self._can_colonize(player, planet)
-                ):
-                    actions.append(self.build_action(planet))
+            if terrain != Terrain.TRANSDIM and self._can_build_mine(player, planet):
+                actions.append(self.build_action(planet))
             if (
                 terrain == Terrain.TRANSDIM
                 and self.owners[planet] == -1
@@ -1115,14 +1119,19 @@ class GaiaState:
     def _apply_build(self, planet: int, *, free_steps: int = 0) -> GaiaState:
         player = self.player_to_move
         terrain = Terrain(self.terrains[planet])
+        coexisting = self._can_lantids_coexist(player, planet)
         credits, ore, qic = self._build_cost(player, planet, free_steps=free_steps)
         info = self.players[player].spend(credits=credits, ore=ore, qic=qic)
         home = FACTIONS[info.faction].home
-        steps = 0 if terrain == Terrain.GAIA else self._terrain_steps(home, terrain)
+        steps = (
+            0
+            if coexisting or terrain == Terrain.GAIA
+            else self._terrain_steps(home, terrain)
+        )
         info = self._score(info, "mine")
         if steps:
             info = self._score(info, "terraform", steps)
-        if terrain == Terrain.GAIA:
+        if terrain == Terrain.GAIA and not coexisting:
             info = self._score(info, "gaia")
             if self._has_active_standard_tech(info, 3):
                 info = replace(info, vp=info.vp + 3)
@@ -1130,16 +1139,30 @@ class GaiaState:
                 info = replace(info, vp=info.vp + 2)
         if info.advanced_tech_tiles & (1 << 13):
             info = replace(info, vp=info.vp + 3)
-        new_type = terrain not in (Terrain.TRANSDIM,) and not info.colonized_types & (1 << int(terrain))
-        info = replace(info, colonized_types=info.colonized_types | (1 << int(terrain)))
+        new_type = (
+            not coexisting
+            and terrain not in (Terrain.TRANSDIM,)
+            and not info.colonized_types & (1 << int(terrain))
+        )
+        if not coexisting:
+            info = replace(
+                info,
+                colonized_types=info.colonized_types | (1 << int(terrain)),
+            )
         if new_type and FACTIONS[info.faction].knowledge_for_new_type and self._has_pi(player):
             info = replace(info, knowledge=min(15, info.knowledge + 3))
+        if coexisting and self._has_pi(player):
+            info = replace(info, knowledge=min(15, info.knowledge + 2))
 
         owners = list(self.owners)
         buildings = list(self.buildings)
+        coexisting_owners = list(self.coexisting_mine_owner)
         gaiaformers = list(self.gaiaformer_owner)
-        owners[planet] = player
-        buildings[planet] = Building.MINE
+        if coexisting:
+            coexisting_owners[planet] = player
+        else:
+            owners[planet] = player
+            buildings[planet] = Building.MINE
         if gaiaformers[planet] == player:
             gaiaformers[planet] = -1
             info = replace(info, gaiaformers=info.gaiaformers + 1)
@@ -1148,6 +1171,7 @@ class GaiaState:
             players=self._replace_player(player, info),
             owners=tuple(owners),
             buildings=tuple(int(value) for value in buildings),
+            coexisting_mine_owner=tuple(coexisting_owners),
             gaiaformer_owner=tuple(gaiaformers),
         )
         return state._trigger_passive_charge(
@@ -1304,18 +1328,10 @@ class GaiaState:
         if tile == 3:
             return replace(info, vp=info.vp + 2 * self._building_count(player, Building.MINE))
         if tile == 4:
-            sectors = len({
-                self.planet_sectors[planet]
-                for planet, owner in enumerate(self.owners)
-                if owner == player
-            })
+            sectors = len(self._colonized_sectors(player))
             return replace(info, ore=min(15, info.ore + sectors))
         if tile == 5:
-            sectors = len({
-                self.planet_sectors[planet]
-                for planet, owner in enumerate(self.owners)
-                if owner == player
-            })
+            sectors = len(self._colonized_sectors(player))
             return replace(info, vp=info.vp + 2 * sectors)
         if tile == 6:
             gaia_planets = sum(
@@ -1499,7 +1515,7 @@ class GaiaState:
         plan = self._federation_plan(player)
         if plan is None:
             raise ValueError("no legal federation plan")
-        planets, satellites = plan
+        locations, satellites = plan
         original = self.players[player]
         if FACTIONS[original.faction].name == "Ivits":
             info = original.spend(qic=satellites)
@@ -1518,14 +1534,19 @@ class GaiaState:
         )
         info = self._score(info, "federation")
         federated = list(self.federated)
-        for planet in planets:
-            federated[planet] = True
+        coexisting_federated = list(self.coexisting_mine_federated)
+        for location in locations:
+            if location < N:
+                federated[location] = True
+            else:
+                coexisting_federated[location - N] = True
         supply = list(self.federation_tile_supply)
         supply[reward] -= 1
         return replace(
             self,
             players=self._replace_player(player, info),
             federated=tuple(federated),
+            coexisting_mine_federated=tuple(coexisting_federated),
             federation_tile_supply=tuple(supply),
         )
 
@@ -2088,8 +2109,9 @@ class GaiaState:
             if opponent == acting:
                 continue
             adjacent = any(
-                owner == opponent and self._distance(planet, other) <= 2
-                for other, owner in enumerate(self.owners)
+                self._player_has_structure(opponent, other)
+                and self._distance(planet, other) <= 2
+                for other in range(N)
             )
             if not adjacent:
                 continue
@@ -2108,16 +2130,8 @@ class GaiaState:
         info = self.players[player]
         faction = FACTIONS[info.faction]
         is_ivits = faction.name == "Ivits"
-        existing = tuple(
-            planet
-            for planet, owner in enumerate(self.owners)
-            if owner == player and self.federated[planet]
-        ) if is_ivits else ()
-        candidates = [
-            planet
-            for planet, owner in enumerate(self.owners)
-            if owner == player and not self.federated[planet]
-        ]
+        existing = self._structure_locations(player, federated=True) if is_ivits else ()
+        candidates = list(self._structure_locations(player, federated=False))
         threshold = self._federation_threshold(player)
         available_satellites = info.qic if faction.name == "Ivits" else self._cycle_power(info)
         best: tuple[tuple[int, int, int], tuple[int, ...], int] | None = None
@@ -2127,26 +2141,31 @@ class GaiaState:
                 power = sum(
                     self._structure_power(
                         player,
-                        Building(self.buildings[planet]),
-                        planet,
+                        self._location_building(location),
+                        self._location_planet(location),
                     )
-                    for planet in subset
+                    for location in subset
                 )
                 if existing:
                     power += sum(
                         self._structure_power(
                             player,
-                            Building(self.buildings[planet]),
-                            planet,
+                            self._location_building(location),
+                            self._location_planet(location),
                         )
-                        for planet in existing
+                        for location in existing
                     )
                 if power < threshold:
                     continue
                 satellites = (
-                    self._minimum_extension_satellites(existing, subset)
+                    self._minimum_extension_satellites(
+                        tuple(self._location_planet(location) for location in existing),
+                        tuple(self._location_planet(location) for location in subset),
+                    )
                     if existing
-                    else self._minimum_satellites(subset)
+                    else self._minimum_satellites(
+                        tuple(self._location_planet(location) for location in subset)
+                    )
                 )
                 if satellites > available_satellites or info.satellites + satellites > 25:
                     continue
@@ -2156,6 +2175,33 @@ class GaiaState:
             if best is not None and best[0][0] == 0:
                 break
         return None if best is None else (best[1], best[2])
+
+    @staticmethod
+    def _location_planet(location: int) -> int:
+        return location if location < N else location - N
+
+    def _location_building(self, location: int) -> Building:
+        if location >= N:
+            return Building.MINE
+        return Building(self.buildings[location])
+
+    def _structure_locations(
+        self,
+        player: int,
+        *,
+        federated: bool,
+    ) -> tuple[int, ...]:
+        primary = (
+            planet
+            for planet, owner in enumerate(self.owners)
+            if owner == player and self.federated[planet] == federated
+        )
+        coexisting = (
+            N + planet
+            for planet, owner in enumerate(self.coexisting_mine_owner)
+            if owner == player and self.coexisting_mine_federated[planet] == federated
+        )
+        return (*primary, *coexisting)
 
     def _minimum_extension_satellites(
         self,
@@ -2217,8 +2263,9 @@ class GaiaState:
             + range_bonus
         )
         return any(
-            owner == player and self._distance(source, destination) <= reach
-            for source, owner in enumerate(self.owners)
+            self._player_has_structure(player, source)
+            and self._distance(source, destination) <= reach
+            for source in range(N)
         )
 
     def _distance(self, source: int, destination: int) -> int:
@@ -2237,6 +2284,8 @@ class GaiaState:
         free_steps: int = 0,
     ) -> tuple[int, int, int]:
         info = self.players[player]
+        if self._can_lantids_coexist(player, planet):
+            return 2, 1, 0
         terrain = Terrain(self.terrains[planet])
         if terrain == Terrain.GAIA:
             qic = 0 if self.gaiaformer_owner[planet] == player else 1
@@ -2258,9 +2307,10 @@ class GaiaState:
         free_steps: int = 0,
         range_bonus: int = 0,
     ) -> bool:
+        coexisting = self._can_lantids_coexist(player, planet)
         if (
             not self.active_planets[planet]
-            or self.owners[planet] != -1
+            or (self.owners[planet] != -1 and not coexisting)
             or Terrain(self.terrains[planet]) == Terrain.TRANSDIM
             or self._building_count(player, Building.MINE) >= MAX_BUILDINGS[Building.MINE]
         ):
@@ -2272,6 +2322,16 @@ class GaiaState:
             and info.ore >= ore
             and info.qic >= qic
             and self._can_colonize(player, planet, range_bonus=range_bonus)
+        )
+
+    def _can_lantids_coexist(self, player: int, planet: int) -> bool:
+        return (
+            FACTIONS[self.players[player].faction].name == "Lantids"
+            and self.active_planets[planet]
+            and self.owners[planet] >= 0
+            and self.owners[planet] != player
+            and Building(self.buildings[planet]) != Building.EMPTY
+            and self.coexisting_mine_owner[planet] == -1
         )
 
     @staticmethod
@@ -2290,10 +2350,26 @@ class GaiaState:
         return info.bowl_one + info.bowl_two + info.bowl_three
 
     def _building_count(self, player: int, level: Building) -> int:
-        return sum(
+        primary = sum(
             owner == player and building == level
             for owner, building in zip(self.owners, self.buildings, strict=True)
         )
+        if level == Building.MINE:
+            primary += sum(owner == player for owner in self.coexisting_mine_owner)
+        return primary
+
+    def _player_has_structure(self, player: int, planet: int) -> bool:
+        return (
+            self.owners[planet] == player
+            or self.coexisting_mine_owner[planet] == player
+        )
+
+    def _colonized_sectors(self, player: int) -> set[int]:
+        return {
+            self.planet_sectors[planet]
+            for planet in range(N)
+            if self._player_has_structure(player, planet)
+        }
 
     def _structure_power(
         self,
@@ -2330,8 +2406,15 @@ class GaiaState:
 
     def _has_nearby_opponent(self, player: int, planet: int) -> bool:
         return any(
-            owner not in (-1, player) and self._distance(planet, other) <= 2
-            for other, owner in enumerate(self.owners)
+            any(
+                owner not in (-1, player)
+                for owner in (
+                    self.owners[other],
+                    self.coexisting_mine_owner[other],
+                )
+            )
+            and self._distance(planet, other) <= 2
+            for other in range(N)
         )
 
     def _replace_player(self, player: int, info: PlayerState) -> tuple[PlayerState, ...]:
@@ -2409,12 +2492,24 @@ class GaiaState:
 
     def _final_scoring_metric(self, player: int, tile: int) -> float:
         if tile == 0:
-            return float(sum(
+            primary = sum(
                 owner == player and federated
                 for owner, federated in zip(self.owners, self.federated, strict=True)
-            ))
+            )
+            coexisting = sum(
+                owner == player and federated
+                for owner, federated in zip(
+                    self.coexisting_mine_owner,
+                    self.coexisting_mine_federated,
+                    strict=True,
+                )
+            )
+            return float(primary + coexisting)
         if tile == 1:
-            return float(sum(owner == player for owner in self.owners))
+            return float(
+                sum(owner == player for owner in self.owners)
+                + sum(owner == player for owner in self.coexisting_mine_owner)
+            )
         if tile == 2:
             return float(self.players[player].colonized_types.bit_count())
         if tile == 3:
@@ -2423,11 +2518,7 @@ class GaiaState:
                 for owner, terrain in zip(self.owners, self.terrains, strict=True)
             ))
         if tile == 4:
-            return float(len({
-                self.planet_sectors[index]
-                for index, owner in enumerate(self.owners)
-                if owner == player
-            }))
+            return float(len(self._colonized_sectors(player)))
         return float(self.players[player].satellites)
 
     def _ranking_awards(
@@ -2588,6 +2679,12 @@ class GaiaState:
             values.append(float(self.owners[planet] == -1))
             values.extend(float(self.owners[planet] == player) for player in range(self.num_players))
             values.extend(float(self.buildings[planet] == building) for building in range(len(Building)))
+            values.append(float(self.coexisting_mine_owner[planet] == -1))
+            values.extend(
+                float(self.coexisting_mine_owner[planet] == player)
+                for player in range(self.num_players)
+            )
+            values.append(float(self.coexisting_mine_federated[planet]))
             values.append(float(self.gaiaformer_owner[planet] == -1))
             values.extend(float(self.gaiaformer_owner[planet] == player) for player in range(self.num_players))
             values.append(float(self.federated[planet]))
@@ -2602,6 +2699,9 @@ class GaiaState:
                     else "mine"
                 )
                 return f"place starting {structure} at planet {action - BUILD_OFFSET}"
+            planet = action - BUILD_OFFSET
+            if self._can_lantids_coexist(self.player_to_move, planet):
+                return f"build coexisting mine at planet {planet}"
             return f"build mine at planet {action - BUILD_OFFSET}"
         if GAIA_OFFSET <= action < UPGRADE_TRADING_OFFSET:
             return f"start Gaia Project at planet {action - GAIA_OFFSET}"
@@ -2730,7 +2830,7 @@ class GaiaState:
                 self.round_scoring_tiles[self.round_number - 1]
             ].key
         return {
-            "ruleset": "standard-v11",
+            "ruleset": "standard-v12",
             "round": max(0, min(self.round_number, MAX_ROUNDS)),
             "max_rounds": MAX_ROUNDS,
             "phase": (
@@ -2851,6 +2951,8 @@ class GaiaState:
                     "terrain": self.terrains[index],
                     "owner": self.owners[index],
                     "building": Building(self.buildings[index]).name.lower(),
+                    "coexisting_mine_owner": self.coexisting_mine_owner[index],
+                    "coexisting_mine_federated": self.coexisting_mine_federated[index],
                     "gaiaformer": self.gaiaformer_owner[index],
                     "federated": self.federated[index],
                 }

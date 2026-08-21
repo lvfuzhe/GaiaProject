@@ -11,6 +11,7 @@ from urllib.request import Request, urlopen
 from gaiazero.dashboard import (
     _interactive_action_record,
     _interactive_action_snapshot,
+    _interactive_board_changes,
     create_dashboard_server,
 )
 from gaiazero.game import GaiaState, MiniGaiaState
@@ -51,6 +52,42 @@ class DashboardTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.metrics.unlink(missing_ok=True)
+
+    def test_lantids_coexisting_mine_is_visible_in_board_history(self) -> None:
+        before = GaiaState.initial(2, faction_indices=(1, 2), first_player=0)
+        planet = next(
+            index for index, active in enumerate(before.active_planets) if active
+        )
+        owners = list(before.coexisting_mine_owner)
+        federated = list(before.coexisting_mine_federated)
+        owners[planet] = 0
+        federated[planet] = True
+        after = replace(
+            before,
+            coexisting_mine_owner=tuple(owners),
+            coexisting_mine_federated=tuple(federated),
+        )
+
+        changes = _interactive_board_changes(before, after)
+
+        self.assertIn(
+            {
+                "kind": "coexisting_mine",
+                "planet": planet,
+                "owner_before": -1,
+                "owner_after": 0,
+            },
+            changes,
+        )
+        self.assertIn(
+            {
+                "kind": "coexisting_federated",
+                "planet": planet,
+                "owner": 0,
+                "after": True,
+            },
+            changes,
+        )
 
     @staticmethod
     def post_json(url: str, payload: dict[str, object]) -> tuple[int, dict[str, object]]:

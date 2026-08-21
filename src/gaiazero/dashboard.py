@@ -662,6 +662,8 @@ def _public_setup_snapshot(state: GaiaState) -> dict[str, object]:
     for planet in snapshot["planets"]:
         planet["owner"] = -1
         planet["building"] = "empty"
+        planet["coexisting_mine_owner"] = -1
+        planet["coexisting_mine_federated"] = False
         planet["gaiaformer"] = -1
         planet["federated"] = False
     for player in snapshot["players"]:
@@ -1309,6 +1311,23 @@ def _interactive_board_changes(
                 "owner_after": after.owners[planet],
                 "building_before": Building(before.buildings[planet]).name.lower(),
                 "building_after": Building(after.buildings[planet]).name.lower(),
+            })
+        if before.coexisting_mine_owner[planet] != after.coexisting_mine_owner[planet]:
+            changes.append({
+                "kind": "coexisting_mine",
+                "planet": planet,
+                "owner_before": before.coexisting_mine_owner[planet],
+                "owner_after": after.coexisting_mine_owner[planet],
+            })
+        if (
+            before.coexisting_mine_federated[planet]
+            != after.coexisting_mine_federated[planet]
+        ):
+            changes.append({
+                "kind": "coexisting_federated",
+                "planet": planet,
+                "owner": after.coexisting_mine_owner[planet],
+                "after": after.coexisting_mine_federated[planet],
             })
         if before.gaiaformer_owner[planet] != after.gaiaformer_owner[planet]:
             changes.append({
