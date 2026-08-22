@@ -1154,18 +1154,39 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(
             tuple(GaiaState._booster_income(booster) for booster in range(BOOSTER_COUNT)),
             (
-                (2, 0, 0, 0, 0),
-                (0, 0, 0, 0, 2),
-                (0, 1, 1, 0, 0),
-                (0, 1, 0, 0, 2),
-                (2, 0, 0, 1, 0),
-                (0, 1, 0, 0, 0),
-                (0, 1, 0, 0, 0),
-                (0, 0, 1, 0, 0),
-                (0, 0, 0, 0, 4),
-                (4, 0, 0, 0, 0),
+                (2, 0, 0, 0, 0, 0),
+                (0, 0, 0, 0, 0, 2),
+                (0, 1, 1, 0, 0, 0),
+                (0, 1, 0, 0, 2, 0),
+                (2, 0, 0, 1, 0, 0),
+                (0, 1, 0, 0, 0, 0),
+                (0, 1, 0, 0, 0, 0),
+                (0, 0, 1, 0, 0, 0),
+                (0, 0, 0, 0, 0, 4),
+                (4, 0, 0, 0, 0, 0),
             ),
         )
+
+    def test_power_token_booster_adds_tokens_without_charging(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(0, 2), first_player=0)
+        )
+        boosters = [-1] * BOOSTER_COUNT
+        boosters[3] = 0
+        players = list(state.players)
+        players[0] = replace(players[0], bowl_one=0, bowl_two=0, bowl_three=0)
+        state = replace(
+            state,
+            booster_owner=tuple(boosters),
+            players=tuple(players),
+        )
+
+        preview = state._income_preview(0)
+        granted = state._grant_income().players[0]
+
+        self.assertEqual(preview["power_tokens"], 2)
+        self.assertEqual(preview["power_charge"], 0)
+        self.assertEqual((granted.bowl_one, granted.bowl_two, granted.bowl_three), (2, 0, 0))
 
     def test_bga_standard_tech_immediate_rewards(self) -> None:
         state = finish_starting_placement(GaiaState.initial(2, seed=7))
@@ -2113,6 +2134,53 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(built.gaiaformer_owner[target], -1)
         self.assertEqual(built.players[0].gaiaformers, 1)
 
+    def test_gaiaformer_planet_is_a_build_target_but_not_a_range_origin(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(
+                2,
+                seed=0,
+                faction_indices=(0, 2),
+                first_player=0,
+            )
+        )
+        gaiaformer_planet, remote_planet = next(
+            (gaiaformer_planet, remote_planet)
+            for gaiaformer_planet in range(len(state.active_planets))
+            for remote_planet in range(len(state.active_planets))
+            if gaiaformer_planet != remote_planet
+            and state.active_planets[gaiaformer_planet]
+            and state.active_planets[remote_planet]
+            and state.owners[gaiaformer_planet] == -1
+            and state.owners[remote_planet] == -1
+            and state.terrains[remote_planet] != Terrain.TRANSDIM
+            and state._distance(gaiaformer_planet, remote_planet) == 1
+            and state._range_qic_cost(0, remote_planet) > 0
+        )
+        original_range_cost = state._range_qic_cost(0, remote_planet)
+        gaiaformers = list(state.gaiaformer_owner)
+        gaiaformers[gaiaformer_planet] = 0
+        terrains = list(state.terrains)
+        terrains[gaiaformer_planet] = Terrain.GAIA
+        players = list(state.players)
+        players[0] = replace(players[0], credits=30, ore=15, qic=0)
+        state = replace(
+            state,
+            player_to_move=0,
+            gaiaformer_owner=tuple(gaiaformers),
+            terrains=tuple(int(terrain) for terrain in terrains),
+            players=tuple(players),
+        )
+
+        self.assertEqual(state._range_qic_cost(0, remote_planet), original_range_cost)
+        self.assertFalse(state._is_reachable(0, remote_planet))
+        self.assertFalse(state._can_build_mine(0, remote_planet))
+        self.assertTrue(state._can_build_mine(0, gaiaformer_planet))
+        self.assertEqual(state._build_cost(0, gaiaformer_planet)[2], 0)
+
+        built = state.apply(state.build_action(gaiaformer_planet))
+
+        self.assertTrue(built._is_reachable(0, remote_planet))
+
     def test_terrans_pi_converts_gaia_power_before_it_returns_to_bowl_two(self) -> None:
         state = GaiaState.initial(
             2,
@@ -2672,15 +2740,23 @@ class StandardGaiaRulesTests(unittest.TestCase):
             for planet, active in enumerate(gleens.active_planets)
             if active and gleens.terrains[planet] == Terrain.GAIA
         )
-        self.assertEqual(gleens._build_cost(0, gaia), (2, 2, 0))
         players = list(gleens.players)
-        players[0] = replace(players[0], credits=30, ore=15, vp=10)
+        tracks = list(players[0].tracks)
+        tracks[Track.NAVIGATION] = 5
+        players[0] = replace(
+            players[0],
+            credits=30,
+            ore=15,
+            vp=10,
+            tracks=tuple(tracks),
+        )
         gleens = replace(
             gleens,
             player_to_move=0,
             players=tuple(players),
             round_scoring_tiles=(1, 0, 2, 3, 4, 5),
         )
+        self.assertEqual(gleens._build_cost(0, gaia), (2, 2, 0))
         built = gleens._apply_build(gaia)
         self.assertEqual(built.players[0].vp, 12)
 
@@ -3155,7 +3231,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
             GaiaState.initial(2, faction_indices=(0, 2), first_player=0)
         )
         players = list(state.players)
-        players[0] = replace(players[0], credits=30, ore=15, qic=10)
+        players[0] = replace(players[0], credits=30, ore=15, qic=0)
         boosters = list(state.booster_owner)
         for index, owner in enumerate(boosters):
             if owner == 0:
@@ -3183,6 +3259,88 @@ class StandardGaiaRulesTests(unittest.TestCase):
         resolved = pending.apply(pending.build_action(target))
         self.assertEqual(resolved.pending_booster_range_player, -1)
         self.assertEqual(resolved.current_player, 1)
+        self.assertEqual(resolved.players[0].qic, 0)
+
+    def test_range_booster_reduces_qic_cost_for_distant_build(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(0, 2), first_player=0)
+        )
+        players = list(state.players)
+        players[0] = replace(players[0], credits=30, ore=15, qic=10)
+        boosters = list(state.booster_owner)
+        for index, owner in enumerate(boosters):
+            if owner == 0:
+                boosters[index] = -1
+        boosters[1] = 0
+        state = replace(
+            state,
+            player_to_move=0,
+            players=tuple(players),
+            booster_owner=tuple(boosters),
+        )
+        target = next(
+            planet
+            for planet in range(len(state.active_planets))
+            if state.active_planets[planet]
+            and state.owners[planet] == -1
+            and state.terrains[planet] != Terrain.TRANSDIM
+            and state._range_qic_cost(0, planet)
+            > state._range_qic_cost(0, planet, range_bonus=3)
+            and state._can_build_mine(0, planet, range_bonus=3)
+        )
+        normal_qic = state._build_cost(0, target)[2]
+        boosted_qic = state._build_cost(0, target, range_bonus=3)[2]
+        self.assertLess(boosted_qic, normal_qic)
+
+        pending = state.apply(BOOSTER_RANGE_ACTION)
+        resolved = pending.apply(pending.build_action(target))
+
+        self.assertEqual(resolved.players[0].qic, 10 - boosted_qic)
+
+    def test_range_booster_extends_gaia_project_and_pays_only_extra_range(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(0, 2), first_player=0)
+        )
+        players = list(state.players)
+        tracks = list(players[0].tracks)
+        tracks[Track.GAIA_PROJECT] = 1
+        players[0] = replace(
+            players[0],
+            qic=10,
+            bowl_one=0,
+            bowl_two=0,
+            bowl_three=6,
+            gaiaformers=1,
+            tracks=tuple(tracks),
+        )
+        boosters = list(state.booster_owner)
+        for index, owner in enumerate(boosters):
+            if owner == 0:
+                boosters[index] = -1
+        boosters[1] = 0
+        state = replace(
+            state,
+            player_to_move=0,
+            players=tuple(players),
+            booster_owner=tuple(boosters),
+        )
+        target = next(
+            planet
+            for planet in range(len(state.active_planets))
+            if state.active_planets[planet]
+            and state.terrains[planet] == Terrain.TRANSDIM
+            and state._range_qic_cost(0, planet)
+            > state._range_qic_cost(0, planet, range_bonus=3)
+            and state._can_start_gaia_project(0, planet, range_bonus=3)
+        )
+        boosted_qic = state._range_qic_cost(0, target, range_bonus=3)
+
+        pending = state.apply(BOOSTER_RANGE_ACTION)
+        self.assertIn(pending.gaia_action(target), pending.legal_actions())
+        resolved = pending.apply(pending.gaia_action(target))
+
+        self.assertEqual(resolved.players[0].qic, 10 - boosted_qic)
+        self.assertEqual(resolved.gaiaformer_owner[target], 0)
 
     def test_qic_and_knowledge_academies_are_distinct(self) -> None:
         state = finish_starting_placement(

@@ -363,7 +363,7 @@ BOOSTER_LABELS: tuple[str, ...] = (
     "2 credits; action: build a mine with 1 free terraforming step",
     "Charge 2 power; action: range +3 for one build or Gaia Project",
     "1 ore and 1 knowledge",
-    "1 ore and charge 2 power",
+    "1 ore and 2 power tokens",
     "2 credits and 1 Q.I.C.",
     "1 ore; pass: 1 VP per mine",
     "1 ore; pass: 2 VP per trading station",
@@ -850,13 +850,7 @@ class GaiaState:
             actions.extend(
                 self.gaia_action(planet)
                 for planet in range(N)
-                if self.active_planets[planet]
-                and Terrain(self.terrains[planet]) == Terrain.TRANSDIM
-                and self.owners[planet] == -1
-                and self.gaiaformer_owner[planet] == -1
-                and info.gaiaformers > 0
-                and self._cycle_power(info) >= self._gaia_cost(info)
-                and self._is_reachable(player, planet, range_bonus=3)
+                if self._can_start_gaia_project(player, planet, range_bonus=3)
             )
             return tuple(actions)
         if self.pending_tech_player >= 0:
@@ -891,11 +885,7 @@ class GaiaState:
                 actions.append(self.build_action(planet))
             if (
                 terrain == Terrain.TRANSDIM
-                and self.owners[planet] == -1
-                and self.gaiaformer_owner[planet] == -1
-                and info.gaiaformers > 0
-                and self._cycle_power(info) >= self._gaia_cost(info)
-                and self._is_reachable(player, planet)
+                and self._can_start_gaia_project(player, planet)
             ):
                 actions.append(self.gaia_action(planet))
             if self.owners[planet] != player:
@@ -1025,15 +1015,7 @@ class GaiaState:
                 actions.append(BOOSTER_TERRAFORM_ACTION)
             elif booster == 1 and any(
                 self._can_build_mine(player, planet, range_bonus=3)
-                or (
-                    self.active_planets[planet]
-                    and Terrain(self.terrains[planet]) == Terrain.TRANSDIM
-                    and self.owners[planet] == -1
-                    and self.gaiaformer_owner[planet] == -1
-                    and info.gaiaformers > 0
-                    and self._cycle_power(info) >= self._gaia_cost(info)
-                    and self._is_reachable(player, planet, range_bonus=3)
-                )
+                or self._can_start_gaia_project(player, planet, range_bonus=3)
                 for planet in range(N)
             ):
                 actions.append(BOOSTER_RANGE_ACTION)
@@ -1115,9 +1097,9 @@ class GaiaState:
             )._advance_turn()
         if self.pending_booster_range_player >= 0:
             if BUILD_OFFSET <= action < GAIA_OFFSET:
-                state = self._apply_build(action - BUILD_OFFSET)
+                state = self._apply_build(action - BUILD_OFFSET, range_bonus=3)
             else:
-                state = self._apply_gaia(action - GAIA_OFFSET)
+                state = self._apply_gaia(action - GAIA_OFFSET, range_bonus=3)
             return replace(state, pending_booster_range_player=-1)._advance_turn()
         if self.pending_tech_player >= 0:
             return self._apply_tech(action - TECH_OFFSET)._advance_turn()
@@ -1256,11 +1238,22 @@ class GaiaState:
             player_to_move=self.first_player,
         )._grant_income()
 
-    def _apply_build(self, planet: int, *, free_steps: int = 0) -> GaiaState:
+    def _apply_build(
+        self,
+        planet: int,
+        *,
+        free_steps: int = 0,
+        range_bonus: int = 0,
+    ) -> GaiaState:
         player = self.player_to_move
         terrain = Terrain(self.terrains[planet])
         coexisting = self._can_lantids_coexist(player, planet)
-        credits, ore, qic = self._build_cost(player, planet, free_steps=free_steps)
+        credits, ore, qic = self._build_cost(
+            player,
+            planet,
+            free_steps=free_steps,
+            range_bonus=range_bonus,
+        )
         info = self.players[player].spend(credits=credits, ore=ore, qic=qic)
         home = FACTIONS[info.faction].home
         steps = (
@@ -1316,9 +1309,12 @@ class GaiaState:
             state._structure_power(player, Building.MINE, planet),
         )
 
-    def _apply_gaia(self, planet: int) -> GaiaState:
+    def _apply_gaia(self, planet: int, *, range_bonus: int = 0) -> GaiaState:
         player = self.player_to_move
         info = self.players[player]
+        info = info.spend(
+            qic=self._range_qic_cost(player, planet, range_bonus=range_bonus)
+        )
         cost = self._gaia_cost(info)
         info = self._move_power_to_gaia(info, cost)
         info = replace(info, gaiaformers=info.gaiaformers - 1)
@@ -1950,6 +1946,7 @@ class GaiaState:
             booster_ore,
             booster_knowledge,
             booster_qic,
+            booster_power_tokens,
             booster_charge,
         ) = self._booster_income(self._player_booster(player))
 
@@ -1978,7 +1975,7 @@ class GaiaState:
             + faction.income_knowledge
         )
         qic = booster_qic + faction.income_qic
-        power_tokens = faction.income_power_tokens
+        power_tokens = faction.income_power_tokens + booster_power_tokens
 
         if faction.name == "Gleens" and not info.qic_academies:
             ore += qic
@@ -2775,10 +2772,79 @@ class GaiaState:
         *,
         range_bonus: int = 0,
     ) -> bool:
-        if not self._is_reachable(player, planet, range_bonus=range_bonus):
-            return False
         reserved = self.gaiaformer_owner[planet]
-        return reserved in (-1, player)
+        if reserved == player:
+            return True
+        if (
+            self._range_qic_cost(player, planet, range_bonus=range_bonus)
+            > self.players[player].qic
+        ):
+            return False
+        return reserved == -1
+
+    def _can_start_gaia_project(
+        self,
+        player: int,
+        planet: int,
+        *,
+        range_bonus: int = 0,
+    ) -> bool:
+        info = self.players[player]
+        return (
+            self.active_planets[planet]
+            and Terrain(self.terrains[planet]) == Terrain.TRANSDIM
+            and self.owners[planet] == -1
+            and self.gaiaformer_owner[planet] == -1
+            and info.gaiaformers > 0
+            and self._cycle_power(info) >= self._gaia_cost(info)
+            and info.qic
+            >= self._range_qic_cost(player, planet, range_bonus=range_bonus)
+        )
+
+    def _range_qic_cost(
+        self,
+        player: int,
+        destination: int,
+        *,
+        range_bonus: int = 0,
+    ) -> int:
+        return self._coordinate_range_qic_cost(
+            player,
+            self.planet_q[destination],
+            self.planet_r[destination],
+            range_bonus=range_bonus,
+        )
+
+    def _coordinate_range_qic_cost(
+        self,
+        player: int,
+        q: int,
+        r: int,
+        *,
+        range_bonus: int = 0,
+    ) -> int:
+        distances = [
+            hex_distance(self.planet_q[source], self.planet_r[source], q, r)
+            for source in range(N)
+            if self._player_has_structure(player, source)
+        ]
+        distances.extend(
+            hex_distance(source_q, source_r, q, r)
+            for owner, (source_q, source_r) in zip(
+                self.space_station_owner,
+                self._board_spaces(),
+                strict=False,
+            )
+            if owner == player
+        )
+        if not distances:
+            return N
+        reach = (
+            (1, 1, 2, 2, 3, 4)[self.players[player].tracks[Track.NAVIGATION]]
+            + range_bonus
+        )
+        distance_beyond_range = max(0, min(distances) - reach)
+        return (distance_beyond_range + 1) // 2
 
     def _is_reachable(
         self,
@@ -2837,22 +2903,32 @@ class GaiaState:
         planet: int,
         *,
         free_steps: int = 0,
+        range_bonus: int = 0,
     ) -> tuple[int, int, int]:
         info = self.players[player]
+        range_qic = (
+            0
+            if self.gaiaformer_owner[planet] == player
+            else self._range_qic_cost(
+                player,
+                planet,
+                range_bonus=range_bonus,
+            )
+        )
         if self._can_lantids_coexist(player, planet):
-            return 2, 1, 0
+            return 2, 1, range_qic
         terrain = Terrain(self.terrains[planet])
         if terrain == Terrain.GAIA:
             qic = 0 if self.gaiaformer_owner[planet] == player else 1
             if FACTIONS[info.faction].name == "Gleens" and qic:
-                return 2, 2, 0
-            return 2, 1, qic
+                return 2, 2, range_qic
+            return 2, 1, qic + range_qic
         steps = max(
             0,
             self._terrain_steps(FACTIONS[info.faction].home, terrain) - free_steps,
         )
         ore_per_step = (3, 3, 2, 1, 1, 1)[info.tracks[Track.TERRAFORMING]]
-        return 2, 1 + steps * ore_per_step, 0
+        return 2, 1 + steps * ore_per_step, range_qic
 
     def _can_build_mine(
         self,
@@ -2870,7 +2946,12 @@ class GaiaState:
             or self._building_count(player, Building.MINE) >= MAX_BUILDINGS[Building.MINE]
         ):
             return False
-        credits, ore, qic = self._build_cost(player, planet, free_steps=free_steps)
+        credits, ore, qic = self._build_cost(
+            player,
+            planet,
+            free_steps=free_steps,
+            range_bonus=range_bonus,
+        )
         info = self.players[player]
         return (
             info.credits >= credits
@@ -2997,20 +3078,20 @@ class GaiaState:
         return next((index for index, owner in enumerate(self.booster_owner) if owner == player), -1)
 
     @staticmethod
-    def _booster_income(booster: int) -> tuple[int, int, int, int, int]:
+    def _booster_income(booster: int) -> tuple[int, int, int, int, int, int]:
         incomes = (
-            (2, 0, 0, 0, 0),
-            (0, 0, 0, 0, 2),
-            (0, 1, 1, 0, 0),
-            (0, 1, 0, 0, 2),
-            (2, 0, 0, 1, 0),
-            (0, 1, 0, 0, 0),
-            (0, 1, 0, 0, 0),
-            (0, 0, 1, 0, 0),
-            (0, 0, 0, 0, 4),
-            (4, 0, 0, 0, 0),
+            (2, 0, 0, 0, 0, 0),
+            (0, 0, 0, 0, 0, 2),
+            (0, 1, 1, 0, 0, 0),
+            (0, 1, 0, 0, 2, 0),
+            (2, 0, 0, 1, 0, 0),
+            (0, 1, 0, 0, 0, 0),
+            (0, 1, 0, 0, 0, 0),
+            (0, 0, 1, 0, 0, 0),
+            (0, 0, 0, 0, 0, 4),
+            (4, 0, 0, 0, 0, 0),
         )
-        return incomes[booster] if booster >= 0 else (0, 0, 0, 0, 0)
+        return incomes[booster] if booster >= 0 else (0, 0, 0, 0, 0, 0)
 
     def _booster_pass_points(self, player: int, booster: int) -> int:
         points = 0

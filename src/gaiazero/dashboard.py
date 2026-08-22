@@ -1394,10 +1394,18 @@ def _interactive_action_costs(
                 if state.pending_booster_terraform_player >= 0
                 else 0
             ),
+            range_bonus=3 if state.pending_booster_range_player >= 0 else 0,
         )
         costs.update(credits=credits, ore=ore, qic=qic)
     elif kind == "gaia":
         costs["power_to_gaia"] = state._gaia_cost(state.players[player])
+        qic = state._range_qic_cost(
+            player,
+            target,
+            range_bonus=3 if state.pending_booster_range_player >= 0 else 0,
+        )
+        if qic:
+            costs["qic"] = qic
     elif kind == "upgrade_trading" and target is not None:
         costs.update(
             credits=3 if state._has_nearby_opponent(player, target) else 6,
