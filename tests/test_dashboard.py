@@ -23,6 +23,7 @@ from gaiazero.game.gaia_state import (
     ITARS_BURN_POWER_ACTION,
     ITARS_GAIA_FINISH_ACTION,
     ITARS_GAIA_TECH_ACTION,
+    LOST_PLANET_OFFSET,
     NEVLAS_CREDIT_ORE_ACTION,
     NEVLAS_POWER_TO_GAIA_ACTION,
     QIC_ACADEMY_ACTION,
@@ -459,6 +460,56 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(record["kind"], "ivits_space_station")
         self.assertTrue(component["code"].startswith("IVI-SS-"))
         self.assertEqual(len(after.snapshot()["space_stations"]), 1)
+
+    def test_lost_planet_placement_is_identified_in_actions_and_history(self) -> None:
+        state = GaiaState.initial(
+            2,
+            faction_indices=(0, 2),
+            first_player=0,
+        )
+        while state.is_starting_placement or state.is_booster_selection:
+            state = state.apply(state.legal_actions()[0])
+        players = list(state.players)
+        tracks = list(players[0].tracks)
+        tracks[Track.NAVIGATION] = 4
+        players[0] = replace(
+            players[0],
+            knowledge=4,
+            qic=5,
+            federation_keys=1,
+            tracks=tuple(tracks),
+        )
+        state = replace(
+            state,
+            player_to_move=0,
+            players=tuple(players),
+            round_scoring_tiles=(2, 0, 1, 3, 4, 5),
+        )
+        pending = state.apply(state.research_action(Track.NAVIGATION))
+        action = pending.legal_actions()[0]
+
+        summary = _interactive_action_snapshot(pending, action)
+        self.assertGreaterEqual(action, LOST_PLANET_OFFSET)
+        self.assertEqual(summary["kind"], "lost_planet")
+        self.assertIsInstance(summary["space_q"], int)
+        self.assertIsInstance(summary["space_r"], int)
+
+        after = pending.apply(action)
+        record = _interactive_action_record(
+            pending,
+            after,
+            action,
+            move=2,
+            player=0,
+            role="human",
+        )
+        self.assertEqual(record["kind"], "lost_planet")
+        self.assertIn("RES-NAV-L5", [item["code"] for item in record["components"]])
+        self.assertIn("P-70", [item["code"] for item in record["components"]])
+        self.assertIn("RND-03", [item["code"] for item in record["components"]])
+        self.assertTrue(
+            any(change["kind"] == "building" for change in record["changes"])
+        )
 
     def test_geodens_pi_knowledge_reward_is_identified_in_history(self) -> None:
         state = GaiaState.initial(
@@ -1111,6 +1162,60 @@ class DashboardTests(unittest.TestCase):
             and change["after"] == 1
             for change in spending_entry["effects"][0]["changes"]
         ))
+
+    def test_power_terraform_history_charges_ore_for_steps_beyond_free_step(self) -> None:
+        state = GaiaState.initial(
+            2,
+            faction_indices=(0, 2),
+            first_player=0,
+        )
+        while state.is_starting_placement or state.is_booster_selection:
+            state = state.apply(state.legal_actions()[0])
+        players = list(state.players)
+        tracks = list(players[0].tracks)
+        tracks[Track.NAVIGATION] = 5
+        players[0] = replace(
+            players[0],
+            credits=30,
+            ore=15,
+            qic=10,
+            bowl_one=0,
+            bowl_two=0,
+            bowl_three=20,
+            tracks=tuple(tracks),
+        )
+        state = replace(state, player_to_move=0, players=tuple(players))
+        pending = state.apply(state.power_action(PowerAction.TERRAFORM_ONE))
+        target = next(
+            planet
+            for planet in range(len(state.active_planets))
+            if state._terrain_steps(
+                Terrain.TERRA,
+                Terrain(state.terrains[planet]),
+            )
+            == 3
+            and pending.build_action(planet) in pending.legal_actions()
+            and state._build_cost(0, planet, free_steps=1)[2] == 0
+        )
+        action = pending.build_action(target)
+        after = pending.apply(action)
+        record = _interactive_action_record(
+            pending,
+            after,
+            action,
+            move=2,
+            player=0,
+            role="human",
+        )
+
+        self.assertEqual(
+            record["effects"][0]["costs"],
+            [
+                {"resource": "credits", "amount": 2},
+                {"resource": "ore", "amount": 7},
+            ],
+        )
+        self.assertEqual(after.players[0].ore, 8)
 
     def test_interactive_action_ledger_tracks_terrans_gaia_conversion(self) -> None:
         state = GaiaState.initial(

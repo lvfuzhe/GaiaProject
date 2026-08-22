@@ -22,6 +22,8 @@ from gaiazero.game.gaia_state import (
     ITARS_BURN_POWER_ACTION,
     ITARS_GAIA_FINISH_ACTION,
     ITARS_GAIA_TECH_ACTION,
+    LOST_PLANET_OFFSET,
+    LOST_PLANET_SLOT,
     MAX_BUILDINGS,
     NEVLAS_CREDITS_ACTION,
     NEVLAS_CREDIT_ORE_ACTION,
@@ -87,7 +89,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(sum(len(planets) for planets in state.starting_planets), 0)
         self.assertEqual(state.round_number, 0)
         self.assertTrue(state.is_starting_placement)
-        self.assertEqual(state.snapshot()["ruleset"], "standard-v18")
+        self.assertEqual(state.snapshot()["ruleset"], "standard-v20")
 
     def test_random_setup_is_seeded_and_respects_component_counts(self) -> None:
         first = GaiaState.initial(2, seed=19)
@@ -1028,7 +1030,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         snapshot = GaiaState.initial(3, seed=41).snapshot()
         setup = snapshot["setup"]
 
-        self.assertEqual(snapshot["ruleset"], "standard-v18")
+        self.assertEqual(snapshot["ruleset"], "standard-v20")
         self.assertEqual(setup["seed"], 41)
         self.assertEqual(setup["map"]["sector_count"], 10)
         self.assertEqual(len(setup["map"]["sectors"]), 10)
@@ -1303,6 +1305,187 @@ class StandardGaiaRulesTests(unittest.TestCase):
 
         science = advance_to_top(Track.SCIENCE, base)
         self.assertEqual(science.knowledge, 9)
+
+    def test_paid_and_technology_research_charge_power_from_level_two_to_three(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(
+                2,
+                faction_indices=(0, 2),
+                first_player=0,
+                standard_tech_tiles=tuple(range(STANDARD_TECH_COUNT)),
+            )
+        )
+        players = list(state.players)
+        tracks = list(players[0].tracks)
+        tracks[Track.SCIENCE] = 2
+        players[0] = replace(
+            players[0],
+            knowledge=4,
+            bowl_one=1,
+            bowl_two=2,
+            bowl_three=0,
+            tracks=tuple(tracks),
+        )
+        paid_state = replace(state, player_to_move=0, players=tuple(players))
+
+        paid = paid_state.apply(paid_state.research_action(Track.SCIENCE))
+
+        self.assertEqual(paid.players[0].knowledge, 0)
+        self.assertEqual(paid.players[0].tracks[Track.SCIENCE], 3)
+        self.assertEqual(
+            (
+                paid.players[0].bowl_one,
+                paid.players[0].bowl_two,
+                paid.players[0].bowl_three,
+            ),
+            (0, 1, 2),
+        )
+
+        tech_players = list(paid_state.players)
+        tech_players[0] = replace(tech_players[0], knowledge=0, tech_tiles=0)
+        tech_state = replace(
+            paid_state,
+            players=tuple(tech_players),
+            pending_tech_player=0,
+        )
+        advanced_by_tech = tech_state.apply(tech_state.tech_action(Track.SCIENCE))
+
+        self.assertEqual(advanced_by_tech.players[0].knowledge, 0)
+        self.assertEqual(advanced_by_tech.players[0].tracks[Track.SCIENCE], 3)
+        self.assertEqual(
+            (
+                advanced_by_tech.players[0].bowl_one,
+                advanced_by_tech.players[0].bowl_two,
+                advanced_by_tech.players[0].bowl_three,
+            ),
+            (0, 1, 2),
+        )
+
+    def test_research_level_five_requires_and_spends_a_green_federation_token(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(0, 2), first_player=0)
+        )
+        players = list(state.players)
+        tracks = list(players[0].tracks)
+        tracks[Track.SCIENCE] = 4
+        players[0] = replace(
+            players[0],
+            knowledge=4,
+            tracks=tuple(tracks),
+            federation_keys=0,
+        )
+        blocked = replace(state, player_to_move=0, players=tuple(players))
+        action = blocked.research_action(Track.SCIENCE)
+
+        self.assertNotIn(action, blocked.legal_actions())
+
+        players[0] = replace(players[0], federation_keys=1)
+        allowed = replace(blocked, players=tuple(players))
+        self.assertIn(action, allowed.legal_actions())
+
+        advanced = allowed.apply(action)
+
+        self.assertEqual(advanced.players[0].tracks[Track.SCIENCE], 5)
+        self.assertEqual(advanced.players[0].federation_keys, 0)
+        self.assertEqual(advanced.players[0].knowledge, 9)
+
+    def test_navigation_level_five_places_lost_planet_as_a_supply_free_mine(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(0, 2), first_player=0)
+        )
+        players = list(state.players)
+        tracks = list(players[0].tracks)
+        tracks[Track.NAVIGATION] = 4
+        players[0] = replace(
+            players[0],
+            knowledge=4,
+            qic=10,
+            federation_keys=1,
+            tracks=tuple(tracks),
+            advanced_tech_tiles=1 << 13,
+        )
+        state = replace(
+            state,
+            player_to_move=0,
+            players=tuple(players),
+            round_scoring_tiles=(2, 0, 1, 3, 4, 5),
+        )
+        ordinary_mines = state._mine_supply_count(0)
+        income_before = state._income_preview(0)["ore"]
+        score_before = state.players[0].vp
+
+        pending = state.apply(state.research_action(Track.NAVIGATION))
+
+        self.assertEqual(pending.players[0].knowledge, 0)
+        self.assertEqual(pending.players[0].federation_keys, 0)
+        self.assertEqual(pending.players[0].tracks[Track.NAVIGATION], 5)
+        self.assertEqual(pending.pending_lost_planet_player, 0)
+        self.assertEqual(pending.current_player, 0)
+        lost_actions = pending.legal_actions()
+        self.assertTrue(lost_actions)
+        self.assertTrue(all(action >= LOST_PLANET_OFFSET for action in lost_actions))
+        action = max(
+            lost_actions,
+            key=lambda candidate: pending._coordinate_range_qic_cost(
+                0,
+                *pending._board_spaces()[candidate - LOST_PLANET_OFFSET],
+            ),
+        )
+        space = action - LOST_PLANET_OFFSET
+        q, r = pending._board_spaces()[space]
+        range_cost = pending._coordinate_range_qic_cost(0, q, r)
+
+        placed = pending.apply(action)
+
+        self.assertTrue(placed.active_planets[LOST_PLANET_SLOT])
+        self.assertEqual(placed.owners[LOST_PLANET_SLOT], 0)
+        self.assertEqual(placed.buildings[LOST_PLANET_SLOT], Building.MINE)
+        self.assertEqual(placed.terrains[LOST_PLANET_SLOT], Terrain.LOST)
+        self.assertEqual(
+            (placed.planet_q[LOST_PLANET_SLOT], placed.planet_r[LOST_PLANET_SLOT]),
+            (q, r),
+        )
+        self.assertEqual(placed.players[0].qic, 10 - range_cost)
+        self.assertTrue(
+            placed.players[0].colonized_types & (1 << int(Terrain.LOST))
+        )
+        self.assertEqual(placed._building_count(0, Building.MINE), ordinary_mines + 1)
+        self.assertEqual(placed._mine_supply_count(0), ordinary_mines)
+        self.assertEqual(placed._income_preview(0)["ore"], income_before)
+        self.assertEqual(placed.snapshot()["players"][0]["structures"]["mine"]["built"], ordinary_mines)
+        self.assertEqual(placed.players[0].vp, score_before + 5)
+        self.assertEqual(placed.pending_lost_planet_player, -1)
+        self.assertEqual(placed.current_player, 1)
+        own_turn = replace(placed, player_to_move=0)
+        self.assertNotIn(
+            own_turn.upgrade_trading_action(LOST_PLANET_SLOT),
+            own_turn.legal_actions(),
+        )
+
+    def test_final_research_scoring_awards_four_points_for_levels_three_to_five(self) -> None:
+        state = GaiaState.initial(2, faction_indices=(0, 2), first_player=0)
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            credits=0,
+            ore=0,
+            knowledge=0,
+            tracks=(0, 0, 0, 0, 0, 0),
+        )
+        baseline = replace(state, players=tuple(players)).final_scores()[0]
+
+        expected = {2: 0, 3: 4, 4: 8, 5: 12}
+        for level, points in expected.items():
+            with self.subTest(level=level):
+                tracks = [0] * len(Track)
+                tracks[Track.GAIA_PROJECT] = level
+                scored_players = list(players)
+                scored_players[0] = replace(
+                    scored_players[0],
+                    tracks=tuple(tracks),
+                )
+                scored = replace(state, players=tuple(scored_players))
+                self.assertEqual(scored.final_scores()[0] - baseline, points)
 
     def test_bga_economy_and_science_track_income(self) -> None:
         state = GaiaState.initial(2, faction_indices=(0, 2), first_player=0)
@@ -3152,6 +3335,15 @@ class StandardGaiaRulesTests(unittest.TestCase):
         tokens = state._apply_power_action(PowerAction.POWER_TOKENS_TWO)
         self.assertEqual(tokens.players[0].bowl_one, 5)
 
+        one_step = state._apply_power_action(PowerAction.TERRAFORM_ONE)
+        self.assertEqual(one_step.players[0].ore, 5)
+        self.assertEqual(one_step.pending_power_terraform_player, 0)
+        self.assertEqual(one_step.pending_power_terraform_steps, 1)
+        self.assertIn(
+            "pay ore for remaining steps",
+            state.describe_action(state.power_action(PowerAction.TERRAFORM_ONE)),
+        )
+
     def test_power_terraform_action_keeps_turn_until_mine_is_built(self) -> None:
         state = finish_starting_placement(
             GaiaState.initial(2, faction_indices=(0, 2), first_player=0)
@@ -3171,14 +3363,43 @@ class StandardGaiaRulesTests(unittest.TestCase):
         )
         state = replace(state, player_to_move=0, players=tuple(players))
 
-        pending = state.apply(state.power_action(PowerAction.TERRAFORM_TWO))
-        self.assertEqual(pending.current_player, 0)
-        self.assertEqual(pending.pending_power_terraform_player, 0)
-        self.assertTrue(pending.legal_actions())
-        self.assertTrue(all(action < pending.gaia_action(0) for action in pending.legal_actions()))
-        resolved = pending.apply(pending.legal_actions()[0])
-        self.assertEqual(resolved.pending_power_terraform_player, -1)
-        self.assertEqual(resolved.current_player, 1)
+        for power_action, free_steps in (
+            (PowerAction.TERRAFORM_ONE, 1),
+            (PowerAction.TERRAFORM_TWO, 2),
+        ):
+            with self.subTest(power_action=power_action):
+                pending = state.apply(state.power_action(power_action))
+                self.assertEqual(pending.current_player, 0)
+                self.assertEqual(pending.pending_power_terraform_player, 0)
+                self.assertEqual(pending.pending_power_terraform_steps, free_steps)
+                self.assertTrue(pending.legal_actions())
+                self.assertTrue(
+                    all(
+                        action < pending.gaia_action(0)
+                        for action in pending.legal_actions()
+                    )
+                )
+                target = next(
+                    planet
+                    for planet in range(len(state.active_planets))
+                    if state._terrain_steps(
+                        FACTIONS[state.players[0].faction].home,
+                        Terrain(state.terrains[planet]),
+                    )
+                    == 3
+                    and pending.build_action(planet) in pending.legal_actions()
+                )
+                expected_cost = state._build_cost(
+                    0,
+                    target,
+                    free_steps=free_steps,
+                )
+                self.assertEqual(expected_cost[:2], (2, 1 + (3 - free_steps) * 3))
+                resolved = pending.apply(pending.build_action(target))
+                self.assertEqual(resolved.pending_power_terraform_player, -1)
+                self.assertEqual(resolved.pending_power_terraform_steps, 0)
+                self.assertEqual(resolved.players[0].ore, 15 - expected_cost[1])
+                self.assertEqual(resolved.current_player, 1)
 
     def test_terraforming_booster_builds_with_one_free_step(self) -> None:
         state = finish_starting_placement(

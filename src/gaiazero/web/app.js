@@ -4,10 +4,10 @@ const POLL_INTERVAL_MS = 1400;
 const PLAYER_COLORS = ["#18705a", "#c14c39", "#2d68a7", "#ad751c"];
 const TERRAIN_COLORS = [
   "#4d78b8", "#d7a93e", "#56a48e", "#d86b57", "#ba6f47",
-  "#8b8f96", "#b7d8e7", "#7356a8", "#5bbf79"
+  "#8b8f96", "#b7d8e7", "#7356a8", "#5bbf79", "#d3b65b"
 ];
 const SECTOR_FILLS = ["#eef4f1", "#f4f0e8", "#eef2f7", "#f5eeee", "#eff3ea"];
-const TERRAIN_LABELS = ["地球型", "沙漠", "沼泽", "火山", "氧化", "钛金", "冰冻", "跨维", "盖亚"];
+const TERRAIN_LABELS = ["地球型", "沙漠", "沼泽", "火山", "氧化", "钛金", "冰冻", "跨维", "盖亚", "失落星球"];
 const TRACK_LABELS = {
   terraforming: "地形改造",
   navigation: "航行",
@@ -1965,6 +1965,7 @@ function drawAssembledHexGrid(context, sectors, scale, offsetX, offsetY, compact
 }
 
 function drawPlanetArtwork(context, x, y, size, cellScale, planet, snapshot) {
+  if (Number(planet.terrain) === 9) return false;
   const sector = snapshot.setup?.map?.sectors?.find(
     (candidate) => Number(candidate.tile) === Number(planet.sector),
   );
@@ -2132,16 +2133,26 @@ function drawBoard(canvas, snapshot, options = {}) {
       context.beginPath();
       context.arc(x, y, size + (compactMap ? 2 : 4), 0, Math.PI * 2);
       context.stroke();
-      drawBuilding(
-        context,
-        planet.coexisting_mine_owner >= 0 ? x - size * 0.2 : x,
-        planet.coexisting_mine_owner >= 0 ? y - size * 0.12 : y,
-        planet.building,
-        PLAYER_COLORS[planet.owner],
-        planet.coexisting_mine_owner >= 0
-          ? (compactMap ? 0.54 : 0.78)
-          : (compactMap ? 0.68 : 1),
-      );
+      if (Number(planet.terrain) === 9) {
+        drawLostPlanetMarker(
+          context,
+          x,
+          y,
+          PLAYER_COLORS[planet.owner],
+          compactMap ? 0.68 : 1,
+        );
+      } else {
+        drawBuilding(
+          context,
+          planet.coexisting_mine_owner >= 0 ? x - size * 0.2 : x,
+          planet.coexisting_mine_owner >= 0 ? y - size * 0.12 : y,
+          planet.building,
+          PLAYER_COLORS[planet.owner],
+          planet.coexisting_mine_owner >= 0
+            ? (compactMap ? 0.54 : 0.78)
+            : (compactMap ? 0.68 : 1),
+        );
+      }
     }
     if (options.showPlayerPieces !== false && planet.coexisting_mine_owner >= 0) {
       const coexistingX = x + size * 0.38;
@@ -2560,6 +2571,26 @@ function renderPersonalBoards(containerId, snapshot) {
   container.dataset.signature = signature;
 }
 
+function drawLostPlanetMarker(context, x, y, color, scale = 1) {
+  context.save();
+  context.fillStyle = "#d3b65b";
+  context.strokeStyle = "#fff4c2";
+  context.lineWidth = Math.max(1, 1.5 * scale);
+  context.beginPath();
+  context.arc(x, y, 8 * scale, 0, Math.PI * 2);
+  context.fill();
+  context.stroke();
+  context.fillStyle = "#182333";
+  context.font = `800 ${Math.max(7, 8 * scale)}px Segoe UI`;
+  context.textAlign = "center";
+  context.fillText("L", x, y + 2.7 * scale);
+  context.fillStyle = color;
+  context.strokeStyle = "#ffffff";
+  context.fillRect(x + 5 * scale, y - 9 * scale, 7 * scale, 4 * scale);
+  context.strokeRect(x + 5 * scale, y - 9 * scale, 7 * scale, 4 * scale);
+  context.restore();
+}
+
 function renderLiveResearchBoard(snapshot) {
   const stage = byId("play-research-stage");
   const techLayer = byId("play-research-tech");
@@ -2639,6 +2670,7 @@ const PLAY_ACTION_LABELS = {
   taklons_passive_before: "Taklons 研究院：先获得能量片，再被动充能",
   taklons_passive_after: "Taklons 研究院：先被动充能，再获得能量片",
   ivits_space_station: "Ivits：放置空间站",
+  lost_planet: "航行 5 级：放置失落星球",
   bal_taks_gaiaformer_qic: "Bal T'aks：盖亚塑形者兑换 Q.I.C.",
   itars_burn_power: "Itars：燃烧能量",
   itars_gaia_tech: "Itars 研究院：兑换科技板块",
@@ -3118,6 +3150,9 @@ function playPhaseLabel(snapshot) {
   if (snapshot.phase === "gaia_conversion") {
     return `Terrans 盖亚兑换 · 剩余 ${snapshot.gaia_conversion?.remaining_power ?? 0}`;
   }
+  if (snapshot.phase === "lost_planet_placement") {
+    return "航行 5 级：放置失落星球";
+  }
   if (snapshot.phase === "itars_gaia_technology") {
     return `Itars 研究院科技兑换 · 剩余 ${snapshot.itars_gaia_technology?.remaining_power ?? 0}`;
   }
@@ -3134,7 +3169,9 @@ function renderPlayActions(session) {
     : targeted.filter((action) => Number(action.target) === state.play.selectedPlanetId);
   const general = actions.filter((action) => action.kind !== "select_booster" && (action.target === null || action.target === undefined));
   const boosterActions = actions.filter((action) => action.kind === "select_booster");
-  const otherGeneral = general.filter((action) => action.kind !== "select_booster");
+  const otherGeneral = general.filter(
+    (action) => action.kind !== "select_booster" && action.kind !== "lost_planet",
+  );
   const actionButton = (action) => `<button type="button" class="play-action-command" data-play-action="${action.id}" ${disabled ? "disabled" : ""}>
     <strong>${escapeHtml(PLAY_ACTION_LABELS[action.kind] || PLAY_ACTION_LABELS.other)}${action.target === null || action.target === undefined ? "" : ` · #${action.target}`}</strong>
     <small>${escapeHtml(action.label)}</small>
@@ -3173,6 +3210,8 @@ function renderPlayActions(session) {
       ? `P${session.state.current_player} 选择 Taklons 研究院的被动充能顺序`
       : session.state.phase === "gaia_conversion"
       ? `P${session.state.current_player} 结算 Terrans 盖亚兑换：剩余 ${session.state.gaia_conversion?.remaining_power ?? 0} 点`
+      : session.state.phase === "lost_planet_placement"
+      ? `P${session.state.current_player} 放置失落星球`
       : session.state.phase === "itars_gaia_technology"
       ? `P${session.state.current_player} 结算 Itars 研究院：每 4 个盖亚区能量片可获得 1 块科技板块`
       : `P${session.state.current_player} 由人工操作：点击星图筛选目标，再选择合法动作`;
@@ -3218,7 +3257,7 @@ function renderPlay() {
     .filter((action) => action.target !== null && action.target !== undefined)
     .map((action) => Number(action.target));
   const legalSpaceStations = (session.legal_actions || [])
-    .filter((action) => action.kind === "ivits_space_station")
+    .filter((action) => ["ivits_space_station", "lost_planet"].includes(action.kind))
     .map((action) => ({ q: Number(action.space_q), r: Number(action.space_r) }))
     .filter((space) => Number.isFinite(space.q) && Number.isFinite(space.r));
   drawStarMapBoard(byId("play-board-canvas"), snapshot, true, {
@@ -3282,6 +3321,40 @@ function planetAtPlayEvent(event) {
     return { id: Number(planet.id), distance: Math.hypot(clickX - x, clickY - y) };
   }).sort((left, right) => left.distance - right.distance)[0];
   return nearest && nearest.distance <= Math.max(14, geometry.size * 1.35) ? nearest.id : null;
+}
+
+function spaceActionAtPlayEvent(event, kind) {
+  const session = state.play.session;
+  const snapshot = session?.state;
+  const canvas = byId("play-board-canvas");
+  if (
+    !snapshot?.planets?.length
+    || !canvas
+    || session.current_role !== "human"
+    || session.status !== "active"
+    || state.play.requestBusy
+    || session.busy
+  ) return null;
+  const candidates = (session.legal_actions || []).filter(
+    (action) => action.kind === kind
+      && Number.isFinite(Number(action.space_q))
+      && Number.isFinite(Number(action.space_r)),
+  );
+  if (!candidates.length) return null;
+  const rect = canvas.getBoundingClientRect();
+  const clickX = event.clientX - rect.left;
+  const clickY = event.clientY - rect.top;
+  const geometry = boardGeometry(rect.width, rect.height, snapshot, true);
+  const nearest = candidates.map((action) => {
+    const q = Number(action.space_q);
+    const r = Number(action.space_r);
+    const x = geometry.offsetX + Math.sqrt(3) * (q + r / 2) * geometry.scale;
+    const y = geometry.offsetY + 1.5 * r * geometry.scale;
+    return { id: Number(action.id), distance: Math.hypot(clickX - x, clickY - y) };
+  }).sort((left, right) => left.distance - right.distance)[0];
+  return nearest && nearest.distance <= Math.max(14, geometry.size * 1.35)
+    ? nearest.id
+    : null;
 }
 
 function renderLatestAction() {
@@ -3459,6 +3532,11 @@ byId("play-config-form").addEventListener("submit", (event) => {
 });
 byId("play-back-to-setup").addEventListener("click", () => switchPlayWorkspace("setup"));
 byId("play-board-canvas").addEventListener("click", (event) => {
+  const lostPlanetAction = spaceActionAtPlayEvent(event, "lost_planet");
+  if (lostPlanetAction !== null) {
+    submitHumanAction(lostPlanetAction);
+    return;
+  }
   const planetId = planetAtPlayEvent(event);
   if (planetId === null) return;
   state.play.selectedPlanetId = state.play.selectedPlanetId === planetId ? null : planetId;

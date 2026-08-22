@@ -32,6 +32,9 @@ from gaiazero.game.gaia_state import (
     ITARS_BURN_POWER_ACTION,
     ITARS_GAIA_FINISH_ACTION,
     ITARS_GAIA_TECH_ACTION,
+    LOST_PLANET_LIMIT,
+    LOST_PLANET_OFFSET,
+    LOST_PLANET_SLOT,
     NEVLAS_CREDITS_ACTION,
     NEVLAS_CREDIT_ORE_ACTION,
     NEVLAS_KNOWLEDGE_ACTION,
@@ -755,6 +758,12 @@ def _interactive_action_snapshot(state: GaiaState, action: int) -> dict[str, Any
         board_spaces = state._board_spaces()
         if space_station_slot < len(board_spaces):
             space_q, space_r = board_spaces[space_station_slot]
+    elif LOST_PLANET_OFFSET <= action < LOST_PLANET_LIMIT:
+        kind = "lost_planet"
+        space_station_slot = action - LOST_PLANET_OFFSET
+        board_spaces = state._board_spaces()
+        if space_station_slot < len(board_spaces):
+            space_q, space_r = board_spaces[space_station_slot]
     elif action == TERRANS_GAIA_CREDIT_ACTION:
         kind = "terrans_gaia_credit"
     elif action == TERRANS_GAIA_ORE_ACTION:
@@ -881,6 +890,8 @@ def _interactive_phase(state: GaiaState) -> str:
         return "taklons_passive_charge"
     if state.pending_gaia_conversion_player >= 0:
         return "gaia_conversion"
+    if state.pending_lost_planet_player >= 0:
+        return "lost_planet_placement"
     if state.pending_itars_gaia_player >= 0:
         return "itars_gaia_technology"
     if state.is_terminal:
@@ -921,6 +932,25 @@ def _interactive_action_components(
                 "Brainstone",
                 "TAK-BRAINSTONE",
                 relation=("selected" if action["kind"] == "brainstone" else "spent"),
+            )
+        )
+    if action["kind"] == "lost_planet":
+        components.append(
+            _component_ref(
+                "research_track",
+                int(Track.NAVIGATION),
+                "Navigation level 5: Lost Planet",
+                "RES-NAV-L5",
+                relation="gained",
+            )
+        )
+        components.append(
+            _component_ref(
+                "planet",
+                LOST_PLANET_SLOT,
+                "Lost Planet",
+                f"P-{LOST_PLANET_SLOT}",
+                relation="gained",
             )
         )
     if action["kind"].startswith("terrans_gaia_"):
@@ -1200,11 +1230,11 @@ def _interactive_action_components(
     if power_action is not None:
         power_labels = (
             "Gain 3 knowledge",
-            "Build a mine with 2 free terraforming steps",
+            "Build a mine with 2 free terraforming steps; pay ore for remaining steps",
             "Gain 2 ore",
             "Gain 7 credits",
             "Gain 2 knowledge",
-            "Gain 1 ore",
+            "Build a mine with 1 free terraforming step; pay ore for remaining steps",
             "Gain 2 power tokens",
         )
         components.append(
@@ -1333,7 +1363,9 @@ def _interactive_action_components(
         tile = state.round_scoring_tiles[state.round_number - 1]
         scoring_kind = ROUND_SCORING_TILES[tile].kind
         scored_kinds: set[str] = set()
-        if action["kind"] == "build" and target is not None:
+        if action["kind"] == "lost_planet":
+            scored_kinds.add("mine")
+        elif action["kind"] == "build" and target is not None:
             terrain = Terrain(state.terrains[target])
             scored_kinds.add("mine")
             if terrain == Terrain.GAIA:
@@ -1388,7 +1420,7 @@ def _interactive_action_costs(
             player,
             target,
             free_steps=(
-                2
+                state.pending_power_terraform_steps
                 if state.pending_power_terraform_player >= 0
                 else 1
                 if state.pending_booster_terraform_player >= 0
@@ -1406,6 +1438,13 @@ def _interactive_action_costs(
         )
         if qic:
             costs["qic"] = qic
+    elif kind == "lost_planet":
+        q = action.get("space_q")
+        r = action.get("space_r")
+        if q is not None and r is not None:
+            qic = state._coordinate_range_qic_cost(player, int(q), int(r))
+            if qic:
+                costs["qic"] = qic
     elif kind == "upgrade_trading" and target is not None:
         costs.update(
             credits=3 if state._has_nearby_opponent(player, target) else 6,

@@ -28,6 +28,7 @@ class Terrain(IntEnum):
     ICE = 6
     TRANSDIM = 7
     GAIA = 8
+    LOST = 9
 
 
 class Building(IntEnum):
@@ -54,7 +55,7 @@ class PowerAction(IntEnum):
     ORE_TWO = 2
     CREDITS_SEVEN = 3
     KNOWLEDGE_TWO = 4
-    ORE_ONE = 5
+    TERRAFORM_ONE = 5
     POWER_TOKENS_TWO = 6
 
 
@@ -372,7 +373,10 @@ BOOSTER_LABELS: tuple[str, ...] = (
     "4 credits; pass: 1 VP per colonized Gaia planet",
 )
 
-N = MAX_PLANETS
+# Keep one reserved planet slot for the Navigation level-5 Lost Planet token.
+# Setup maps still contain at most MAX_PLANETS printed planets.
+N = MAX_PLANETS + 1
+LOST_PLANET_SLOT = N - 1
 BUILD_OFFSET = 0
 GAIA_OFFSET = BUILD_OFFSET + N
 UPGRADE_TRADING_OFFSET = GAIA_OFFSET + N
@@ -420,7 +424,9 @@ NEVLAS_CREDIT_ORE_ACTION = NEVLAS_CREDITS_ACTION + 1
 NEVLAS_ORE_ACTION = NEVLAS_CREDIT_ORE_ACTION + 1
 NEVLAS_QIC_ACTION = NEVLAS_ORE_ACTION + 1
 NEVLAS_KNOWLEDGE_ACTION = NEVLAS_QIC_ACTION + 1
-ACTION_SIZE = NEVLAS_KNOWLEDGE_ACTION + 1
+LOST_PLANET_OFFSET = NEVLAS_KNOWLEDGE_ACTION + 1
+LOST_PLANET_LIMIT = LOST_PLANET_OFFSET + MAX_BOARD_SPACES
+ACTION_SIZE = LOST_PLANET_LIMIT
 
 
 @dataclass(frozen=True, slots=True)
@@ -537,7 +543,9 @@ class GaiaState:
     pending_tech_player: int = -1
     pending_advanced_tech: int = -1
     pending_research_player: int = -1
+    pending_lost_planet_player: int = -1
     pending_power_terraform_player: int = -1
+    pending_power_terraform_steps: int = 0
     pending_booster_terraform_player: int = -1
     pending_booster_range_player: int = -1
     brainstone_selected: bool = False
@@ -612,14 +620,14 @@ class GaiaState:
             starting_planets=setup.starting_planets,
             placement_order=setup.placement_order,
             placement_step=0,
-            active_planets=setup.active_planets,
-            planet_q=setup.planet_q,
-            planet_r=setup.planet_r,
-            planet_source_q=setup.planet_source_q,
-            planet_source_r=setup.planet_source_r,
-            planet_source_ids=setup.planet_source_ids,
+            active_planets=(*setup.active_planets, False),
+            planet_q=(*setup.planet_q, 0),
+            planet_r=(*setup.planet_r, 0),
+            planet_source_q=(*setup.planet_source_q, 0),
+            planet_source_r=(*setup.planet_source_r, 0),
+            planet_source_ids=(*setup.planet_source_ids, -1),
             planet_source_catalog=setup.planet_source_catalog,
-            planet_sectors=setup.planet_sectors,
+            planet_sectors=(*setup.planet_sectors, -1),
             sector_tiles=setup.sector_tiles,
             sector_rotations=setup.sector_rotations,
             sector_centers=setup.sector_centers,
@@ -628,7 +636,7 @@ class GaiaState:
             buildings=tuple(int(value) for value in buildings),
             coexisting_mine_owner=tuple([-1] * N),
             coexisting_mine_federated=tuple([False] * N),
-            terrains=setup.terrains,
+            terrains=(*setup.terrains, int(Terrain.LOST)),
             gaiaformer_owner=tuple([-1] * N),
             federated=tuple([False] * N),
             space_station_owner=tuple([-1] * MAX_BOARD_SPACES),
@@ -764,6 +772,10 @@ class GaiaState:
         return IVITS_SPACE_STATION_OFFSET + int(space)
 
     @staticmethod
+    def lost_planet_action(space: int) -> int:
+        return LOST_PLANET_OFFSET + int(space)
+
+    @staticmethod
     def bescods_research_action(track: Track | int) -> int:
         return BESCODS_RESEARCH_OFFSET + int(track)
 
@@ -795,6 +807,7 @@ class GaiaState:
             self.pending_itars_gaia_player >= 0
             and self.pending_advanced_tech < 0
             and self.pending_research_player < 0
+            and self.pending_lost_planet_player < 0
             and self.pending_tech_player < 0
         ):
             actions = [ITARS_GAIA_FINISH_ACTION]
@@ -829,11 +842,18 @@ class GaiaState:
                 for track in Track
                 if self._can_player_advance(player, track)
             )
+        if self.pending_lost_planet_player >= 0:
+            return tuple(
+                self.lost_planet_action(space)
+                for space in range(len(self._board_spaces()))
+                if self._can_place_lost_planet(player, space)
+            )
         if self.pending_power_terraform_player >= 0:
+            free_steps = self.pending_power_terraform_steps
             return tuple(
                 self.build_action(planet)
                 for planet in range(N)
-                if self._can_build_mine(player, planet, free_steps=2)
+                if self._can_build_mine(player, planet, free_steps=free_steps)
             )
         if self.pending_booster_terraform_player >= 0:
             return tuple(
@@ -860,12 +880,10 @@ class GaiaState:
             if self._can_spend_selected_brainstone(player):
                 for power_action in PowerAction:
                     cost = self._power_action_cost(player, power_action)
-                    has_target = (
-                        power_action != PowerAction.TERRAFORM_TWO
-                        or any(
-                            self._can_build_mine(player, planet, free_steps=2)
-                            for planet in range(N)
-                        )
+                    free_steps = self._power_terraform_steps(power_action)
+                    has_target = not free_steps or any(
+                        self._can_build_mine(player, planet, free_steps=free_steps)
+                        for planet in range(N)
                     )
                     if (
                         self._can_spend_power(info, cost, use_brainstone=True)
@@ -891,6 +909,8 @@ class GaiaState:
             if self.owners[planet] != player:
                 continue
             level = Building(self.buildings[planet])
+            if terrain == Terrain.LOST:
+                continue
             if (
                 level == Building.MINE
                 and faction.ambas_swap_pi
@@ -953,12 +973,10 @@ class GaiaState:
                 actions.append(self.research_action(track))
         for power_action in PowerAction:
             cost = self._power_action_cost(player, power_action)
-            has_target = (
-                power_action != PowerAction.TERRAFORM_TWO
-                or any(
-                    self._can_build_mine(player, planet, free_steps=2)
-                    for planet in range(N)
-                )
+            free_steps = self._power_terraform_steps(power_action)
+            has_target = not free_steps or any(
+                self._can_build_mine(player, planet, free_steps=free_steps)
+                for planet in range(N)
             )
             if (
                 self._can_spend_power(info, cost)
@@ -1085,10 +1103,16 @@ class GaiaState:
             return self._apply_advanced_tech_cover(action - TECH_OFFSET)._advance_turn()
         if self.pending_research_player >= 0:
             return self._apply_free_research(action - RESEARCH_OFFSET)._advance_turn()
+        if self.pending_lost_planet_player >= 0:
+            return self._apply_lost_planet(action - LOST_PLANET_OFFSET)._advance_turn()
         if self.pending_power_terraform_player >= 0:
             return replace(
-                self._apply_build(action - BUILD_OFFSET, free_steps=2),
+                self._apply_build(
+                    action - BUILD_OFFSET,
+                    free_steps=self.pending_power_terraform_steps,
+                ),
                 pending_power_terraform_player=-1,
+                pending_power_terraform_steps=0,
             )._advance_turn()
         if self.pending_booster_terraform_player >= 0:
             return replace(
@@ -1175,6 +1199,8 @@ class GaiaState:
             state = self._apply_bescods_research(
                 action - BESCODS_RESEARCH_OFFSET
             )
+        elif LOST_PLANET_OFFSET <= action < LOST_PLANET_LIMIT:
+            state = self._apply_lost_planet(action - LOST_PLANET_OFFSET)
         else:
             raise ValueError(f"unknown action {action}")
         return state._advance_turn()
@@ -1464,9 +1490,18 @@ class GaiaState:
 
     def _apply_research(self, track: int) -> GaiaState:
         player = self.player_to_move
+        selected = Track(track)
+        places_lost_planet = (
+            selected == Track.NAVIGATION
+            and self.players[player].tracks[selected] == 4
+        )
         info = self.players[player].spend(knowledge=4)
-        info = self._advance_research(player, info, Track(track))
-        return replace(self, players=self._replace_player(player, info))
+        info = self._advance_research(player, info, selected)
+        return replace(
+            self,
+            players=self._replace_player(player, info),
+            pending_lost_planet_player=player if places_lost_planet else -1,
+        )
 
     def _apply_tech(self, space: int) -> GaiaState:
         player = self.player_to_move
@@ -1487,8 +1522,18 @@ class GaiaState:
             pending_tech_player=-1,
         )
         if space < TRACK_COUNT and state._can_player_advance(player, space):
+            places_lost_planet = (
+                space == Track.NAVIGATION
+                and info.tracks[Track.NAVIGATION] == 4
+            )
             info = state._advance_research(player, info, Track(space))
-            return replace(state, players=state._replace_player(player, info))
+            return replace(
+                state,
+                players=state._replace_player(player, info),
+                pending_lost_planet_player=(
+                    player if places_lost_planet else -1
+                ),
+            )
         if space >= TRACK_COUNT and state._has_research_choice(player):
             return replace(state, pending_research_player=player)
         return state
@@ -1563,11 +1608,17 @@ class GaiaState:
 
     def _apply_free_research(self, track: int) -> GaiaState:
         player = self.player_to_move
-        info = self._advance_research(player, self.players[player], Track(track))
+        selected = Track(track)
+        places_lost_planet = (
+            selected == Track.NAVIGATION
+            and self.players[player].tracks[selected] == 4
+        )
+        info = self._advance_research(player, self.players[player], selected)
         return replace(
             self,
             players=self._replace_player(player, info),
             pending_research_player=-1,
+            pending_lost_planet_player=player if places_lost_planet else -1,
         )
 
     def _bescods_research_tracks(self, player: int) -> tuple[Track, ...]:
@@ -1594,8 +1645,15 @@ class GaiaState:
             self.players[player],
             used_bescods_research_action=True,
         )
+        places_lost_planet = (
+            selected == Track.NAVIGATION and info.tracks[selected] == 4
+        )
         info = self._advance_research(player, info, selected)
-        return replace(self, players=self._replace_player(player, info))
+        return replace(
+            self,
+            players=self._replace_player(player, info),
+            pending_lost_planet_player=player if places_lost_planet else -1,
+        )
 
     def _apply_power_action(self, power_action: int) -> GaiaState:
         player = self.player_to_move
@@ -1607,18 +1665,18 @@ class GaiaState:
             use_brainstone=self.brainstone_selected,
         )
         pending_power_terraform_player = -1
+        pending_power_terraform_steps = 0
         if power_action == PowerAction.KNOWLEDGE_THREE:
             info = replace(info, knowledge=min(15, info.knowledge + 3))
-        elif power_action == PowerAction.TERRAFORM_TWO:
+        elif free_steps := self._power_terraform_steps(power_action):
             pending_power_terraform_player = player
+            pending_power_terraform_steps = free_steps
         elif power_action == PowerAction.ORE_TWO:
             info = replace(info, ore=min(15, info.ore + 2))
         elif power_action == PowerAction.CREDITS_SEVEN:
             info = replace(info, credits=min(30, info.credits + 7))
         elif power_action == PowerAction.KNOWLEDGE_TWO:
             info = replace(info, knowledge=min(15, info.knowledge + 2))
-        elif power_action == PowerAction.ORE_ONE:
-            info = replace(info, ore=min(15, info.ore + 1))
         else:
             info = replace(info, bowl_one=info.bowl_one + 2)
         return replace(
@@ -1626,6 +1684,7 @@ class GaiaState:
             players=self._replace_player(player, info),
             used_power_actions=self.used_power_actions | (1 << power_action),
             pending_power_terraform_player=pending_power_terraform_player,
+            pending_power_terraform_steps=pending_power_terraform_steps,
             brainstone_selected=False,
         )
 
@@ -1755,6 +1814,106 @@ class GaiaState:
 
     def _space_station_count(self, player: int) -> int:
         return sum(owner == player for owner in self.space_station_owner)
+
+    def _can_place_lost_planet(
+        self,
+        player: int,
+        space: int,
+    ) -> bool:
+        board_spaces = self._board_spaces()
+        if not 0 <= space < len(board_spaces):
+            return False
+        if self.active_planets[LOST_PLANET_SLOT]:
+            return False
+        q, r = board_spaces[space]
+        if self.space_station_owner[space] >= 0:
+            return False
+        if any(
+            active and planet_q == q and planet_r == r
+            for active, planet_q, planet_r in zip(
+                self.active_planets,
+                self.planet_q,
+                self.planet_r,
+                strict=True,
+            )
+        ):
+            return False
+        info = self.players[player]
+        return info.qic >= self._coordinate_range_qic_cost(
+            player,
+            q,
+            r,
+        )
+
+    def _lost_planet_sector(self, q: int, r: int) -> int:
+        for position, (center_q, center_r) in enumerate(self.sector_centers):
+            local_q = q - center_q
+            local_r = r - center_r
+            if max(abs(local_q), abs(local_r), abs(local_q + local_r)) <= 2:
+                return self.sector_tiles[position] + 1
+        raise ValueError("Lost Planet must be placed inside an assembled sector")
+
+    def _apply_lost_planet(self, space: int) -> GaiaState:
+        player = self.player_to_move
+        if self.pending_lost_planet_player != player:
+            raise ValueError("Lost Planet placement is not pending")
+        if not self._can_place_lost_planet(player, space):
+            raise ValueError("Lost Planet must be placed on an accessible empty space")
+        q, r = self._board_spaces()[space]
+        info = self.players[player].spend(
+            qic=self._coordinate_range_qic_cost(player, q, r)
+        )
+        info = self._score(info, "mine")
+        if info.advanced_tech_tiles & (1 << 13):
+            info = replace(info, vp=info.vp + 3)
+        if (
+            FACTIONS[info.faction].knowledge_for_new_type
+            and self._has_pi(player)
+            and not info.colonized_types & (1 << int(Terrain.LOST))
+        ):
+            info = replace(info, knowledge=min(15, info.knowledge + 3))
+        info = replace(
+            info,
+            colonized_types=info.colonized_types | (1 << int(Terrain.LOST)),
+        )
+
+        active = list(self.active_planets)
+        planet_q = list(self.planet_q)
+        planet_r = list(self.planet_r)
+        source_q = list(self.planet_source_q)
+        source_r = list(self.planet_source_r)
+        sectors = list(self.planet_sectors)
+        owners = list(self.owners)
+        buildings = list(self.buildings)
+        terrains = list(self.terrains)
+        active[LOST_PLANET_SLOT] = True
+        planet_q[LOST_PLANET_SLOT] = q
+        planet_r[LOST_PLANET_SLOT] = r
+        source_q[LOST_PLANET_SLOT] = q
+        source_r[LOST_PLANET_SLOT] = r
+        sectors[LOST_PLANET_SLOT] = self._lost_planet_sector(q, r)
+        owners[LOST_PLANET_SLOT] = player
+        buildings[LOST_PLANET_SLOT] = Building.MINE
+        terrains[LOST_PLANET_SLOT] = Terrain.LOST
+        state = replace(
+            self,
+            players=self._replace_player(player, info),
+            active_planets=tuple(active),
+            planet_q=tuple(planet_q),
+            planet_r=tuple(planet_r),
+            planet_source_q=tuple(source_q),
+            planet_source_r=tuple(source_r),
+            planet_sectors=tuple(sectors),
+            owners=tuple(owners),
+            buildings=tuple(int(value) for value in buildings),
+            terrains=tuple(int(value) for value in terrains),
+            pending_lost_planet_player=-1,
+        )
+        return state._trigger_passive_charge(
+            player,
+            LOST_PLANET_SLOT,
+            state._structure_power(player, Building.MINE, LOST_PLANET_SLOT),
+        )
 
     def _can_place_ivits_space_station(self, player: int, space: int) -> bool:
         board_spaces = self._board_spaces()
@@ -1895,6 +2054,7 @@ class GaiaState:
             or self.pending_tech_player >= 0
             or self.pending_advanced_tech >= 0
             or self.pending_research_player >= 0
+            or self.pending_lost_planet_player >= 0
             or self.pending_power_terraform_player >= 0
             or self.pending_booster_terraform_player >= 0
             or self.pending_booster_range_player >= 0
@@ -1933,7 +2093,7 @@ class GaiaState:
     def _income_preview(self, player: int) -> dict[str, int]:
         info = self.players[player]
         faction = FACTIONS[info.faction]
-        mines = self._building_count(player, Building.MINE)
+        mines = self._mine_supply_count(player)
         trading = self._building_count(player, Building.TRADING_STATION)
         labs = self._building_count(player, Building.RESEARCH_LAB)
         institutes = self._building_count(player, Building.PLANETARY_INSTITUTE)
@@ -2433,6 +2593,15 @@ class GaiaState:
             return (cost + 1) // 2
         return cost
 
+    @staticmethod
+    def _power_terraform_steps(power_action: PowerAction | int) -> int:
+        action = PowerAction(power_action)
+        if action == PowerAction.TERRAFORM_TWO:
+            return 2
+        if action == PowerAction.TERRAFORM_ONE:
+            return 1
+        return 0
+
     def _brainstone_action_available(self, player: int) -> bool:
         info = self.players[player]
         return (
@@ -2446,9 +2615,9 @@ class GaiaState:
                 )
                 and not self.used_power_actions & (1 << power_action)
                 and (
-                    power_action != PowerAction.TERRAFORM_TWO
+                    not (free_steps := self._power_terraform_steps(power_action))
                     or any(
-                        self._can_build_mine(player, planet, free_steps=2)
+                        self._can_build_mine(player, planet, free_steps=free_steps)
                         for planet in range(N)
                     )
                 )
@@ -2637,6 +2806,7 @@ class GaiaState:
             or state.pending_tech_player >= 0
             or state.pending_advanced_tech >= 0
             or state.pending_research_player >= 0
+            or state.pending_lost_planet_player >= 0
             or state.pending_power_terraform_player >= 0
             or state.pending_booster_terraform_player >= 0
             or state.pending_booster_range_player >= 0
@@ -2923,12 +3093,10 @@ class GaiaState:
             if FACTIONS[info.faction].name == "Gleens" and qic:
                 return 2, 2, range_qic
             return 2, 1, qic + range_qic
-        steps = max(
-            0,
-            self._terrain_steps(FACTIONS[info.faction].home, terrain) - free_steps,
-        )
+        total_steps = self._terrain_steps(FACTIONS[info.faction].home, terrain)
+        paid_steps = max(0, total_steps - free_steps)
         ore_per_step = (3, 3, 2, 1, 1, 1)[info.tracks[Track.TERRAFORMING]]
-        return 2, 1 + steps * ore_per_step, range_qic
+        return 2, 1 + paid_steps * ore_per_step, range_qic
 
     def _can_build_mine(
         self,
@@ -2943,7 +3111,7 @@ class GaiaState:
             not self.active_planets[planet]
             or (self.owners[planet] != -1 and not coexisting)
             or Terrain(self.terrains[planet]) == Terrain.TRANSDIM
-            or self._building_count(player, Building.MINE) >= MAX_BUILDINGS[Building.MINE]
+            or self._mine_supply_count(player) >= MAX_BUILDINGS[Building.MINE]
         ):
             return False
         credits, ore, qic = self._build_cost(
@@ -2967,6 +3135,7 @@ class GaiaState:
             and self.owners[planet] >= 0
             and self.owners[planet] != player
             and Building(self.buildings[planet]) != Building.EMPTY
+            and Terrain(self.terrains[planet]) != Terrain.LOST
             and self.coexisting_mine_owner[planet] == -1
         )
 
@@ -3003,6 +3172,23 @@ class GaiaState:
         if level == Building.MINE:
             primary += sum(owner == player for owner in self.coexisting_mine_owner)
         return primary
+
+    def _mine_supply_count(self, player: int) -> int:
+        """Return ordinary mine pieces removed from the faction board."""
+        primary = sum(
+            owner == player
+            and building == Building.MINE
+            and terrain != Terrain.LOST
+            for owner, building, terrain in zip(
+                self.owners,
+                self.buildings,
+                self.terrains,
+                strict=True,
+            )
+        )
+        return primary + sum(
+            owner == player for owner in self.coexisting_mine_owner
+        )
 
     def _player_has_structure(self, player: int, planet: int) -> bool:
         return (
@@ -3255,7 +3441,9 @@ class GaiaState:
             float(self.pending_tech_player >= 0),
             float(self.pending_advanced_tech >= 0),
             float(self.pending_research_player >= 0),
+            float(self.pending_lost_planet_player >= 0),
             float(self.pending_power_terraform_player >= 0),
+            self.pending_power_terraform_steps / 2.0,
             float(self.pending_booster_terraform_player >= 0),
             float(self.pending_booster_range_player >= 0),
         ))
@@ -3269,6 +3457,10 @@ class GaiaState:
         )
         values.extend(
             float(self.pending_taklons_charge_player == player)
+            for player in range(self.num_players)
+        )
+        values.extend(
+            float(self.pending_lost_planet_player == player)
             for player in range(self.num_players)
         )
         values.extend(
@@ -3407,7 +3599,18 @@ class GaiaState:
         if RESEARCH_OFFSET <= action < POWER_OFFSET:
             return f"research {Track(action - RESEARCH_OFFSET).name.lower()}"
         if POWER_OFFSET <= action < TECH_OFFSET:
-            return f"power action {PowerAction(action - POWER_OFFSET).name.lower()}"
+            power_action = PowerAction(action - POWER_OFFSET)
+            if power_action == PowerAction.TERRAFORM_ONE:
+                return (
+                    "power action: build a mine with 1 free terraforming step; "
+                    "pay ore for remaining steps"
+                )
+            if power_action == PowerAction.TERRAFORM_TWO:
+                return (
+                    "power action: build a mine with 2 free terraforming steps; "
+                    "pay ore for remaining steps"
+                )
+            return f"power action {power_action.name.lower()}"
         if TECH_OFFSET <= action < FEDERATION_OFFSET:
             space = action - TECH_OFFSET
             if space < STANDARD_TECH_COUNT:
@@ -3461,6 +3664,13 @@ class GaiaState:
                 q, r = board_spaces[space]
                 return f"Ivits PI special action: place space station at ({q}, {r})"
             return f"Ivits PI special action: unavailable board space {space}"
+        if LOST_PLANET_OFFSET <= action < LOST_PLANET_LIMIT:
+            space = action - LOST_PLANET_OFFSET
+            board_spaces = self._board_spaces()
+            if space < len(board_spaces):
+                q, r = board_spaces[space]
+                return f"place Lost Planet at ({q}, {r})"
+            return f"place Lost Planet at unavailable board space {space}"
         if action == BAL_TAKS_GAIAFORMER_QIC_ACTION:
             return "Bal T'aks free action: move 1 Gaiaformer to the Gaia area for 1 Q.I.C."
         if BESCODS_RESEARCH_OFFSET <= action < BESCODS_RESEARCH_LIMIT:
@@ -3524,6 +3734,11 @@ class GaiaState:
                 f" | player {self.player_to_move} Terrans Gaia conversion"
                 f" | budget {self.pending_gaia_conversion_power}"
             ]
+        elif self.pending_lost_planet_player >= 0:
+            lines = [
+                f"Round {min(self.round_number, MAX_ROUNDS)}/{MAX_ROUNDS}"
+                f" | player {self.player_to_move} places the Lost Planet"
+            ]
         elif self.pending_itars_gaia_player >= 0:
             lines = [
                 f"Round {min(self.round_number, MAX_ROUNDS)}/{MAX_ROUNDS}"
@@ -3572,7 +3787,7 @@ class GaiaState:
                 self.round_scoring_tiles[self.round_number - 1]
             ].key
         return {
-            "ruleset": "standard-v18",
+            "ruleset": "standard-v20",
             "round": max(0, min(self.round_number, MAX_ROUNDS)),
             "max_rounds": MAX_ROUNDS,
             "phase": (
@@ -3584,6 +3799,8 @@ class GaiaState:
                 if self.pending_taklons_charge_player >= 0
                 else "gaia_conversion"
                 if self.pending_gaia_conversion_player >= 0
+                else "lost_planet_placement"
+                if self.pending_lost_planet_player >= 0
                 else "itars_gaia_technology"
                 if self.pending_itars_gaia_player >= 0
                 else "terminal" if self.is_terminal else "round"
@@ -3612,6 +3829,29 @@ class GaiaState:
                     else None
                 ),
                 "remaining_power": self.pending_gaia_conversion_power,
+            },
+            "power_terraform": {
+                "active": self.pending_power_terraform_player >= 0,
+                "player": (
+                    self.pending_power_terraform_player
+                    if self.pending_power_terraform_player >= 0
+                    else None
+                ),
+                "free_steps": self.pending_power_terraform_steps,
+            },
+            "lost_planet_placement": {
+                "active": self.pending_lost_planet_player >= 0,
+                "player": (
+                    self.pending_lost_planet_player
+                    if self.pending_lost_planet_player >= 0
+                    else None
+                ),
+                "placed": self.active_planets[LOST_PLANET_SLOT],
+                "planet": (
+                    LOST_PLANET_SLOT
+                    if self.active_planets[LOST_PLANET_SLOT]
+                    else None
+                ),
             },
             "itars_gaia_technology": {
                 "active": self.pending_itars_gaia_player >= 0,
@@ -3676,9 +3916,17 @@ class GaiaState:
                     ),
                     "structures": {
                         building.name.lower(): {
-                            "built": self._building_count(player, building),
+                            "built": (
+                                self._mine_supply_count(player)
+                                if building == Building.MINE
+                                else self._building_count(player, building)
+                            ),
                             "supply": maximum
-                            - self._building_count(player, building),
+                            - (
+                                self._mine_supply_count(player)
+                                if building == Building.MINE
+                                else self._building_count(player, building)
+                            ),
                         }
                         for building, maximum in MAX_BUILDINGS.items()
                     },
@@ -3957,6 +4205,8 @@ class GaiaHeuristicEvaluator:
                 score = 0.8
             elif NEVLAS_CREDITS_ACTION <= action <= NEVLAS_KNOWLEDGE_ACTION:
                 score = 0.1
+            elif LOST_PLANET_OFFSET <= action < LOST_PLANET_LIMIT:
+                score = 1.4
             elif len(legal) == 1:
                 score = 0.5
             else:
