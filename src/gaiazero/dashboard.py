@@ -16,6 +16,7 @@ from gaiazero.game import GaiaHeuristicEvaluator, GaiaState
 from gaiazero.game.gaia_state import (
     ADVANCED_TECH_ACTION_OFFSET,
     BAL_TAKS_GAIAFORMER_QIC_ACTION,
+    BESCODS_RESEARCH_LIMIT,
     BESCODS_RESEARCH_OFFSET,
     BRAINSTONE_ACTION,
     BOOSTER_LABELS,
@@ -28,6 +29,9 @@ from gaiazero.game.gaia_state import (
     FEDERATION_OFFSET,
     IVITS_SPACE_STATION_OFFSET,
     IVITS_SPACE_STATION_LIMIT,
+    ITARS_BURN_POWER_ACTION,
+    ITARS_GAIA_FINISH_ACTION,
+    ITARS_GAIA_TECH_ACTION,
     QIC_ACADEMY_ACTION,
     QIC_FEDERATION_ACTION_OFFSET,
     QIC_PLANET_TYPES_ACTION,
@@ -714,9 +718,15 @@ def _interactive_action_snapshot(state: GaiaState, action: int) -> dict[str, Any
         kind = "brainstone"
     elif action == BAL_TAKS_GAIAFORMER_QIC_ACTION:
         kind = "bal_taks_gaiaformer_qic"
-    elif BESCODS_RESEARCH_OFFSET <= action < state.action_size:
+    elif BESCODS_RESEARCH_OFFSET <= action < BESCODS_RESEARCH_LIMIT:
         kind = "bescods_research"
         track = action - BESCODS_RESEARCH_OFFSET
+    elif action == ITARS_BURN_POWER_ACTION:
+        kind = "itars_burn_power"
+    elif action == ITARS_GAIA_TECH_ACTION:
+        kind = "itars_gaia_tech"
+    elif action == ITARS_GAIA_FINISH_ACTION:
+        kind = "itars_gaia_finish"
     elif action == TAKLONS_PASSIVE_BEFORE_ACTION:
         kind = "taklons_passive_before"
     elif action == TAKLONS_PASSIVE_AFTER_ACTION:
@@ -853,6 +863,8 @@ def _interactive_phase(state: GaiaState) -> str:
         return "taklons_passive_charge"
     if state.pending_gaia_conversion_player >= 0:
         return "gaia_conversion"
+    if state.pending_itars_gaia_player >= 0:
+        return "itars_gaia_technology"
     if state.is_terminal:
         return "terminal"
     return "round"
@@ -950,6 +962,29 @@ def _interactive_action_components(
                 11,
                 "Bescods: advance a tied lowest research area",
                 "BES-LOWEST-RESEARCH",
+                relation="uses",
+            )
+        )
+    if action["kind"] == "itars_burn_power":
+        components.append(
+            _component_ref(
+                "faction_ability",
+                13,
+                "Itars: burned power token moves to the Gaia area",
+                "ITA-BURN",
+                relation="uses",
+            )
+        )
+    if action["kind"] in ("itars_gaia_tech", "itars_gaia_finish") or (
+        action["kind"] == "technology"
+        and state.pending_itars_gaia_player >= 0
+    ):
+        components.append(
+            _component_ref(
+                "faction_ability",
+                13,
+                "Itars planetary institute: 4 Gaia power for a technology tile",
+                "ITA-PI-TECH",
                 relation="uses",
             )
         )
@@ -1343,6 +1378,8 @@ def _interactive_action_costs(
         costs["credits"] = 4
     elif kind == "bal_taks_gaiaformer_qic":
         costs["gaiaformers"] = 1
+    elif kind == "itars_gaia_tech":
+        costs["gaia_power"] = 4
     elif kind == "terrans_gaia_credit":
         costs["gaia_conversion_power"] = 1
     elif kind == "terrans_gaia_ore":

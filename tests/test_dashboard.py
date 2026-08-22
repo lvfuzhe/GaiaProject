@@ -20,6 +20,9 @@ from gaiazero.game.gaia_state import (
     BRAINSTONE_ACTION,
     Building,
     IVITS_SPACE_STATION_OFFSET,
+    ITARS_BURN_POWER_ACTION,
+    ITARS_GAIA_FINISH_ACTION,
+    ITARS_GAIA_TECH_ACTION,
     QIC_ACADEMY_ACTION,
     PowerAction,
     TERRANS_GAIA_FINISH_ACTION,
@@ -1164,6 +1167,107 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(finish_entry["kind"], "terrans_gaia_finish")
         self.assertEqual(finished.players[0].gaia_power, 0)
         self.assertEqual(finished.players[0].bowl_two, 5)
+
+    def test_interactive_action_ledger_tracks_itars_burn_and_pi_technology(self) -> None:
+        state = GaiaState.initial(
+            2,
+            seed=7,
+            faction_indices=(13, 2),
+            first_player=0,
+        )
+        players = list(state.players)
+        players[0] = replace(players[0], bowl_two=2, bowl_three=0, gaia_power=0)
+        state = replace(
+            state,
+            players=tuple(players),
+            round_number=1,
+            player_to_move=0,
+        )
+
+        burned = state.apply(ITARS_BURN_POWER_ACTION)
+        burn_entry = _interactive_action_record(
+            state,
+            burned,
+            ITARS_BURN_POWER_ACTION,
+            move=1,
+            player=0,
+            role="human",
+        )
+        self.assertEqual(burn_entry["kind"], "itars_burn_power")
+        self.assertTrue(any(
+            component["code"] == "ITA-BURN"
+            for component in burn_entry["components"]
+        ))
+        self.assertTrue(any(
+            change["kind"] == "counter"
+            and change["counter"] == "gaia_power"
+            and change["before"] == 0
+            and change["after"] == 1
+            for change in burn_entry["effects"][0]["changes"]
+        ))
+
+        pi_planet = next(
+            planet for planet, active in enumerate(state.active_planets) if active
+        )
+        owners = list(state.owners)
+        buildings = list(state.buildings)
+        owners[pi_planet] = 0
+        buildings[pi_planet] = Building.PLANETARY_INSTITUTE
+        players = list(state.players)
+        players[0] = replace(players[0], gaia_power=4)
+        pending = replace(
+            state,
+            owners=tuple(owners),
+            buildings=tuple(int(building) for building in buildings),
+            players=tuple(players),
+            pending_itars_gaia_player=0,
+        )
+
+        choosing = pending.apply(ITARS_GAIA_TECH_ACTION)
+        exchange_entry = _interactive_action_record(
+            pending,
+            choosing,
+            ITARS_GAIA_TECH_ACTION,
+            move=2,
+            player=0,
+            role="human",
+        )
+        self.assertEqual(exchange_entry["phase"], "itars_gaia_technology")
+        self.assertEqual(exchange_entry["kind"], "itars_gaia_tech")
+        self.assertEqual(
+            exchange_entry["effects"][0]["costs"],
+            [{"resource": "gaia_power", "amount": 4}],
+        )
+        self.assertTrue(any(
+            component["code"] == "ITA-PI-TECH"
+            for component in exchange_entry["components"]
+        ))
+
+        tech_action = choosing.tech_action(Track.TERRAFORMING)
+        gained = choosing.apply(tech_action)
+        tech_entry = _interactive_action_record(
+            choosing,
+            gained,
+            tech_action,
+            move=3,
+            player=0,
+            role="human",
+        )
+        self.assertTrue(any(
+            component["code"] == "ITA-PI-TECH"
+            for component in tech_entry["components"]
+        ))
+
+        finished = gained.apply(ITARS_GAIA_FINISH_ACTION)
+        finish_entry = _interactive_action_record(
+            gained,
+            finished,
+            ITARS_GAIA_FINISH_ACTION,
+            move=4,
+            player=0,
+            role="human",
+        )
+        self.assertEqual(finish_entry["kind"], "itars_gaia_finish")
 
     def test_interactive_game_selects_starting_boosters_before_round_one(self) -> None:
         server = create_dashboard_server(self.metrics, port=0, quiet=True)

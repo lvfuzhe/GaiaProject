@@ -88,7 +88,7 @@ const FACTION_ABILITIES = {
   Firaks: "起始少 1 矿石和 1 知识、额外获得 1 知识收入；建成行星研究院后，每轮一次可将研究所降级为贸易站并免费推进一条科研轨，该动作计作升级贸易站",
   Bescods: "行星研究院与学院位置、贸易站与研究所收入互换；每轮一次可免费推进一条并列最低科研轨；建成行星研究院后，灰色母星建筑强度 +1，研究院收入为 2 能量片",
   Nevlas: "能量碗 III 的能量可双倍计算",
-  Itars: "盖亚区能量可用于获得科技"
+  Itars: "燃烧能量时，弃置的能量片进入盖亚区；建成行星研究院后，盖亚阶段每弃置 4 个盖亚区能量片可获得 1 块科技板块；左侧学院收入为 3 知识"
 };
 const BASE_FACTIONS = [
   { id: 0, board: 1, side: "A", name: "Terrans", home_terrain: 0, start_track: "gaia_project", starting_power: [4, 4, 0], starting_credits: 15, starting_ore: 4, starting_knowledge: 3, starting_qic: 1, starting_structures: 2, starts_with_pi: false, federation_threshold: 7 },
@@ -2640,6 +2640,9 @@ const PLAY_ACTION_LABELS = {
   taklons_passive_after: "Taklons 研究院：先被动充能，再获得能量片",
   ivits_space_station: "Ivits：放置空间站",
   bal_taks_gaiaformer_qic: "Bal T'aks：盖亚塑形者兑换 Q.I.C.",
+  itars_burn_power: "Itars：燃烧能量",
+  itars_gaia_tech: "Itars 研究院：兑换科技板块",
+  itars_gaia_finish: "结束 Itars 研究院结算",
   terrans_gaia_credit: "Terrans 盖亚兑换：信用点",
   terrans_gaia_ore: "Terrans 盖亚兑换：矿石",
   terrans_gaia_knowledge: "Terrans 盖亚兑换：知识",
@@ -2674,6 +2677,7 @@ const PLAY_LOG_RESOURCE_LABELS = {
   power_tokens: "能量标记",
   power_to_gaia: "移入盖亚区",
   gaia_conversion_power: "盖亚兑换额度",
+  gaia_power: "盖亚区能量",
   gaiaformers: "盖亚塑形者",
   federation_key: "绿色联邦标记",
 };
@@ -3108,6 +3112,9 @@ function playPhaseLabel(snapshot) {
   if (snapshot.phase === "gaia_conversion") {
     return `Terrans 盖亚兑换 · 剩余 ${snapshot.gaia_conversion?.remaining_power ?? 0}`;
   }
+  if (snapshot.phase === "itars_gaia_technology") {
+    return `Itars 研究院科技兑换 · 剩余 ${snapshot.itars_gaia_technology?.remaining_power ?? 0}`;
+  }
   return `第 ${snapshot.round}/${snapshot.max_rounds} 轮`;
 }
 
@@ -3160,6 +3167,8 @@ function renderPlayActions(session) {
       ? `P${session.state.current_player} 选择 Taklons 研究院的被动充能顺序`
       : session.state.phase === "gaia_conversion"
       ? `P${session.state.current_player} 结算 Terrans 盖亚兑换：剩余 ${session.state.gaia_conversion?.remaining_power ?? 0} 点`
+      : session.state.phase === "itars_gaia_technology"
+      ? `P${session.state.current_player} 结算 Itars 研究院：每 4 个盖亚区能量片可获得 1 块科技板块`
       : `P${session.state.current_player} 由人工操作：点击星图筛选目标，再选择合法动作`;
     notice.className = "play-turn-notice human";
   } else {

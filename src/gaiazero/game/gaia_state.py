@@ -215,7 +215,7 @@ FACTIONS: tuple[FactionSpec, ...] = (
         None,
         (4, 4, 0),
         6,
-        "Gaia power can buy technology",
+        "Burned power tokens move from bowl II to the Gaia area; after building its planetary institute, every 4 power tokens discarded from the Gaia area during the Gaia phase can gain a technology tile",
         starting_qic=1,
         starting_ore=5,
         income_power_tokens=1,
@@ -410,7 +410,11 @@ IVITS_SPACE_STATION_OFFSET = TAKLONS_PASSIVE_AFTER_ACTION + 1
 IVITS_SPACE_STATION_LIMIT = IVITS_SPACE_STATION_OFFSET + MAX_BOARD_SPACES
 BAL_TAKS_GAIAFORMER_QIC_ACTION = IVITS_SPACE_STATION_LIMIT
 BESCODS_RESEARCH_OFFSET = BAL_TAKS_GAIAFORMER_QIC_ACTION + 1
-ACTION_SIZE = BESCODS_RESEARCH_OFFSET + TRACK_COUNT
+BESCODS_RESEARCH_LIMIT = BESCODS_RESEARCH_OFFSET + TRACK_COUNT
+ITARS_BURN_POWER_ACTION = BESCODS_RESEARCH_LIMIT
+ITARS_GAIA_TECH_ACTION = ITARS_BURN_POWER_ACTION + 1
+ITARS_GAIA_FINISH_ACTION = ITARS_GAIA_TECH_ACTION + 1
+ACTION_SIZE = ITARS_GAIA_FINISH_ACTION + 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -533,6 +537,7 @@ class GaiaState:
     brainstone_selected: bool = False
     pending_gaia_conversion_player: int = -1
     pending_gaia_conversion_power: int = 0
+    pending_itars_gaia_player: int = -1
     pending_taklons_charge_player: int = -1
     pending_taklons_charge_acting: int = -1
     pending_taklons_charge_amount: int = 0
@@ -780,6 +785,16 @@ class GaiaState:
             return tuple(actions)
         if self.pending_taklons_charge_player >= 0:
             return (TAKLONS_PASSIVE_BEFORE_ACTION, TAKLONS_PASSIVE_AFTER_ACTION)
+        if (
+            self.pending_itars_gaia_player >= 0
+            and self.pending_advanced_tech < 0
+            and self.pending_research_player < 0
+            and self.pending_tech_player < 0
+        ):
+            actions = [ITARS_GAIA_FINISH_ACTION]
+            if info.gaia_power >= 4 and self._has_tech_choice(player):
+                actions.append(ITARS_GAIA_TECH_ACTION)
+            return tuple(actions)
         if self.is_starting_placement:
             home = FACTIONS[info.faction].home
             return tuple(
@@ -840,7 +855,6 @@ class GaiaState:
             return tuple(actions)
         if self.pending_tech_player >= 0:
             return self._legal_technology_actions(player)
-
         if self.brainstone_selected:
             actions: list[int] = []
             if self._can_spend_selected_brainstone(player):
@@ -1045,6 +1059,8 @@ class GaiaState:
         )
         if faction.name == "Bal T'aks" and info.gaiaformers > 0:
             actions.append(BAL_TAKS_GAIAFORMER_QIC_ACTION)
+        if faction.name == "Itars" and info.bowl_two >= 2:
+            actions.append(ITARS_BURN_POWER_ACTION)
         return tuple(actions)
 
     def legal_action_mask(self) -> BoolArray:
@@ -1062,12 +1078,18 @@ class GaiaState:
             return self._apply_terrans_gaia_conversion(action)
         if self.pending_taklons_charge_player >= 0:
             return self._apply_taklons_passive_charge(action)
+        if action == ITARS_GAIA_TECH_ACTION:
+            return self._apply_itars_gaia_technology()
+        if action == ITARS_GAIA_FINISH_ACTION:
+            return self._apply_itars_gaia_finish()
         if action == BRAINSTONE_ACTION:
             return replace(self, brainstone_selected=True)
         if action in self._hadsch_hallas_credit_actions(self.player_to_move):
             return self._apply_hadsch_hallas_credit_action(action)
         if action == BAL_TAKS_GAIAFORMER_QIC_ACTION:
             return self._apply_bal_taks_gaiaformer_qic_action()
+        if action == ITARS_BURN_POWER_ACTION:
+            return self._apply_itars_burn_power()
         if self.pending_advanced_tech >= 0:
             return self._apply_advanced_tech_cover(action - TECH_OFFSET)._advance_turn()
         if self.pending_research_player >= 0:
@@ -1158,7 +1180,7 @@ class GaiaState:
             state = self._apply_ivits_space_station(
                 action - IVITS_SPACE_STATION_OFFSET
             )
-        elif BESCODS_RESEARCH_OFFSET <= action < ACTION_SIZE:
+        elif BESCODS_RESEARCH_OFFSET <= action < BESCODS_RESEARCH_LIMIT:
             state = self._apply_bescods_research(
                 action - BESCODS_RESEARCH_OFFSET
             )
@@ -1863,6 +1885,7 @@ class GaiaState:
     def _advance_turn(self) -> GaiaState:
         if (
             self.pending_gaia_conversion_player >= 0
+            or self.pending_itars_gaia_player >= 0
             or self.pending_taklons_charge_player >= 0
             or self.pending_tech_player >= 0
             or self.pending_advanced_tech >= 0
@@ -1990,7 +2013,8 @@ class GaiaState:
 
     def _gaia_phase(self) -> GaiaState:
         players: list[PlayerState] = []
-        pending_player = -1
+        pending_terrans = -1
+        pending_itars = -1
         for player, info in enumerate(self.players):
             faction = FACTIONS[info.faction]
             if faction.name == "Bal T'aks" and info.gaiaformers_in_gaia:
@@ -2001,14 +2025,22 @@ class GaiaState:
                 )
             if faction.gaia_to_bowl_two:
                 if info.gaia_power and self._has_pi(player):
-                    if pending_player < 0:
-                        pending_player = player
+                    if pending_terrans < 0 and pending_itars < 0:
+                        pending_terrans = player
                 else:
                     info = replace(
                         info,
                         bowl_two=info.bowl_two + info.gaia_power,
                         gaia_power=0,
                     )
+            elif (
+                faction.name == "Itars"
+                and self._has_pi(player)
+                and info.gaia_power >= 4
+                and self._has_tech_choice(player)
+            ):
+                if pending_terrans < 0 and pending_itars < 0:
+                    pending_itars = player
             else:
                 info = replace(info, bowl_one=info.bowl_one + info.gaia_power, gaia_power=0)
             if info.brainstone_bowl == 4:
@@ -2025,11 +2057,18 @@ class GaiaState:
             self,
             players=tuple(players),
             terrains=tuple(int(value) for value in terrains),
-            player_to_move=(pending_player if pending_player >= 0 else self.first_player),
-            pending_gaia_conversion_player=pending_player,
-            pending_gaia_conversion_power=(
-                players[pending_player].gaia_power if pending_player >= 0 else 0
+            player_to_move=(
+                pending_terrans
+                if pending_terrans >= 0
+                else pending_itars
+                if pending_itars >= 0
+                else self.first_player
             ),
+            pending_gaia_conversion_player=pending_terrans,
+            pending_gaia_conversion_power=(
+                players[pending_terrans].gaia_power if pending_terrans >= 0 else 0
+            ),
+            pending_itars_gaia_player=pending_itars,
         )
 
     def _hadsch_hallas_credit_actions(self, player: int) -> tuple[int, ...]:
@@ -2070,6 +2109,54 @@ class GaiaState:
             gaiaformers_in_gaia=info.gaiaformers_in_gaia + 1,
         )
         return replace(self, players=self._replace_player(player, info))
+
+    def _apply_itars_burn_power(self) -> GaiaState:
+        player = self.player_to_move
+        info = self.players[player]
+        if FACTIONS[info.faction].name != "Itars" or info.bowl_two < 2:
+            raise ValueError("Itars power burn is unavailable")
+        info = replace(
+            info,
+            bowl_two=info.bowl_two - 2,
+            bowl_three=info.bowl_three + 1,
+            gaia_power=info.gaia_power + 1,
+        )
+        return replace(self, players=self._replace_player(player, info))
+
+    def _apply_itars_gaia_technology(self) -> GaiaState:
+        player = self.pending_itars_gaia_player
+        if player < 0 or player != self.player_to_move:
+            raise ValueError("no Itars Gaia technology choice is pending")
+        info = self.players[player]
+        if (
+            FACTIONS[info.faction].name != "Itars"
+            or not self._has_pi(player)
+            or info.gaia_power < 4
+            or not self._has_tech_choice(player)
+        ):
+            raise ValueError("Itars Gaia technology is unavailable")
+        info = replace(info, gaia_power=info.gaia_power - 4)
+        return replace(
+            self,
+            players=self._replace_player(player, info),
+            pending_tech_player=player,
+        )
+
+    def _apply_itars_gaia_finish(self) -> GaiaState:
+        player = self.pending_itars_gaia_player
+        if player < 0 or player != self.player_to_move:
+            raise ValueError("no Itars Gaia technology choice is pending")
+        info = self.players[player]
+        info = replace(
+            info,
+            bowl_one=info.bowl_one + info.gaia_power,
+            gaia_power=0,
+        )
+        return replace(
+            self,
+            players=self._replace_player(player, info),
+            pending_itars_gaia_player=-1,
+        )._gaia_phase()
 
     def _apply_terrans_gaia_conversion(self, action: int) -> GaiaState:
         player = self.pending_gaia_conversion_player
@@ -2480,6 +2567,7 @@ class GaiaState:
         )
         if (
             state.pending_gaia_conversion_player >= 0
+            or state.pending_itars_gaia_player >= 0
             or state.pending_tech_player >= 0
             or state.pending_advanced_tech >= 0
             or state.pending_research_player >= 0
@@ -3011,6 +3099,7 @@ class GaiaState:
         values.extend((
             float(self.pending_gaia_conversion_player >= 0),
             self.pending_gaia_conversion_power / 15.0,
+            float(self.pending_itars_gaia_player >= 0),
             float(self.pending_taklons_charge_player >= 0),
             self.pending_taklons_charge_amount / 7.0,
             float(self.pending_tech_player >= 0),
@@ -3022,6 +3111,10 @@ class GaiaState:
         ))
         values.extend(
             float(self.pending_gaia_conversion_player == player)
+            for player in range(self.num_players)
+        )
+        values.extend(
+            float(self.pending_itars_gaia_player == player)
             for player in range(self.num_players)
         )
         values.extend(
@@ -3220,9 +3313,15 @@ class GaiaState:
             return f"Ivits PI special action: unavailable board space {space}"
         if action == BAL_TAKS_GAIAFORMER_QIC_ACTION:
             return "Bal T'aks free action: move 1 Gaiaformer to the Gaia area for 1 Q.I.C."
-        if BESCODS_RESEARCH_OFFSET <= action < ACTION_SIZE:
+        if BESCODS_RESEARCH_OFFSET <= action < BESCODS_RESEARCH_LIMIT:
             track = Track(action - BESCODS_RESEARCH_OFFSET)
             return f"Bescods action: advance lowest {track.name.lower()} research"
+        if action == ITARS_BURN_POWER_ACTION:
+            return "Itars free action: burn 2 power and move the discarded token to the Gaia area"
+        if action == ITARS_GAIA_TECH_ACTION:
+            return "Itars PI: discard 4 power from the Gaia area to gain a technology tile"
+        if action == ITARS_GAIA_FINISH_ACTION:
+            return "finish Itars Gaia technology and move remaining power to bowl I"
         if action in self._hadsch_hallas_credit_actions(self.player_to_move):
             if action == TERRANS_GAIA_ORE_ACTION:
                 return "Hadsch Hallas PI free action: 3 credits for 1 ore"
@@ -3263,6 +3362,12 @@ class GaiaState:
                 f" | player {self.player_to_move} Terrans Gaia conversion"
                 f" | budget {self.pending_gaia_conversion_power}"
             ]
+        elif self.pending_itars_gaia_player >= 0:
+            lines = [
+                f"Round {min(self.round_number, MAX_ROUNDS)}/{MAX_ROUNDS}"
+                f" | player {self.player_to_move} Itars Gaia technology"
+                f" | Gaia power {self.players[self.player_to_move].gaia_power}"
+            ]
         else:
             lines = [f"Round {min(self.round_number, MAX_ROUNDS)}/{MAX_ROUNDS}"]
         if (
@@ -3271,6 +3376,7 @@ class GaiaState:
             and not self.is_booster_selection
             and self.pending_taklons_charge_player < 0
             and self.pending_gaia_conversion_player < 0
+            and self.pending_itars_gaia_player < 0
         ):
             scoring = ROUND_SCORING_TILES[
                 self.round_scoring_tiles[self.round_number - 1]
@@ -3297,12 +3403,14 @@ class GaiaState:
             and not self.is_starting_placement
             and not self.is_booster_selection
             and self.pending_taklons_charge_player < 0
+            and self.pending_gaia_conversion_player < 0
+            and self.pending_itars_gaia_player < 0
         ):
             current_scoring = ROUND_SCORING_TILES[
                 self.round_scoring_tiles[self.round_number - 1]
             ].key
         return {
-            "ruleset": "standard-v16",
+            "ruleset": "standard-v17",
             "round": max(0, min(self.round_number, MAX_ROUNDS)),
             "max_rounds": MAX_ROUNDS,
             "phase": (
@@ -3314,6 +3422,8 @@ class GaiaState:
                 if self.pending_taklons_charge_player >= 0
                 else "gaia_conversion"
                 if self.pending_gaia_conversion_player >= 0
+                else "itars_gaia_technology"
+                if self.pending_itars_gaia_player >= 0
                 else "terminal" if self.is_terminal else "round"
             ),
             "taklons_passive_charge": {
@@ -3340,6 +3450,21 @@ class GaiaState:
                     else None
                 ),
                 "remaining_power": self.pending_gaia_conversion_power,
+            },
+            "itars_gaia_technology": {
+                "active": self.pending_itars_gaia_player >= 0,
+                "player": (
+                    self.pending_itars_gaia_player
+                    if self.pending_itars_gaia_player >= 0
+                    else None
+                ),
+                "remaining_power": (
+                    self.players[self.pending_itars_gaia_player].gaia_power
+                    if self.pending_itars_gaia_player >= 0
+                    else 0
+                ),
+                "gain_technology_action": ITARS_GAIA_TECH_ACTION,
+                "finish_action": ITARS_GAIA_FINISH_ACTION,
             },
             "placement": {
                 "active": self.is_starting_placement,
@@ -3658,8 +3783,14 @@ class GaiaHeuristicEvaluator:
                 score = 1.1
             elif action == BAL_TAKS_GAIAFORMER_QIC_ACTION:
                 score = 0.8
-            elif BESCODS_RESEARCH_OFFSET <= action < ACTION_SIZE:
+            elif BESCODS_RESEARCH_OFFSET <= action < BESCODS_RESEARCH_LIMIT:
                 score = 1.3
+            elif action == ITARS_BURN_POWER_ACTION:
+                score = 0.3
+            elif action == ITARS_GAIA_TECH_ACTION:
+                score = 1.5
+            elif action == ITARS_GAIA_FINISH_ACTION:
+                score = 0.0
             elif len(legal) == 1:
                 score = 0.5
             else:

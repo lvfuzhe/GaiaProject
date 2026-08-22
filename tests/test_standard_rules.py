@@ -19,6 +19,9 @@ from gaiazero.game.gaia_state import (
     FACTIONS,
     FINAL_SCORING_TILES,
     IVITS_SPACE_STATION_OFFSET,
+    ITARS_BURN_POWER_ACTION,
+    ITARS_GAIA_FINISH_ACTION,
+    ITARS_GAIA_TECH_ACTION,
     MAX_BUILDINGS,
     PASS_BOOSTER_OFFSET,
     PASS_FINAL_ACTION,
@@ -78,7 +81,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(sum(len(planets) for planets in state.starting_planets), 0)
         self.assertEqual(state.round_number, 0)
         self.assertTrue(state.is_starting_placement)
-        self.assertEqual(state.snapshot()["ruleset"], "standard-v16")
+        self.assertEqual(state.snapshot()["ruleset"], "standard-v17")
 
     def test_random_setup_is_seeded_and_respects_component_counts(self) -> None:
         first = GaiaState.initial(2, seed=19)
@@ -1019,7 +1022,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         snapshot = GaiaState.initial(3, seed=41).snapshot()
         setup = snapshot["setup"]
 
-        self.assertEqual(snapshot["ruleset"], "standard-v16")
+        self.assertEqual(snapshot["ruleset"], "standard-v17")
         self.assertEqual(setup["seed"], 41)
         self.assertEqual(setup["map"]["sector_count"], 10)
         self.assertEqual(len(setup["map"]["sectors"]), 10)
@@ -2189,6 +2192,216 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(resolved.pending_gaia_conversion_player, -1)
         self.assertEqual(resolved.players[0].gaia_power, 0)
         self.assertEqual(resolved.players[0].bowl_two, 6)
+
+    def test_itars_starting_resources_and_income_match_faction_board(self) -> None:
+        state = GaiaState.initial(
+            2,
+            faction_indices=(13, 2),
+            first_player=0,
+        )
+        itars = state.players[0]
+
+        self.assertEqual(
+            (itars.credits, itars.ore, itars.knowledge, itars.qic),
+            (15, 5, 3, 1),
+        )
+        self.assertEqual(
+            (itars.bowl_one, itars.bowl_two, itars.bowl_three),
+            (4, 4, 0),
+        )
+        self.assertEqual(itars.tracks, (0,) * len(Track))
+        self.assertEqual(state._income_preview(0)["power_tokens"], 1)
+
+        planet = next(
+            planet for planet, active in enumerate(state.active_planets) if active
+        )
+        owners = list(state.owners)
+        buildings = list(state.buildings)
+        owners[planet] = 0
+        buildings[planet] = Building.PLANETARY_INSTITUTE
+        players = list(state.players)
+        players[0] = replace(players[0], knowledge_academies=1)
+        developed = replace(
+            state,
+            owners=tuple(owners),
+            buildings=tuple(int(building) for building in buildings),
+            players=tuple(players),
+        )
+        income = developed._income_preview(0)
+
+        self.assertEqual(income["knowledge"], 4)
+        self.assertEqual(income["power_tokens"], 2)
+        self.assertEqual(income["power_charge"], 4)
+
+    def test_itars_burn_moves_discarded_tokens_to_gaia_as_free_actions(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(13, 2), first_player=0)
+        )
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            bowl_one=0,
+            bowl_two=4,
+            bowl_three=0,
+            gaia_power=0,
+        )
+        state = replace(state, player_to_move=0, players=tuple(players))
+
+        self.assertIn(ITARS_BURN_POWER_ACTION, state.legal_actions())
+        burned_once = state.apply(ITARS_BURN_POWER_ACTION)
+        self.assertEqual(burned_once.player_to_move, 0)
+        self.assertEqual(
+            (
+                burned_once.players[0].bowl_two,
+                burned_once.players[0].bowl_three,
+                burned_once.players[0].gaia_power,
+            ),
+            (2, 1, 1),
+        )
+        burned_twice = burned_once.apply(ITARS_BURN_POWER_ACTION)
+        self.assertEqual(
+            (
+                burned_twice.players[0].bowl_two,
+                burned_twice.players[0].bowl_three,
+                burned_twice.players[0].gaia_power,
+            ),
+            (0, 2, 2),
+        )
+        self.assertNotIn(ITARS_BURN_POWER_ACTION, burned_twice.legal_actions())
+
+        non_itars = replace(state, player_to_move=1)
+        self.assertNotIn(ITARS_BURN_POWER_ACTION, non_itars.legal_actions())
+
+    def test_itars_pi_exchanges_gaia_power_for_technology_and_returns_remainder(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(13, 2), first_player=1)
+        )
+        pi_planet = state.starting_planets[0][0]
+        buildings = list(state.buildings)
+        buildings[pi_planet] = Building.PLANETARY_INSTITUTE
+        players = list(state.players)
+        players[0] = replace(players[0], bowl_one=2, gaia_power=8)
+        state = replace(
+            state,
+            first_player=1,
+            player_to_move=1,
+            buildings=tuple(int(building) for building in buildings),
+            players=tuple(players),
+        )
+
+        pending = state._gaia_phase()
+
+        self.assertEqual(pending.player_to_move, 0)
+        self.assertEqual(pending.pending_itars_gaia_player, 0)
+        self.assertEqual(pending.snapshot()["phase"], "itars_gaia_technology")
+        self.assertEqual(
+            set(pending.legal_actions()),
+            {ITARS_GAIA_TECH_ACTION, ITARS_GAIA_FINISH_ACTION},
+        )
+
+        choosing = pending.apply(ITARS_GAIA_TECH_ACTION)
+        self.assertEqual(choosing.players[0].gaia_power, 4)
+        self.assertEqual(choosing.pending_tech_player, 0)
+        tech_action = choosing.tech_action(Track.TERRAFORMING)
+        self.assertIn(tech_action, choosing.legal_actions())
+        gained = choosing.apply(tech_action)
+        gained_tile = choosing.standard_tech_tiles[Track.TERRAFORMING]
+        self.assertTrue(gained.players[0].tech_tiles & (1 << gained_tile))
+        self.assertEqual(gained.players[0].tracks[Track.TERRAFORMING], 1)
+        self.assertEqual(gained.pending_itars_gaia_player, 0)
+        self.assertEqual(gained.player_to_move, 0)
+
+        finished = gained.apply(ITARS_GAIA_FINISH_ACTION)
+        self.assertEqual(finished.pending_itars_gaia_player, -1)
+        self.assertEqual(finished.players[0].gaia_power, 0)
+        self.assertEqual(finished.players[0].bowl_one, 6)
+        self.assertEqual(finished.player_to_move, 1)
+
+    def test_itars_without_pi_returns_gaia_power_to_bowl_one(self) -> None:
+        state = GaiaState.initial(
+            2,
+            faction_indices=(13, 2),
+            first_player=0,
+        )
+        players = list(state.players)
+        players[0] = replace(players[0], bowl_one=1, gaia_power=5)
+
+        resolved = replace(state, players=tuple(players))._gaia_phase()
+
+        self.assertEqual(resolved.pending_itars_gaia_player, -1)
+        self.assertEqual(resolved.players[0].gaia_power, 0)
+        self.assertEqual(resolved.players[0].bowl_one, 6)
+
+    def test_itars_pi_can_take_advanced_technology_with_normal_requirements(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(13, 2), first_player=0)
+        )
+        pi_planet = state.starting_planets[0][0]
+        buildings = list(state.buildings)
+        buildings[pi_planet] = Building.PLANETARY_INSTITUTE
+        tracks = list(state.players[0].tracks)
+        tracks[Track.TERRAFORMING] = 4
+        owned_tile = state.standard_tech_tiles[0]
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            tracks=tuple(tracks),
+            tech_tiles=1 << owned_tile,
+            federation_keys=1,
+            gaia_power=4,
+        )
+        state = replace(
+            state,
+            buildings=tuple(int(building) for building in buildings),
+            players=tuple(players),
+        )._gaia_phase()
+
+        selecting = state.apply(ITARS_GAIA_TECH_ACTION)
+        advanced_action = selecting.tech_action(
+            STANDARD_TECH_COUNT + Track.TERRAFORMING
+        )
+        self.assertIn(advanced_action, selecting.legal_actions())
+        covering = selecting.apply(advanced_action)
+        self.assertGreaterEqual(covering.pending_advanced_tech, 0)
+        covered = covering.apply(covering.tech_action(0))
+
+        advanced_tile = state.advanced_tech_tiles[Track.TERRAFORMING]
+        self.assertTrue(covered.players[0].advanced_tech_tiles & (1 << advanced_tile))
+        self.assertTrue(covered.players[0].covered_tech_tiles & (1 << owned_tile))
+        self.assertEqual(covered.players[0].federation_keys, 0)
+        self.assertEqual(covered.pending_itars_gaia_player, 0)
+
+    def test_terrans_and_itars_gaia_phases_resolve_in_seat_order(self) -> None:
+        state = GaiaState.initial(
+            2,
+            faction_indices=(0, 13),
+            first_player=1,
+        )
+        planets = [
+            planet for planet, active in enumerate(state.active_planets) if active
+        ][:2]
+        owners = list(state.owners)
+        buildings = list(state.buildings)
+        for player, planet in enumerate(planets):
+            owners[planet] = player
+            buildings[planet] = Building.PLANETARY_INSTITUTE
+        players = list(state.players)
+        players[0] = replace(players[0], gaia_power=1)
+        players[1] = replace(players[1], gaia_power=4)
+        state = replace(
+            state,
+            owners=tuple(owners),
+            buildings=tuple(int(building) for building in buildings),
+            players=tuple(players),
+        )
+
+        terrans = state._gaia_phase()
+        self.assertEqual(terrans.pending_gaia_conversion_player, 0)
+        self.assertEqual(terrans.players[1].gaia_power, 4)
+        itars = terrans.apply(TERRANS_GAIA_FINISH_ACTION)
+        self.assertEqual(itars.pending_gaia_conversion_player, -1)
+        self.assertEqual(itars.pending_itars_gaia_player, 1)
+        self.assertEqual(itars.player_to_move, 1)
 
     def test_research_lab_requires_immediate_tech_choice(self) -> None:
         state = finish_starting_placement(GaiaState.initial(2))
