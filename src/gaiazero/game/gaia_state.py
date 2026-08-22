@@ -204,7 +204,7 @@ FACTIONS: tuple[FactionSpec, ...] = (
         Track.SCIENCE,
         (2, 4, 0),
         6,
-        "Bowl III power counts double for free actions",
+        "As a free action, move 1 power token from bowl III to the Gaia area to gain 1 knowledge; after building its planetary institute, each bowl III token counts as 2 power for freely combined resource conversions and public power actions, with odd public-action costs rounded up",
         starting_knowledge=2,
         research_lab_knowledge_income=0,
         research_lab_charge_income=2,
@@ -414,7 +414,13 @@ BESCODS_RESEARCH_LIMIT = BESCODS_RESEARCH_OFFSET + TRACK_COUNT
 ITARS_BURN_POWER_ACTION = BESCODS_RESEARCH_LIMIT
 ITARS_GAIA_TECH_ACTION = ITARS_BURN_POWER_ACTION + 1
 ITARS_GAIA_FINISH_ACTION = ITARS_GAIA_TECH_ACTION + 1
-ACTION_SIZE = ITARS_GAIA_FINISH_ACTION + 1
+NEVLAS_POWER_TO_GAIA_ACTION = ITARS_GAIA_FINISH_ACTION + 1
+NEVLAS_CREDITS_ACTION = NEVLAS_POWER_TO_GAIA_ACTION + 1
+NEVLAS_CREDIT_ORE_ACTION = NEVLAS_CREDITS_ACTION + 1
+NEVLAS_ORE_ACTION = NEVLAS_CREDIT_ORE_ACTION + 1
+NEVLAS_QIC_ACTION = NEVLAS_ORE_ACTION + 1
+NEVLAS_KNOWLEDGE_ACTION = NEVLAS_QIC_ACTION + 1
+ACTION_SIZE = NEVLAS_KNOWLEDGE_ACTION + 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -1061,6 +1067,7 @@ class GaiaState:
             actions.append(BAL_TAKS_GAIAFORMER_QIC_ACTION)
         if faction.name == "Itars" and info.bowl_two >= 2:
             actions.append(ITARS_BURN_POWER_ACTION)
+        actions.extend(self._nevlas_free_actions(player))
         return tuple(actions)
 
     def legal_action_mask(self) -> BoolArray:
@@ -1090,6 +1097,8 @@ class GaiaState:
             return self._apply_bal_taks_gaiaformer_qic_action()
         if action == ITARS_BURN_POWER_ACTION:
             return self._apply_itars_burn_power()
+        if action in self._nevlas_free_actions(self.player_to_move):
+            return self._apply_nevlas_free_action(action)
         if self.pending_advanced_tech >= 0:
             return self._apply_advanced_tech_cover(action - TECH_OFFSET)._advance_turn()
         if self.pending_research_player >= 0:
@@ -2157,6 +2166,66 @@ class GaiaState:
             players=self._replace_player(player, info),
             pending_itars_gaia_player=-1,
         )._gaia_phase()
+
+    def _nevlas_free_actions(self, player: int) -> tuple[int, ...]:
+        info = self.players[player]
+        if FACTIONS[info.faction].name != "Nevlas":
+            return ()
+        # Repeating these atomic packages spans every full-value allocation of
+        # doubled standard rates: credit 1, ore 3, knowledge/Q.I.C. 4.
+        actions: list[int] = []
+        if info.bowl_three >= 1 and info.knowledge < 15:
+            actions.append(NEVLAS_POWER_TO_GAIA_ACTION)
+        if not self._has_pi(player):
+            return tuple(actions)
+        if info.bowl_three >= 1 and info.credits < 30:
+            actions.append(NEVLAS_CREDITS_ACTION)
+        if info.bowl_three >= 2 and (info.credits < 30 or info.ore < 15):
+            actions.append(NEVLAS_CREDIT_ORE_ACTION)
+        if info.bowl_three >= 3 and info.ore < 15:
+            actions.append(NEVLAS_ORE_ACTION)
+        if info.bowl_three >= 2:
+            actions.append(NEVLAS_QIC_ACTION)
+        if info.bowl_three >= 2 and info.knowledge < 15:
+            actions.append(NEVLAS_KNOWLEDGE_ACTION)
+        return tuple(actions)
+
+    def _apply_nevlas_free_action(self, action: int) -> GaiaState:
+        player = self.player_to_move
+        if action not in self._nevlas_free_actions(player):
+            raise ValueError("Nevlas free action is unavailable")
+        info = self.players[player]
+        if action == NEVLAS_POWER_TO_GAIA_ACTION:
+            info = replace(
+                info,
+                bowl_three=info.bowl_three - 1,
+                gaia_power=info.gaia_power + 1,
+                knowledge=min(15, info.knowledge + 1),
+            )
+        else:
+            costs = {
+                NEVLAS_CREDITS_ACTION: 1,
+                NEVLAS_CREDIT_ORE_ACTION: 2,
+                NEVLAS_ORE_ACTION: 3,
+                NEVLAS_QIC_ACTION: 2,
+                NEVLAS_KNOWLEDGE_ACTION: 2,
+            }
+            info = self._spend_power(info, costs[action])
+            if action == NEVLAS_CREDITS_ACTION:
+                info = replace(info, credits=min(30, info.credits + 2))
+            elif action == NEVLAS_CREDIT_ORE_ACTION:
+                info = replace(
+                    info,
+                    credits=min(30, info.credits + 1),
+                    ore=min(15, info.ore + 1),
+                )
+            elif action == NEVLAS_ORE_ACTION:
+                info = replace(info, ore=min(15, info.ore + 2))
+            elif action == NEVLAS_QIC_ACTION:
+                info = self._gain_qic(info, 1)
+            else:
+                info = replace(info, knowledge=min(15, info.knowledge + 1))
+        return replace(self, players=self._replace_player(player, info))
 
     def _apply_terrans_gaia_conversion(self, action: int) -> GaiaState:
         player = self.pending_gaia_conversion_player
@@ -3322,6 +3391,18 @@ class GaiaState:
             return "Itars PI: discard 4 power from the Gaia area to gain a technology tile"
         if action == ITARS_GAIA_FINISH_ACTION:
             return "finish Itars Gaia technology and move remaining power to bowl I"
+        if action == NEVLAS_POWER_TO_GAIA_ACTION:
+            return "Nevlas free action: move 1 power from bowl III to the Gaia area for 1 knowledge"
+        if action == NEVLAS_CREDITS_ACTION:
+            return "Nevlas PI free action: spend 1 power for 2 credits"
+        if action == NEVLAS_CREDIT_ORE_ACTION:
+            return "Nevlas PI free action: spend 2 power for 1 credit and 1 ore"
+        if action == NEVLAS_ORE_ACTION:
+            return "Nevlas PI free action: spend 3 power for 2 ore"
+        if action == NEVLAS_QIC_ACTION:
+            return "Nevlas PI free action: spend 2 power for 1 Q.I.C."
+        if action == NEVLAS_KNOWLEDGE_ACTION:
+            return "Nevlas PI free action: spend 2 power for 1 knowledge"
         if action in self._hadsch_hallas_credit_actions(self.player_to_move):
             if action == TERRANS_GAIA_ORE_ACTION:
                 return "Hadsch Hallas PI free action: 3 credits for 1 ore"
@@ -3410,7 +3491,7 @@ class GaiaState:
                 self.round_scoring_tiles[self.round_number - 1]
             ].key
         return {
-            "ruleset": "standard-v17",
+            "ruleset": "standard-v18",
             "round": max(0, min(self.round_number, MAX_ROUNDS)),
             "max_rounds": MAX_ROUNDS,
             "phase": (
@@ -3791,6 +3872,10 @@ class GaiaHeuristicEvaluator:
                 score = 1.5
             elif action == ITARS_GAIA_FINISH_ACTION:
                 score = 0.0
+            elif action == NEVLAS_POWER_TO_GAIA_ACTION:
+                score = 0.8
+            elif NEVLAS_CREDITS_ACTION <= action <= NEVLAS_KNOWLEDGE_ACTION:
+                score = 0.1
             elif len(legal) == 1:
                 score = 0.5
             else:

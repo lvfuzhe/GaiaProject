@@ -23,6 +23,12 @@ from gaiazero.game.gaia_state import (
     ITARS_GAIA_FINISH_ACTION,
     ITARS_GAIA_TECH_ACTION,
     MAX_BUILDINGS,
+    NEVLAS_CREDITS_ACTION,
+    NEVLAS_CREDIT_ORE_ACTION,
+    NEVLAS_KNOWLEDGE_ACTION,
+    NEVLAS_ORE_ACTION,
+    NEVLAS_POWER_TO_GAIA_ACTION,
+    NEVLAS_QIC_ACTION,
     PASS_BOOSTER_OFFSET,
     PASS_FINAL_ACTION,
     ROUND_SCORING_TILES,
@@ -81,7 +87,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(sum(len(planets) for planets in state.starting_planets), 0)
         self.assertEqual(state.round_number, 0)
         self.assertTrue(state.is_starting_placement)
-        self.assertEqual(state.snapshot()["ruleset"], "standard-v17")
+        self.assertEqual(state.snapshot()["ruleset"], "standard-v18")
 
     def test_random_setup_is_seeded_and_respects_component_counts(self) -> None:
         first = GaiaState.initial(2, seed=19)
@@ -1022,7 +1028,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         snapshot = GaiaState.initial(3, seed=41).snapshot()
         setup = snapshot["setup"]
 
-        self.assertEqual(snapshot["ruleset"], "standard-v17")
+        self.assertEqual(snapshot["ruleset"], "standard-v18")
         self.assertEqual(setup["seed"], 41)
         self.assertEqual(setup["map"]["sector_count"], 10)
         self.assertEqual(len(setup["map"]["sectors"]), 10)
@@ -2683,6 +2689,267 @@ class StandardGaiaRulesTests(unittest.TestCase):
             players=(replace(gleens.players[0], qic_academies=1), gleens.players[1]),
         )
         self.assertEqual(qic_academy._build_cost(0, gaia), (2, 2, 0))
+
+    def test_nevlas_starting_state_and_research_lab_income_match_board(self) -> None:
+        state = GaiaState.initial(
+            2,
+            faction_indices=(12, 0),
+            first_player=0,
+        )
+        info = state.players[0]
+
+        self.assertEqual(
+            (info.credits, info.ore, info.knowledge, info.qic),
+            (15, 4, 2, 1),
+        )
+        self.assertEqual(
+            (info.bowl_one, info.bowl_two, info.bowl_three),
+            (2, 4, 0),
+        )
+        self.assertEqual(info.tracks[Track.SCIENCE], 1)
+        self.assertEqual(
+            tuple(state._power_action_cost(0, action) for action in PowerAction),
+            (7, 5, 4, 4, 4, 3, 3),
+        )
+
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            knowledge=0,
+            bowl_one=6,
+            bowl_two=0,
+            bowl_three=0,
+        )
+        planets = [
+            planet for planet, active in enumerate(state.active_planets) if active
+        ][:3]
+        owners = list(state.owners)
+        buildings = list(state.buildings)
+        for planet in planets:
+            owners[planet] = 0
+            buildings[planet] = Building.RESEARCH_LAB
+        income_state = replace(
+            state,
+            players=tuple(players),
+            owners=tuple(owners),
+            buildings=tuple(int(building) for building in buildings),
+        )
+        after_income = income_state._grant_income().players[0]
+
+        self.assertEqual(after_income.knowledge, 2)
+        self.assertEqual(
+            (after_income.bowl_one, after_income.bowl_two, after_income.bowl_three),
+            (0, 6, 0),
+        )
+
+    def test_nevlas_moves_power_to_gaia_for_knowledge_as_free_action(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(12, 0), first_player=0)
+        )
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            knowledge=13,
+            bowl_one=1,
+            bowl_two=0,
+            bowl_three=2,
+            gaia_power=0,
+        )
+        state = replace(state, player_to_move=0, players=tuple(players))
+
+        self.assertIn(NEVLAS_POWER_TO_GAIA_ACTION, state.legal_actions())
+        moved_once = state.apply(NEVLAS_POWER_TO_GAIA_ACTION)
+        self.assertEqual(moved_once.player_to_move, 0)
+        self.assertEqual(
+            (
+                moved_once.players[0].knowledge,
+                moved_once.players[0].bowl_three,
+                moved_once.players[0].gaia_power,
+            ),
+            (14, 1, 1),
+        )
+        moved_twice = moved_once.apply(NEVLAS_POWER_TO_GAIA_ACTION)
+        self.assertEqual(
+            (
+                moved_twice.players[0].knowledge,
+                moved_twice.players[0].bowl_three,
+                moved_twice.players[0].gaia_power,
+            ),
+            (15, 0, 2),
+        )
+        self.assertNotIn(NEVLAS_POWER_TO_GAIA_ACTION, moved_twice.legal_actions())
+
+        returned = moved_twice._gaia_phase()
+        self.assertEqual(returned.players[0].gaia_power, 0)
+        self.assertEqual(returned.players[0].bowl_one, 3)
+
+    def test_nevlas_pi_improved_conversions_are_repeatable_free_actions(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(12, 0), first_player=0)
+        )
+        pi_planet = state.starting_planets[0][0]
+        buildings = list(state.buildings)
+        buildings[pi_planet] = Building.PLANETARY_INSTITUTE
+        state = replace(
+            state,
+            player_to_move=0,
+            buildings=tuple(int(building) for building in buildings),
+        )
+        cases = (
+            (NEVLAS_CREDITS_ACTION, 1, (2, 0, 0, 0)),
+            (NEVLAS_CREDIT_ORE_ACTION, 2, (1, 1, 0, 0)),
+            (NEVLAS_ORE_ACTION, 3, (0, 2, 0, 0)),
+            (NEVLAS_QIC_ACTION, 2, (0, 0, 0, 1)),
+            (NEVLAS_KNOWLEDGE_ACTION, 2, (0, 0, 1, 0)),
+        )
+
+        for action, cost, expected_resources in cases:
+            with self.subTest(action=action):
+                players = list(state.players)
+                players[0] = replace(
+                    players[0],
+                    credits=0,
+                    ore=0,
+                    knowledge=0,
+                    qic=0,
+                    bowl_one=0,
+                    bowl_two=0,
+                    bowl_three=5,
+                )
+                before = replace(state, players=tuple(players))
+                self.assertIn(action, before.legal_actions())
+
+                after = before.apply(action)
+
+                self.assertEqual(after.player_to_move, 0)
+                self.assertEqual(
+                    (
+                        after.players[0].credits,
+                        after.players[0].ore,
+                        after.players[0].knowledge,
+                        after.players[0].qic,
+                    ),
+                    expected_resources,
+                )
+                self.assertEqual(after.players[0].bowl_one, cost)
+                self.assertEqual(after.players[0].bowl_three, 5 - cost)
+
+        no_pi = replace(
+            state,
+            buildings=tuple(
+                Building.MINE if building == Building.PLANETARY_INSTITUTE else building
+                for building in state.buildings
+            ),
+        )
+        conversion_actions = {
+            NEVLAS_CREDITS_ACTION,
+            NEVLAS_CREDIT_ORE_ACTION,
+            NEVLAS_ORE_ACTION,
+            NEVLAS_QIC_ACTION,
+            NEVLAS_KNOWLEDGE_ACTION,
+        }
+        self.assertTrue(conversion_actions.isdisjoint(no_pi.legal_actions()))
+
+        capped_players = list(state.players)
+        capped_players[0] = replace(
+            capped_players[0],
+            credits=30,
+            ore=15,
+            knowledge=15,
+            bowl_three=5,
+        )
+        capped = replace(state, players=tuple(capped_players))
+        self.assertEqual(
+            conversion_actions.intersection(capped.legal_actions()),
+            {NEVLAS_QIC_ACTION},
+        )
+
+    def test_nevlas_pi_free_conversions_can_be_combined_arbitrarily(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(12, 0), first_player=0)
+        )
+        pi_planet = state.starting_planets[0][0]
+        buildings = list(state.buildings)
+        buildings[pi_planet] = Building.PLANETARY_INSTITUTE
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            credits=0,
+            ore=0,
+            knowledge=0,
+            qic=0,
+            bowl_one=0,
+            bowl_two=0,
+            bowl_three=10,
+        )
+        state = replace(
+            state,
+            player_to_move=0,
+            players=tuple(players),
+            buildings=tuple(int(building) for building in buildings),
+        )
+
+        sequence = (
+            NEVLAS_QIC_ACTION,
+            NEVLAS_CREDIT_ORE_ACTION,
+            NEVLAS_CREDITS_ACTION,
+            NEVLAS_KNOWLEDGE_ACTION,
+            NEVLAS_ORE_ACTION,
+        )
+        for action in sequence:
+            self.assertIn(action, state.legal_actions())
+            state = state.apply(action)
+            self.assertEqual(state.player_to_move, 0)
+
+        info = state.players[0]
+        self.assertEqual(
+            (info.credits, info.ore, info.knowledge, info.qic),
+            (3, 3, 1, 1),
+        )
+        self.assertEqual((info.bowl_one, info.bowl_three), (10, 0))
+
+    def test_nevlas_pi_doubles_power_for_all_seven_public_power_actions(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(12, 0), first_player=0)
+        )
+        pi_planet = state.starting_planets[0][0]
+        buildings = list(state.buildings)
+        buildings[pi_planet] = Building.PLANETARY_INSTITUTE
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            credits=30,
+            ore=5,
+            knowledge=5,
+            bowl_one=0,
+            bowl_two=0,
+            bowl_three=10,
+        )
+        state = replace(
+            state,
+            player_to_move=0,
+            players=tuple(players),
+            buildings=tuple(int(building) for building in buildings),
+        )
+        self.assertEqual(
+            tuple(state._power_action_cost(0, action) for action in PowerAction),
+            (4, 3, 2, 2, 2, 2, 2),
+        )
+        for power_action, cost in zip(
+            PowerAction,
+            (4, 3, 2, 2, 2, 2, 2),
+            strict=True,
+        ):
+            with self.subTest(power_action=power_action):
+                action = state.power_action(power_action)
+                self.assertIn(action, state.legal_actions())
+
+                after = state.apply(action)
+
+                token_reward = 2 if power_action == PowerAction.POWER_TOKENS_TWO else 0
+                self.assertEqual(after.players[0].bowl_one, cost + token_reward)
+                self.assertEqual(after.players[0].bowl_three, 10 - cost)
+                self.assertTrue(after.used_power_actions & (1 << power_action))
 
     def test_gleens_qic_conversion_stops_after_qic_academy(self) -> None:
         state = finish_starting_placement(

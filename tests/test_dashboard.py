@@ -23,6 +23,8 @@ from gaiazero.game.gaia_state import (
     ITARS_BURN_POWER_ACTION,
     ITARS_GAIA_FINISH_ACTION,
     ITARS_GAIA_TECH_ACTION,
+    NEVLAS_CREDIT_ORE_ACTION,
+    NEVLAS_POWER_TO_GAIA_ACTION,
     QIC_ACADEMY_ACTION,
     PowerAction,
     TERRANS_GAIA_FINISH_ACTION,
@@ -1268,6 +1270,113 @@ class DashboardTests(unittest.TestCase):
             role="human",
         )
         self.assertEqual(finish_entry["kind"], "itars_gaia_finish")
+
+    def test_interactive_action_ledger_tracks_nevlas_free_and_pi_actions(self) -> None:
+        state = GaiaState.initial(
+            2,
+            seed=7,
+            faction_indices=(12, 2),
+            first_player=0,
+        )
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            credits=0,
+            ore=0,
+            knowledge=0,
+            bowl_one=0,
+            bowl_two=0,
+            bowl_three=5,
+            gaia_power=0,
+        )
+        state = replace(
+            state,
+            players=tuple(players),
+            round_number=1,
+            player_to_move=0,
+        )
+
+        moved = state.apply(NEVLAS_POWER_TO_GAIA_ACTION)
+        move_entry = _interactive_action_record(
+            state,
+            moved,
+            NEVLAS_POWER_TO_GAIA_ACTION,
+            move=1,
+            player=0,
+            role="human",
+        )
+        self.assertEqual(move_entry["kind"], "nevlas_power_to_gaia")
+        self.assertEqual(
+            move_entry["effects"][0]["costs"],
+            [{"resource": "power_to_gaia", "amount": 1}],
+        )
+        self.assertIn(
+            {"resource": "knowledge", "amount": 1},
+            move_entry["effects"][0]["gains"],
+        )
+        self.assertTrue(any(
+            component["code"] == "NEV-GAIA-K"
+            for component in move_entry["components"]
+        ))
+
+        pi_planet = next(
+            planet for planet, active in enumerate(state.active_planets) if active
+        )
+        owners = list(state.owners)
+        buildings = list(state.buildings)
+        owners[pi_planet] = 0
+        buildings[pi_planet] = Building.PLANETARY_INSTITUTE
+        pi_state = replace(
+            state,
+            owners=tuple(owners),
+            buildings=tuple(int(building) for building in buildings),
+        )
+
+        converted = pi_state.apply(NEVLAS_CREDIT_ORE_ACTION)
+        conversion_entry = _interactive_action_record(
+            pi_state,
+            converted,
+            NEVLAS_CREDIT_ORE_ACTION,
+            move=2,
+            player=0,
+            role="human",
+        )
+        self.assertEqual(conversion_entry["kind"], "nevlas_convert_credit_ore")
+        self.assertEqual(
+            conversion_entry["effects"][0]["costs"],
+            [{"resource": "power", "amount": 2}],
+        )
+        self.assertIn(
+            {"resource": "credits", "amount": 1},
+            conversion_entry["effects"][0]["gains"],
+        )
+        self.assertIn(
+            {"resource": "ore", "amount": 1},
+            conversion_entry["effects"][0]["gains"],
+        )
+        self.assertTrue(any(
+            component["code"] == "NEV-PI-CONVERT"
+            for component in conversion_entry["components"]
+        ))
+
+        power_action = pi_state.power_action(PowerAction.ORE_TWO)
+        powered = pi_state.apply(power_action)
+        power_entry = _interactive_action_record(
+            pi_state,
+            powered,
+            power_action,
+            move=3,
+            player=0,
+            role="human",
+        )
+        self.assertEqual(
+            power_entry["effects"][0]["costs"],
+            [{"resource": "power", "amount": 2}],
+        )
+        self.assertTrue(any(
+            component["code"] == "NEV-PI-POWER"
+            for component in power_entry["components"]
+        ))
 
     def test_interactive_game_selects_starting_boosters_before_round_one(self) -> None:
         server = create_dashboard_server(self.metrics, port=0, quiet=True)

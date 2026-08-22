@@ -32,6 +32,12 @@ from gaiazero.game.gaia_state import (
     ITARS_BURN_POWER_ACTION,
     ITARS_GAIA_FINISH_ACTION,
     ITARS_GAIA_TECH_ACTION,
+    NEVLAS_CREDITS_ACTION,
+    NEVLAS_CREDIT_ORE_ACTION,
+    NEVLAS_KNOWLEDGE_ACTION,
+    NEVLAS_ORE_ACTION,
+    NEVLAS_POWER_TO_GAIA_ACTION,
+    NEVLAS_QIC_ACTION,
     QIC_ACADEMY_ACTION,
     QIC_FEDERATION_ACTION_OFFSET,
     QIC_PLANET_TYPES_ACTION,
@@ -727,6 +733,18 @@ def _interactive_action_snapshot(state: GaiaState, action: int) -> dict[str, Any
         kind = "itars_gaia_tech"
     elif action == ITARS_GAIA_FINISH_ACTION:
         kind = "itars_gaia_finish"
+    elif action == NEVLAS_POWER_TO_GAIA_ACTION:
+        kind = "nevlas_power_to_gaia"
+    elif action == NEVLAS_CREDITS_ACTION:
+        kind = "nevlas_convert_credits"
+    elif action == NEVLAS_CREDIT_ORE_ACTION:
+        kind = "nevlas_convert_credit_ore"
+    elif action == NEVLAS_ORE_ACTION:
+        kind = "nevlas_convert_ore"
+    elif action == NEVLAS_QIC_ACTION:
+        kind = "nevlas_convert_qic"
+    elif action == NEVLAS_KNOWLEDGE_ACTION:
+        kind = "nevlas_convert_knowledge"
     elif action == TAKLONS_PASSIVE_BEFORE_ACTION:
         kind = "taklons_passive_before"
     elif action == TAKLONS_PASSIVE_AFTER_ACTION:
@@ -985,6 +1003,40 @@ def _interactive_action_components(
                 13,
                 "Itars planetary institute: 4 Gaia power for a technology tile",
                 "ITA-PI-TECH",
+                relation="uses",
+            )
+        )
+    if action["kind"] == "nevlas_power_to_gaia":
+        components.append(
+            _component_ref(
+                "faction_ability",
+                12,
+                "Nevlas: move power from bowl III to the Gaia area for knowledge",
+                "NEV-GAIA-K",
+                relation="uses",
+            )
+        )
+    if action["kind"].startswith("nevlas_convert_"):
+        components.append(
+            _component_ref(
+                "faction_ability",
+                12,
+                "Nevlas planetary institute: improved power conversion",
+                "NEV-PI-CONVERT",
+                relation="uses",
+            )
+        )
+    if (
+        action["kind"] == "power"
+        and FACTIONS[state.players[player].faction].name == "Nevlas"
+        and state._has_pi(player)
+    ):
+        components.append(
+            _component_ref(
+                "faction_ability",
+                12,
+                "Nevlas planetary institute: each bowl III token counts as 2 power for public power actions",
+                "NEV-PI-POWER",
                 relation="uses",
             )
         )
@@ -1380,6 +1432,18 @@ def _interactive_action_costs(
         costs["gaiaformers"] = 1
     elif kind == "itars_gaia_tech":
         costs["gaia_power"] = 4
+    elif kind == "nevlas_power_to_gaia":
+        costs["power_to_gaia"] = 1
+    elif kind == "nevlas_convert_credits":
+        costs["power"] = 1
+    elif kind in (
+        "nevlas_convert_credit_ore",
+        "nevlas_convert_qic",
+        "nevlas_convert_knowledge",
+    ):
+        costs["power"] = 2
+    elif kind == "nevlas_convert_ore":
+        costs["power"] = 3
     elif kind == "terrans_gaia_credit":
         costs["gaia_conversion_power"] = 1
     elif kind == "terrans_gaia_ore":

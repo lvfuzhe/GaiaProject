@@ -87,7 +87,7 @@ const FACTION_ABILITIES = {
   "Bal T'aks": "建成行星研究院前不能推进航行轨；可将可用盖亚塑形者移入盖亚区换取 1 Q.I.C.，下一盖亚阶段归还；研究院建成后解锁航行轨；右侧学院提供 4 信用点行动",
   Firaks: "起始少 1 矿石和 1 知识、额外获得 1 知识收入；建成行星研究院后，每轮一次可将研究所降级为贸易站并免费推进一条科研轨，该动作计作升级贸易站",
   Bescods: "行星研究院与学院位置、贸易站与研究所收入互换；每轮一次可免费推进一条并列最低科研轨；建成行星研究院后，灰色母星建筑强度 +1，研究院收入为 2 能量片",
-  Nevlas: "能量碗 III 的能量可双倍计算",
+  Nevlas: "可将 III 区 1 个能量片移入盖亚区获得 1 知识；建成行星研究院后，III 区每个能量片按 2 点用于资源自由转换，兑换项可连续执行并任意搭配；公共能量工位同样按双倍计算，奇数费用向上取整；研究所收入为充能 2",
   Itars: "燃烧能量时，弃置的能量片进入盖亚区；建成行星研究院后，盖亚阶段每弃置 4 个盖亚区能量片可获得 1 块科技板块；左侧学院收入为 3 知识"
 };
 const BASE_FACTIONS = [
@@ -2643,6 +2643,12 @@ const PLAY_ACTION_LABELS = {
   itars_burn_power: "Itars：燃烧能量",
   itars_gaia_tech: "Itars 研究院：兑换科技板块",
   itars_gaia_finish: "结束 Itars 研究院结算",
+  nevlas_power_to_gaia: "Nevlas：能量移入盖亚区换知识",
+  nevlas_convert_credits: "Nevlas 自由兑换：1 能量兑换 2 信用点",
+  nevlas_convert_credit_ore: "Nevlas 自由兑换：2 能量兑换 1 信用点和 1 矿石",
+  nevlas_convert_ore: "Nevlas 自由兑换：3 能量兑换 2 矿石",
+  nevlas_convert_qic: "Nevlas 自由兑换：2 能量兑换 1 Q.I.C.",
+  nevlas_convert_knowledge: "Nevlas 自由兑换：2 能量兑换 1 知识",
   terrans_gaia_credit: "Terrans 盖亚兑换：信用点",
   terrans_gaia_ore: "Terrans 盖亚兑换：矿石",
   terrans_gaia_knowledge: "Terrans 盖亚兑换：知识",
