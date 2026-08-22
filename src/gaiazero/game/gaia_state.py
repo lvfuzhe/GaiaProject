@@ -189,7 +189,7 @@ FACTIONS: tuple[FactionSpec, ...] = (
         None,
         (2, 4, 0),
         5,
-        "Lowest research areas advance together",
+        "Its PI and academies, trading-station and research-lab incomes are swapped; once per round it may advance one tied lowest research area for free; after building its PI, structures on Titanium planets gain 1 power and the PI produces 2 power tokens",
         starting_knowledge=1,
         income_knowledge=-1,
         trading_station_credit_income=(0, 0, 0, 0),
@@ -409,7 +409,8 @@ TAKLONS_PASSIVE_AFTER_ACTION = TAKLONS_PASSIVE_BEFORE_ACTION + 1
 IVITS_SPACE_STATION_OFFSET = TAKLONS_PASSIVE_AFTER_ACTION + 1
 IVITS_SPACE_STATION_LIMIT = IVITS_SPACE_STATION_OFFSET + MAX_BOARD_SPACES
 BAL_TAKS_GAIAFORMER_QIC_ACTION = IVITS_SPACE_STATION_LIMIT
-ACTION_SIZE = BAL_TAKS_GAIAFORMER_QIC_ACTION + 1
+BESCODS_RESEARCH_OFFSET = BAL_TAKS_GAIAFORMER_QIC_ACTION + 1
+ACTION_SIZE = BESCODS_RESEARCH_OFFSET + TRACK_COUNT
 
 
 @dataclass(frozen=True, slots=True)
@@ -440,6 +441,7 @@ class PlayerState:
     used_booster_action: bool = False
     used_ambas_swap_action: bool = False
     used_firaks_downgrade_action: bool = False
+    used_bescods_research_action: bool = False
     used_ivits_space_station_action: bool = False
     federation_tokens: int = 0
     federation_keys: int = 0
@@ -751,6 +753,10 @@ class GaiaState:
         return IVITS_SPACE_STATION_OFFSET + int(space)
 
     @staticmethod
+    def bescods_research_action(track: Track | int) -> int:
+        return BESCODS_RESEARCH_OFFSET + int(track)
+
+    @staticmethod
     def pass_booster_action(booster: int) -> int:
         return PASS_BOOSTER_OFFSET + booster
 
@@ -1033,6 +1039,10 @@ class GaiaState:
                 for space in range(len(self._board_spaces()))
                 if self._can_place_ivits_space_station(player, space)
             )
+        actions.extend(
+            self.bescods_research_action(track)
+            for track in self._bescods_research_tracks(player)
+        )
         if faction.name == "Bal T'aks" and info.gaiaformers > 0:
             actions.append(BAL_TAKS_GAIAFORMER_QIC_ACTION)
         return tuple(actions)
@@ -1147,6 +1157,10 @@ class GaiaState:
         elif IVITS_SPACE_STATION_OFFSET <= action < IVITS_SPACE_STATION_LIMIT:
             state = self._apply_ivits_space_station(
                 action - IVITS_SPACE_STATION_OFFSET
+            )
+        elif BESCODS_RESEARCH_OFFSET <= action < ACTION_SIZE:
+            state = self._apply_bescods_research(
+                action - BESCODS_RESEARCH_OFFSET
             )
         else:
             raise ValueError(f"unknown action {action}")
@@ -1529,6 +1543,33 @@ class GaiaState:
             pending_research_player=-1,
         )
 
+    def _bescods_research_tracks(self, player: int) -> tuple[Track, ...]:
+        info = self.players[player]
+        if (
+            FACTIONS[info.faction].name != "Bescods"
+            or info.used_bescods_research_action
+        ):
+            return ()
+        lowest = min(info.tracks)
+        return tuple(
+            track
+            for track in Track
+            if info.tracks[track] == lowest
+            and self._can_player_advance(player, track)
+        )
+
+    def _apply_bescods_research(self, track: int) -> GaiaState:
+        player = self.player_to_move
+        selected = Track(track)
+        if selected not in self._bescods_research_tracks(player):
+            raise ValueError("Bescods lowest research action is unavailable")
+        info = replace(
+            self.players[player],
+            used_bescods_research_action=True,
+        )
+        info = self._advance_research(player, info, selected)
+        return replace(self, players=self._replace_player(player, info))
+
     def _apply_power_action(self, power_action: int) -> GaiaState:
         player = self.player_to_move
         info = self.players[player]
@@ -1803,6 +1844,7 @@ class GaiaState:
                 used_booster_action=False,
                 used_ambas_swap_action=False,
                 used_firaks_downgrade_action=False,
+                used_bescods_research_action=False,
                 used_ivits_space_station_action=False,
             )
             for candidate in players
@@ -3025,6 +3067,7 @@ class GaiaState:
                 float(info.used_standard_tech_action),
                 float(info.used_booster_action),
                 float(info.used_firaks_downgrade_action),
+                float(info.used_bescods_research_action),
                 float(info.used_ivits_space_station_action),
                 *(float(info.used_advanced_tech_actions & (1 << tile) != 0)
                   for tile in range(ADVANCED_TECH_SPECIAL_COUNT)),
@@ -3177,6 +3220,9 @@ class GaiaState:
             return f"Ivits PI special action: unavailable board space {space}"
         if action == BAL_TAKS_GAIAFORMER_QIC_ACTION:
             return "Bal T'aks free action: move 1 Gaiaformer to the Gaia area for 1 Q.I.C."
+        if BESCODS_RESEARCH_OFFSET <= action < ACTION_SIZE:
+            track = Track(action - BESCODS_RESEARCH_OFFSET)
+            return f"Bescods action: advance lowest {track.name.lower()} research"
         if action in self._hadsch_hallas_credit_actions(self.player_to_move):
             if action == TERRANS_GAIA_ORE_ACTION:
                 return "Hadsch Hallas PI free action: 3 credits for 1 ore"
@@ -3256,7 +3302,7 @@ class GaiaState:
                 self.round_scoring_tiles[self.round_number - 1]
             ].key
         return {
-            "ruleset": "standard-v15",
+            "ruleset": "standard-v16",
             "round": max(0, min(self.round_number, MAX_ROUNDS)),
             "max_rounds": MAX_ROUNDS,
             "phase": (
@@ -3379,6 +3425,9 @@ class GaiaState:
                     "ambas_swap_action_used": info.used_ambas_swap_action,
                     "firaks_downgrade_action_used": (
                         info.used_firaks_downgrade_action
+                    ),
+                    "bescods_research_action_used": (
+                        info.used_bescods_research_action
                     ),
                     "ivits_space_station_action_used": (
                         info.used_ivits_space_station_action
@@ -3609,6 +3658,8 @@ class GaiaHeuristicEvaluator:
                 score = 1.1
             elif action == BAL_TAKS_GAIAFORMER_QIC_ACTION:
                 score = 0.8
+            elif BESCODS_RESEARCH_OFFSET <= action < ACTION_SIZE:
+                score = 1.3
             elif len(legal) == 1:
                 score = 0.5
             else:

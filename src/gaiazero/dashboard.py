@@ -16,6 +16,7 @@ from gaiazero.game import GaiaHeuristicEvaluator, GaiaState
 from gaiazero.game.gaia_state import (
     ADVANCED_TECH_ACTION_OFFSET,
     BAL_TAKS_GAIAFORMER_QIC_ACTION,
+    BESCODS_RESEARCH_OFFSET,
     BRAINSTONE_ACTION,
     BOOSTER_LABELS,
     BOOSTER_RANGE_ACTION,
@@ -713,6 +714,9 @@ def _interactive_action_snapshot(state: GaiaState, action: int) -> dict[str, Any
         kind = "brainstone"
     elif action == BAL_TAKS_GAIAFORMER_QIC_ACTION:
         kind = "bal_taks_gaiaformer_qic"
+    elif BESCODS_RESEARCH_OFFSET <= action < state.action_size:
+        kind = "bescods_research"
+        track = action - BESCODS_RESEARCH_OFFSET
     elif action == TAKLONS_PASSIVE_BEFORE_ACTION:
         kind = "taklons_passive_before"
     elif action == TAKLONS_PASSIVE_AFTER_ACTION:
@@ -939,6 +943,16 @@ def _interactive_action_components(
                 relation="uses",
             )
         )
+    if action["kind"] == "bescods_research":
+        components.append(
+            _component_ref(
+                "faction_ability",
+                11,
+                "Bescods: advance a tied lowest research area",
+                "BES-LOWEST-RESEARCH",
+                relation="uses",
+            )
+        )
     if action["kind"] == "ivits_space_station":
         slot = action.get("space_station_slot")
         q = action.get("space_q")
@@ -1030,7 +1044,7 @@ def _interactive_action_components(
             track == Track.TERRAFORMING
             and state.players[player].tracks[track] == 4
             and (
-                action["kind"] == "research"
+                action["kind"] in ("research", "bescods_research")
                 or (
                     action["kind"] == "technology"
                     and state.pending_advanced_tech < 0
@@ -1255,7 +1269,7 @@ def _interactive_action_components(
                 and FACTIONS[state.players[player].faction].name == "Gleens"
             ):
                 scored_kinds.add("federation")
-        elif action["kind"] in ("research", "technology"):
+        elif action["kind"] in ("research", "technology", "bescods_research"):
             scored_kinds.add("research")
             if track == Track.TERRAFORMING and state.players[player].tracks[track] == 4:
                 scored_kinds.add("federation")

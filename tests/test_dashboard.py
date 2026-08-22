@@ -318,6 +318,65 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(after.pending_research_player, 0)
         self.assertEqual(after.player_to_move, 0)
 
+    def test_bescods_lowest_research_is_detailed_in_action_history(self) -> None:
+        state = GaiaState.initial(2, faction_indices=(11, 0), first_player=0)
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            knowledge=4,
+            tracks=(0, 0, 1, 2, 2, 3),
+        )
+        state = replace(
+            state,
+            round_number=1,
+            placement_step=len(state.placement_order),
+            booster_selection_step=len(state.booster_selection_order),
+            player_to_move=0,
+            players=tuple(players),
+            round_scoring_tiles=(1, *state.round_scoring_tiles[1:]),
+        )
+        action = state.bescods_research_action(Track.NAVIGATION)
+
+        summary = _interactive_action_snapshot(state, action)
+        self.assertEqual(summary["kind"], "bescods_research")
+        self.assertEqual(summary["track"], Track.NAVIGATION)
+        self.assertNotEqual(action, state.research_action(Track.NAVIGATION))
+        after = state.apply(action)
+        record = _interactive_action_record(
+            state,
+            after,
+            action,
+            move=1,
+            player=0,
+            role="human",
+        )
+
+        self.assertEqual(record["kind"], "bescods_research")
+        component_codes = [item["code"] for item in record["components"]]
+        self.assertIn("BES-LOWEST-RESEARCH", component_codes)
+        self.assertIn("TRK-02", component_codes)
+        self.assertIn("RND-02", component_codes)
+        self.assertEqual(record["effects"][0]["costs"], [])
+        self.assertIn(
+            {"resource": "qic", "amount": 1},
+            record["effects"][0]["gains"],
+        )
+        self.assertIn(
+            {"resource": "vp", "amount": 2},
+            record["effects"][0]["gains"],
+        )
+        self.assertIn(
+            {
+                "kind": "track",
+                "track": Track.NAVIGATION,
+                "before": 0,
+                "after": 1,
+            },
+            record["effects"][0]["changes"],
+        )
+        self.assertEqual(after.players[0].knowledge, 4)
+        self.assertTrue(after.players[0].used_bescods_research_action)
+
     def test_hadsch_hallas_credit_conversion_is_detailed_in_history(self) -> None:
         state = GaiaState.initial(2, faction_indices=(6, 0), first_player=0)
         planet = next(index for index, active in enumerate(state.active_planets) if active)

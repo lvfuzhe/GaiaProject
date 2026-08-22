@@ -78,7 +78,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(sum(len(planets) for planets in state.starting_planets), 0)
         self.assertEqual(state.round_number, 0)
         self.assertTrue(state.is_starting_placement)
-        self.assertEqual(state.snapshot()["ruleset"], "standard-v15")
+        self.assertEqual(state.snapshot()["ruleset"], "standard-v16")
 
     def test_random_setup_is_seeded_and_respects_component_counts(self) -> None:
         first = GaiaState.initial(2, seed=19)
@@ -1019,7 +1019,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         snapshot = GaiaState.initial(3, seed=41).snapshot()
         setup = snapshot["setup"]
 
-        self.assertEqual(snapshot["ruleset"], "standard-v15")
+        self.assertEqual(snapshot["ruleset"], "standard-v16")
         self.assertEqual(setup["seed"], 41)
         self.assertEqual(setup["map"]["sector_count"], 10)
         self.assertEqual(len(setup["map"]["sectors"]), 10)
@@ -1518,6 +1518,101 @@ class StandardGaiaRulesTests(unittest.TestCase):
         institute = state.apply(state.upgrade_pi_action(planet))
         self.assertEqual(institute.buildings[planet], Building.PLANETARY_INSTITUTE)
         self.assertEqual(institute.pending_tech_player, -1)
+
+    def test_bescods_starting_income_and_planetary_institute_income_match_bga(self) -> None:
+        state = GaiaState.initial(2, faction_indices=(11, 0), first_player=0)
+        bescods = state.players[0]
+        self.assertEqual((bescods.credits, bescods.ore, bescods.knowledge, bescods.qic), (15, 4, 1, 1))
+        self.assertEqual((bescods.bowl_one, bescods.bowl_two, bescods.bowl_three), (2, 4, 0))
+        self.assertEqual(state._income_preview(0)["knowledge"], 0)
+
+        planet = next(index for index, active in enumerate(state.active_planets) if active)
+        owners = list(state.owners)
+        buildings = list(state.buildings)
+        owners[planet] = 0
+        buildings[planet] = Building.PLANETARY_INSTITUTE
+        with_pi = replace(
+            state,
+            owners=tuple(owners),
+            buildings=tuple(int(value) for value in buildings),
+        )
+        income = with_pi._income_preview(0)
+        self.assertEqual(income["power_tokens"], 2)
+        self.assertEqual(income["power_charge"], 4)
+
+    def test_bescods_advances_one_tied_lowest_research_area_once_per_round(self) -> None:
+        state = GaiaState.initial(2, faction_indices=(11, 0), first_player=0)
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            knowledge=4,
+            tracks=(0, 0, 1, 2, 2, 3),
+        )
+        state = replace(
+            state,
+            round_number=1,
+            placement_step=len(state.placement_order),
+            booster_selection_step=len(state.booster_selection_order),
+            player_to_move=0,
+            players=tuple(players),
+            round_scoring_tiles=(1, *state.round_scoring_tiles[1:]),
+        )
+        special_actions = {
+            state.bescods_research_action(Track.TERRAFORMING),
+            state.bescods_research_action(Track.NAVIGATION),
+        }
+        all_bescods_actions = {
+            state.bescods_research_action(track) for track in Track
+        }
+        self.assertEqual(
+            special_actions,
+            set(state.legal_actions()) & all_bescods_actions,
+        )
+        self.assertIn(state.research_action(Track.NAVIGATION), state.legal_actions())
+
+        advanced = state.apply(state.bescods_research_action(Track.NAVIGATION))
+        self.assertEqual(advanced.players[0].tracks, (0, 1, 1, 2, 2, 3))
+        self.assertEqual(advanced.players[0].knowledge, 4)
+        self.assertEqual(advanced.players[0].qic, 2)
+        self.assertEqual(advanced.players[0].vp, 12)
+        self.assertTrue(advanced.players[0].used_bescods_research_action)
+        self.assertEqual(advanced.player_to_move, 1)
+
+        player_zero_turn = replace(advanced, player_to_move=0)
+        self.assertFalse(set(player_zero_turn.legal_actions()) & all_bescods_actions)
+        paid_action = player_zero_turn.research_action(Track.TERRAFORMING)
+        self.assertIn(paid_action, player_zero_turn.legal_actions())
+        paid = player_zero_turn.apply(paid_action)
+        self.assertEqual(paid.players[0].knowledge, 0)
+        self.assertEqual(paid.players[0].tracks[Track.TERRAFORMING], 1)
+
+    def test_bescods_lowest_research_action_obeys_level_five_rules(self) -> None:
+        state = GaiaState.initial(2, faction_indices=(11, 0), first_player=0)
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            tracks=(4, 4, 5, 5, 5, 5),
+            federation_keys=0,
+        )
+        players[1] = replace(players[1], tracks=(5, 0, 0, 0, 0, 0))
+        state = replace(
+            state,
+            round_number=1,
+            placement_step=len(state.placement_order),
+            booster_selection_step=len(state.booster_selection_order),
+            player_to_move=0,
+            players=tuple(players),
+        )
+        self.assertEqual(state._bescods_research_tracks(0), ())
+
+        players[0] = replace(players[0], federation_keys=1)
+        with_key = replace(state, players=tuple(players))
+        self.assertEqual(with_key._bescods_research_tracks(0), (Track.NAVIGATION,))
+        advanced = with_key.apply(
+            with_key.bescods_research_action(Track.NAVIGATION)
+        )
+        self.assertEqual(advanced.players[0].tracks[Track.NAVIGATION], 5)
+        self.assertEqual(advanced.players[0].federation_keys, 0)
 
     def test_tech_tile_research_advance_scores_the_round_tile(self) -> None:
         state = replace(
