@@ -26,6 +26,7 @@ from gaiazero.game.gaia_state import (
     STANDARD_TECH_TILES,
     STANDARD_TECH_COUNT,
     STANDARD_TECH_ACTION,
+    TECH_OFFSET,
     TAKLONS_PASSIVE_AFTER_ACTION,
     TAKLONS_PASSIVE_BEFORE_ACTION,
     TERRANS_GAIA_CREDIT_ACTION,
@@ -77,7 +78,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(sum(len(planets) for planets in state.starting_planets), 0)
         self.assertEqual(state.round_number, 0)
         self.assertTrue(state.is_starting_placement)
-        self.assertEqual(state.snapshot()["ruleset"], "standard-v14")
+        self.assertEqual(state.snapshot()["ruleset"], "standard-v15")
 
     def test_random_setup_is_seeded_and_respects_component_counts(self) -> None:
         first = GaiaState.initial(2, seed=19)
@@ -622,6 +623,117 @@ class StandardGaiaRulesTests(unittest.TestCase):
         )
         self.assertIn(reset.upgrade_pi_action(pi_planet), reset.legal_actions())
 
+    def test_firaks_starting_state_and_planetary_institute_income_match_bga(self) -> None:
+        state = GaiaState.initial(2, faction_indices=(10, 0), first_player=0)
+        firaks = state.players[0]
+        self.assertEqual((firaks.credits, firaks.ore, firaks.knowledge, firaks.qic), (15, 3, 2, 1))
+        self.assertEqual((firaks.bowl_one, firaks.bowl_two, firaks.bowl_three), (2, 4, 0))
+        self.assertEqual(firaks.tracks, (0,) * len(Track))
+        self.assertEqual(state._income_preview(0)["knowledge"], 2)
+
+        planet = next(index for index, active in enumerate(state.active_planets) if active)
+        owners = list(state.owners)
+        buildings = list(state.buildings)
+        owners[planet] = 0
+        buildings[planet] = Building.PLANETARY_INSTITUTE
+        with_pi = replace(
+            state,
+            owners=tuple(owners),
+            buildings=tuple(int(value) for value in buildings),
+        )
+        income = with_pi._income_preview(0)
+        self.assertEqual(income["power_tokens"], 1)
+        self.assertEqual(income["power_charge"], 4)
+
+    def test_firaks_pi_downgrades_lab_scores_trading_and_advances_research(self) -> None:
+        state = GaiaState.initial(2, faction_indices=(10, 0), first_player=0)
+        active_planets = [
+            planet
+            for planet, active in enumerate(state.active_planets)
+            if active
+        ]
+        first_lab = active_planets[0]
+        opponent_planet = next(
+            planet
+            for planet in active_planets[1:]
+            if state._distance(first_lab, planet) <= 2
+        )
+        pi_planet, second_lab = [
+            planet
+            for planet in active_planets[1:]
+            if planet != opponent_planet
+        ][:2]
+        owners = [-1] * len(state.owners)
+        buildings = [Building.EMPTY] * len(state.buildings)
+        owners[pi_planet] = owners[first_lab] = owners[second_lab] = 0
+        owners[opponent_planet] = 1
+        buildings[pi_planet] = Building.MINE
+        buildings[first_lab] = buildings[second_lab] = Building.RESEARCH_LAB
+        buildings[opponent_planet] = Building.MINE
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            knowledge=0,
+            advanced_tech_tiles=1 << 14,
+        )
+        state = replace(
+            state,
+            round_number=1,
+            placement_step=len(state.placement_order),
+            booster_selection_step=len(state.booster_selection_order),
+            player_to_move=0,
+            owners=tuple(owners),
+            buildings=tuple(int(value) for value in buildings),
+            players=tuple(players),
+            round_scoring_tiles=(4, *state.round_scoring_tiles[1:]),
+        )
+        action = state.upgrade_trading_action(first_lab)
+        self.assertNotIn(action, state.legal_actions())
+
+        buildings[pi_planet] = Building.PLANETARY_INSTITUTE
+        state = replace(state, buildings=tuple(int(value) for value in buildings))
+        self.assertIn(action, state.legal_actions())
+        self.assertIn("Firaks PI", state.describe_action(action))
+        before = state.players[0]
+
+        downgraded = state.apply(action)
+        after = downgraded.players[0]
+        self.assertEqual(downgraded.buildings[first_lab], Building.TRADING_STATION)
+        self.assertEqual((after.credits, after.ore, after.knowledge), (before.credits, before.ore, 0))
+        self.assertEqual(after.vp, before.vp + 6)
+        self.assertTrue(after.used_firaks_downgrade_action)
+        self.assertEqual(downgraded.pending_research_player, 0)
+        self.assertEqual(downgraded.player_to_move, 0)
+        self.assertEqual(
+            (
+                downgraded.players[1].bowl_one,
+                downgraded.players[1].bowl_two,
+                downgraded.players[1].vp,
+            ),
+            (2, 6, 9),
+        )
+
+        advanced = downgraded.apply(downgraded.research_action(Track.SCIENCE))
+        self.assertEqual(advanced.players[0].tracks[Track.SCIENCE], 1)
+        self.assertEqual(advanced.pending_research_player, -1)
+        self.assertEqual(advanced.player_to_move, 1)
+        self.assertNotIn(
+            advanced.upgrade_trading_action(second_lab),
+            replace(advanced, player_to_move=0).legal_actions(),
+        )
+
+        rebuild = replace(advanced, player_to_move=0)
+        upgrade_lab = rebuild.upgrade_lab_action(first_lab)
+        self.assertIn(upgrade_lab, rebuild.legal_actions())
+        rebuilt = rebuild.apply(upgrade_lab)
+        self.assertEqual(rebuilt.buildings[first_lab], Building.RESEARCH_LAB)
+        self.assertEqual((rebuilt.players[0].credits, rebuilt.players[0].ore), (10, 0))
+        self.assertEqual(rebuilt.pending_tech_player, 0)
+        tech_action = rebuilt.legal_actions()[0]
+        tech_tile = rebuilt.standard_tech_tiles[tech_action - TECH_OFFSET]
+        completed = rebuilt.apply(tech_action)
+        self.assertTrue(completed.players[0].tech_tiles & (1 << tech_tile))
+
     def test_hadsch_hallas_pi_converts_credits_without_ending_turn(self) -> None:
         state = finish_starting_placement(
             GaiaState.initial(2, faction_indices=(6, 0), first_player=0)
@@ -907,7 +1019,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         snapshot = GaiaState.initial(3, seed=41).snapshot()
         setup = snapshot["setup"]
 
-        self.assertEqual(snapshot["ruleset"], "standard-v14")
+        self.assertEqual(snapshot["ruleset"], "standard-v15")
         self.assertEqual(setup["seed"], 41)
         self.assertEqual(setup["map"]["sector_count"], 10)
         self.assertEqual(len(setup["map"]["sectors"]), 10)

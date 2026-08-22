@@ -751,7 +751,12 @@ def _interactive_action_snapshot(state: GaiaState, action: int) -> dict[str, Any
     elif GAIA_OFFSET <= action < UPGRADE_TRADING_OFFSET:
         kind, target = "gaia", action - GAIA_OFFSET
     elif UPGRADE_TRADING_OFFSET <= action < UPGRADE_LAB_OFFSET:
-        kind, target = "upgrade_trading", action - UPGRADE_TRADING_OFFSET
+        target = action - UPGRADE_TRADING_OFFSET
+        kind = (
+            "firaks_downgrade"
+            if state._is_firaks_downgrade_action(target)
+            else "upgrade_trading"
+        )
     elif UPGRADE_LAB_OFFSET <= action < UPGRADE_PI_OFFSET:
         kind, target = "upgrade_lab", action - UPGRADE_LAB_OFFSET
     elif UPGRADE_PI_OFFSET <= action < UPGRADE_ACADEMY_OFFSET:
@@ -921,6 +926,16 @@ def _interactive_action_components(
                 5,
                 "Ambas planetary institute swap",
                 "AMB-PI-SWAP",
+                relation="uses",
+            )
+        )
+    if action["kind"] == "firaks_downgrade":
+        components.append(
+            _component_ref(
+                "faction_ability",
+                10,
+                "Firaks planetary institute: downgrade a research lab",
+                "FIR-PI-DOWNGRADE",
                 relation="uses",
             )
         )
@@ -1226,7 +1241,7 @@ def _interactive_action_components(
                 home = FACTIONS[state.players[player].faction].home
                 if state._terrain_steps(home, terrain):
                     scored_kinds.add("terraform")
-        elif action["kind"] == "upgrade_trading":
+        elif action["kind"] in ("upgrade_trading", "firaks_downgrade"):
             scored_kinds.add("trading")
         elif action["kind"] in (
             "upgrade_pi",

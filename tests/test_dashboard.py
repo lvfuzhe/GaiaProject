@@ -262,6 +262,62 @@ class DashboardTests(unittest.TestCase):
         )
         self.assertEqual(after.player_to_move, 0)
 
+    def test_firaks_downgrade_is_detailed_in_action_history(self) -> None:
+        state = GaiaState.initial(2, faction_indices=(10, 0), first_player=0)
+        pi_planet, lab_planet = [
+            planet
+            for planet, active in enumerate(state.active_planets)
+            if active
+        ][:2]
+        owners = list(state.owners)
+        buildings = list(state.buildings)
+        owners[pi_planet] = owners[lab_planet] = 0
+        buildings[pi_planet] = Building.PLANETARY_INSTITUTE
+        buildings[lab_planet] = Building.RESEARCH_LAB
+        state = replace(
+            state,
+            round_number=1,
+            placement_step=len(state.placement_order),
+            booster_selection_step=len(state.booster_selection_order),
+            player_to_move=0,
+            owners=tuple(owners),
+            buildings=tuple(int(value) for value in buildings),
+            round_scoring_tiles=(4, *state.round_scoring_tiles[1:]),
+        )
+        action = state.upgrade_trading_action(lab_planet)
+
+        summary = _interactive_action_snapshot(state, action)
+        self.assertEqual(summary["kind"], "firaks_downgrade")
+        after = state.apply(action)
+        record = _interactive_action_record(
+            state,
+            after,
+            action,
+            move=1,
+            player=0,
+            role="human",
+        )
+
+        self.assertEqual(record["kind"], "firaks_downgrade")
+        component_codes = [item["code"] for item in record["components"]]
+        self.assertIn("FIR-PI-DOWNGRADE", component_codes)
+        self.assertIn("RND-05", component_codes)
+        self.assertEqual(record["effects"][0]["costs"], [])
+        self.assertEqual(record["effects"][0]["gains"], [{"resource": "vp", "amount": 3}])
+        self.assertIn(
+            {
+                "kind": "building",
+                "planet": lab_planet,
+                "owner_before": 0,
+                "owner_after": 0,
+                "building_before": "research_lab",
+                "building_after": "trading_station",
+            },
+            record["changes"],
+        )
+        self.assertEqual(after.pending_research_player, 0)
+        self.assertEqual(after.player_to_move, 0)
+
     def test_hadsch_hallas_credit_conversion_is_detailed_in_history(self) -> None:
         state = GaiaState.initial(2, faction_indices=(6, 0), first_player=0)
         planet = next(index for index, active in enumerate(state.active_planets) if active)

@@ -172,7 +172,17 @@ FACTIONS: tuple[FactionSpec, ...] = (
         starting_qic=0,
         qic_academy_credit_action=4,
     ),
-    FactionSpec("Firaks", Terrain.TITANIUM, None, (2, 4, 0), 5, "May downgrade a research lab to research", starting_ore=3, starting_knowledge=2, income_knowledge=1),
+    FactionSpec(
+        "Firaks",
+        Terrain.TITANIUM,
+        None,
+        (2, 4, 0),
+        5,
+        "After building its planetary institute, once per round it may downgrade a research lab to a trading station and immediately advance one research area; this counts as upgrading to a trading station",
+        starting_ore=3,
+        starting_knowledge=2,
+        income_knowledge=1,
+    ),
     FactionSpec(
         "Bescods",
         Terrain.TITANIUM,
@@ -429,6 +439,7 @@ class PlayerState:
     used_advanced_tech_actions: int = 0
     used_booster_action: bool = False
     used_ambas_swap_action: bool = False
+    used_firaks_downgrade_action: bool = False
     used_ivits_space_station_action: bool = False
     federation_tokens: int = 0
     federation_keys: int = 0
@@ -901,6 +912,8 @@ class GaiaState:
                 ):
                     actions.append(self.upgrade_pi_action(planet))
             elif level == Building.RESEARCH_LAB:
+                if self._is_firaks_downgrade_action(planet, player):
+                    actions.append(self.upgrade_trading_action(planet))
                 if faction.swapped_pi_academy:
                     if (
                         self._building_count(player, Building.PLANETARY_INSTITUTE) < 1
@@ -1079,7 +1092,11 @@ class GaiaState:
         elif GAIA_OFFSET <= action < UPGRADE_TRADING_OFFSET:
             state = self._apply_gaia(action - GAIA_OFFSET)
         elif UPGRADE_TRADING_OFFSET <= action < UPGRADE_LAB_OFFSET:
-            state = self._apply_upgrade(action - UPGRADE_TRADING_OFFSET, Building.TRADING_STATION)
+            planet = action - UPGRADE_TRADING_OFFSET
+            if self._is_firaks_downgrade_action(planet):
+                state = self._apply_firaks_downgrade(planet)
+            else:
+                state = self._apply_upgrade(planet, Building.TRADING_STATION)
         elif UPGRADE_LAB_OFFSET <= action < UPGRADE_PI_OFFSET:
             return self._apply_upgrade(action - UPGRADE_LAB_OFFSET, Building.RESEARCH_LAB)
         elif UPGRADE_PI_OFFSET <= action < UPGRADE_ACADEMY_OFFSET:
@@ -1300,6 +1317,53 @@ class GaiaState:
             self,
             players=self._replace_player(player, info),
             buildings=tuple(int(value) for value in buildings),
+        )
+
+    def _is_firaks_downgrade_action(
+        self,
+        planet: int,
+        player: int | None = None,
+    ) -> bool:
+        player = self.player_to_move if player is None else player
+        if not 0 <= planet < N:
+            return False
+        info = self.players[player]
+        return (
+            FACTIONS[info.faction].name == "Firaks"
+            and self._has_pi(player)
+            and not info.used_firaks_downgrade_action
+            and self._building_count(player, Building.TRADING_STATION) < 4
+            and self.owners[planet] == player
+            and Building(self.buildings[planet]) == Building.RESEARCH_LAB
+            and self._has_research_choice(player)
+        )
+
+    def _apply_firaks_downgrade(self, lab_planet: int) -> GaiaState:
+        player = self.player_to_move
+        if not self._is_firaks_downgrade_action(lab_planet, player):
+            raise ValueError("Firaks planetary institute action is unavailable")
+        info = replace(
+            self._score(self.players[player], "trading"),
+            used_firaks_downgrade_action=True,
+        )
+        if info.advanced_tech_tiles & (1 << 14):
+            info = replace(info, vp=info.vp + 3)
+        buildings = list(self.buildings)
+        buildings[lab_planet] = Building.TRADING_STATION
+        state = replace(
+            self,
+            players=self._replace_player(player, info),
+            buildings=tuple(int(value) for value in buildings),
+            pending_research_player=player,
+        )
+        return state._trigger_passive_charge(
+            player,
+            lab_planet,
+            state._structure_power(
+                player,
+                Building.TRADING_STATION,
+                lab_planet,
+            ),
         )
 
     def _apply_upgrade(
@@ -1738,6 +1802,7 @@ class GaiaState:
                 used_advanced_tech_actions=0,
                 used_booster_action=False,
                 used_ambas_swap_action=False,
+                used_firaks_downgrade_action=False,
                 used_ivits_space_station_action=False,
             )
             for candidate in players
@@ -2959,6 +3024,7 @@ class GaiaState:
                 float(info.used_qic_academy_action),
                 float(info.used_standard_tech_action),
                 float(info.used_booster_action),
+                float(info.used_firaks_downgrade_action),
                 float(info.used_ivits_space_station_action),
                 *(float(info.used_advanced_tech_actions & (1 << tile) != 0)
                   for tile in range(ADVANCED_TECH_SPECIAL_COUNT)),
@@ -3027,6 +3093,10 @@ class GaiaState:
             return f"build mine at planet {action - BUILD_OFFSET}"
         if GAIA_OFFSET <= action < UPGRADE_TRADING_OFFSET:
             return f"start Gaia Project at planet {action - GAIA_OFFSET}"
+        if UPGRADE_TRADING_OFFSET <= action < UPGRADE_LAB_OFFSET:
+            planet = action - UPGRADE_TRADING_OFFSET
+            if self._is_firaks_downgrade_action(planet):
+                return f"Firaks PI: downgrade research lab at planet {planet} to trading station"
         if UPGRADE_QIC_ACADEMY_OFFSET <= action < RESEARCH_OFFSET:
             faction = FACTIONS[self.players[self.player_to_move].faction]
             target = (
@@ -3186,7 +3256,7 @@ class GaiaState:
                 self.round_scoring_tiles[self.round_number - 1]
             ].key
         return {
-            "ruleset": "standard-v14",
+            "ruleset": "standard-v15",
             "round": max(0, min(self.round_number, MAX_ROUNDS)),
             "max_rounds": MAX_ROUNDS,
             "phase": (
@@ -3307,6 +3377,9 @@ class GaiaState:
                     "standard_tech_action_used": info.used_standard_tech_action,
                     "booster_action_used": info.used_booster_action,
                     "ambas_swap_action_used": info.used_ambas_swap_action,
+                    "firaks_downgrade_action_used": (
+                        info.used_firaks_downgrade_action
+                    ),
                     "ivits_space_station_action_used": (
                         info.used_ivits_space_station_action
                     ),
