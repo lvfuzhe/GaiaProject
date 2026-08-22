@@ -52,6 +52,7 @@ from gaiazero.game.gaia_state import (
     POWER_OFFSET,
     RESEARCH_OFFSET,
     ROUND_SCORING_TILES,
+    SKIP_TECH_RESEARCH_ACTION,
     STANDARD_TECH_TILES,
     STANDARD_TECH_COUNT,
     STANDARD_TECH_ACTION,
@@ -723,7 +724,12 @@ def _interactive_action_snapshot(state: GaiaState, action: int) -> dict[str, Any
     space_q: int | None = None
     space_r: int | None = None
     hadsch_credit_actions = state._hadsch_hallas_credit_actions(state.player_to_move)
-    if action == BRAINSTONE_ACTION:
+    if (
+        action == SKIP_TECH_RESEARCH_ACTION
+        and state.pending_research_optional
+    ):
+        kind = "skip_tech_research"
+    elif action == BRAINSTONE_ACTION:
         kind = "brainstone"
     elif action == BAL_TAKS_GAIAFORMER_QIC_ACTION:
         kind = "bal_taks_gaiaformer_qic"

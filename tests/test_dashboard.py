@@ -27,6 +27,7 @@ from gaiazero.game.gaia_state import (
     NEVLAS_CREDIT_ORE_ACTION,
     NEVLAS_POWER_TO_GAIA_ACTION,
     QIC_ACADEMY_ACTION,
+    SKIP_TECH_RESEARCH_ACTION,
     PowerAction,
     TERRANS_GAIA_FINISH_ACTION,
     TERRANS_GAIA_KNOWLEDGE_ACTION,
@@ -64,6 +65,22 @@ class DashboardTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.metrics.unlink(missing_ok=True)
+
+    def test_optional_technology_research_skip_has_a_distinct_action_kind(self) -> None:
+        state = replace(
+            GaiaState.initial(2),
+            player_to_move=0,
+            pending_research_player=0,
+            pending_research_optional=True,
+        )
+
+        summary = _interactive_action_snapshot(
+            state,
+            SKIP_TECH_RESEARCH_ACTION,
+        )
+
+        self.assertEqual(summary["kind"], "skip_tech_research")
+        self.assertIn("optional technology research", summary["label"])
 
     def test_lantids_coexisting_mine_is_visible_in_board_history(self) -> None:
         before = GaiaState.initial(2, faction_indices=(1, 2), first_player=0)
@@ -1365,6 +1382,7 @@ class DashboardTests(unittest.TestCase):
             for component in tech_entry["components"]
         ))
 
+        gained = gained.apply(SKIP_TECH_RESEARCH_ACTION)
         finished = gained.apply(ITARS_GAIA_FINISH_ACTION)
         finish_entry = _interactive_action_record(
             gained,

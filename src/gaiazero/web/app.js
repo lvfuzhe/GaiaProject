@@ -2665,6 +2665,7 @@ const PLAY_ACTION_LABELS = {
   upgrade_qic_academy: "升级 Q.I.C. 学院",
   upgrade_credits_academy: "升级信用点学院",
   research: "推进科研轨",
+  skip_tech_research: "放弃科技板块的科研推进",
   power: "执行能量行动",
   brainstone: "选择脑石（按 3 能量）",
   taklons_passive_before: "Taklons 研究院：先获得能量片，再被动充能",

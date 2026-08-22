@@ -402,6 +402,9 @@ BOOSTER_TERRAFORM_ACTION = QIC_PLANET_TYPES_ACTION + 1
 BOOSTER_RANGE_ACTION = BOOSTER_TERRAFORM_ACTION + 1
 PASS_BOOSTER_OFFSET = BOOSTER_RANGE_ACTION + 1
 PASS_FINAL_ACTION = PASS_BOOSTER_OFFSET + BOOSTER_COUNT
+# The final-round pass slot is unreachable while a technology research choice
+# is pending, so reusing it preserves the trained policy/action dimensions.
+SKIP_TECH_RESEARCH_ACTION = PASS_FINAL_ACTION
 BRAINSTONE_ACTION = PASS_FINAL_ACTION + 1
 TERRANS_GAIA_CREDIT_ACTION = BRAINSTONE_ACTION + 1
 TERRANS_GAIA_ORE_ACTION = TERRANS_GAIA_CREDIT_ACTION + 1
@@ -543,6 +546,8 @@ class GaiaState:
     pending_tech_player: int = -1
     pending_advanced_tech: int = -1
     pending_research_player: int = -1
+    pending_research_track: int = -1
+    pending_research_optional: bool = False
     pending_lost_planet_player: int = -1
     pending_power_terraform_player: int = -1
     pending_power_terraform_steps: int = 0
@@ -837,11 +842,19 @@ class GaiaState:
                 and not info.covered_tech_tiles & (1 << tile)
             )
         if self.pending_research_player >= 0:
-            return tuple(
-                self.research_action(track)
-                for track in Track
-                if self._can_player_advance(player, track)
+            tracks = (
+                (Track(self.pending_research_track),)
+                if self.pending_research_track >= 0
+                else tuple(Track)
             )
+            actions = [
+                self.research_action(track)
+                for track in tracks
+                if self._can_player_advance(player, track)
+            ]
+            if self.pending_research_optional:
+                actions.append(SKIP_TECH_RESEARCH_ACTION)
+            return tuple(actions)
         if self.pending_lost_planet_player >= 0:
             return tuple(
                 self.lost_planet_action(space)
@@ -1102,6 +1115,13 @@ class GaiaState:
         if self.pending_advanced_tech >= 0:
             return self._apply_advanced_tech_cover(action - TECH_OFFSET)._advance_turn()
         if self.pending_research_player >= 0:
+            if action == SKIP_TECH_RESEARCH_ACTION:
+                return replace(
+                    self,
+                    pending_research_player=-1,
+                    pending_research_track=-1,
+                    pending_research_optional=False,
+                )._advance_turn()
             return self._apply_free_research(action - RESEARCH_OFFSET)._advance_turn()
         if self.pending_lost_planet_player >= 0:
             return self._apply_lost_planet(action - LOST_PLANET_OFFSET)._advance_turn()
@@ -1422,6 +1442,8 @@ class GaiaState:
             players=self._replace_player(player, info),
             buildings=tuple(int(value) for value in buildings),
             pending_research_player=player,
+            pending_research_track=-1,
+            pending_research_optional=False,
         )
         return state._trigger_passive_charge(
             player,
@@ -1522,20 +1544,19 @@ class GaiaState:
             pending_tech_player=-1,
         )
         if space < TRACK_COUNT and state._can_player_advance(player, space):
-            places_lost_planet = (
-                space == Track.NAVIGATION
-                and info.tracks[Track.NAVIGATION] == 4
-            )
-            info = state._advance_research(player, info, Track(space))
             return replace(
                 state,
-                players=state._replace_player(player, info),
-                pending_lost_planet_player=(
-                    player if places_lost_planet else -1
-                ),
+                pending_research_player=player,
+                pending_research_track=space,
+                pending_research_optional=True,
             )
         if space >= TRACK_COUNT and state._has_research_choice(player):
-            return replace(state, pending_research_player=player)
+            return replace(
+                state,
+                pending_research_player=player,
+                pending_research_track=-1,
+                pending_research_optional=True,
+            )
         return state
 
     def _gain_standard_tech(self, info: PlayerState, tile: int) -> PlayerState:
@@ -1574,7 +1595,12 @@ class GaiaState:
             pending_advanced_tech=-1,
         )
         if state._has_research_choice(player):
-            return replace(state, pending_research_player=player)
+            return replace(
+                state,
+                pending_research_player=player,
+                pending_research_track=-1,
+                pending_research_optional=True,
+            )
         return state
 
     def _gain_advanced_tech_reward(
@@ -1618,6 +1644,8 @@ class GaiaState:
             self,
             players=self._replace_player(player, info),
             pending_research_player=-1,
+            pending_research_track=-1,
+            pending_research_optional=False,
             pending_lost_planet_player=player if places_lost_planet else -1,
         )
 
@@ -3447,6 +3475,11 @@ class GaiaState:
             float(self.pending_booster_terraform_player >= 0),
             float(self.pending_booster_range_player >= 0),
         ))
+        values.append(float(self.pending_research_optional))
+        values.extend(
+            float(self.pending_research_track == track)
+            for track in range(-1, TRACK_COUNT)
+        )
         values.extend(
             float(self.pending_gaia_conversion_player == player)
             for player in range(self.num_players)
@@ -3557,6 +3590,11 @@ class GaiaState:
         return np.asarray(values, dtype=np.float32)
 
     def describe_action(self, action: int) -> str:
+        if (
+            action == SKIP_TECH_RESEARCH_ACTION
+            and self.pending_research_optional
+        ):
+            return "skip the optional technology research advance"
         if BUILD_OFFSET <= action < GAIA_OFFSET:
             if self.is_starting_placement:
                 structure = (
@@ -3787,7 +3825,7 @@ class GaiaState:
                 self.round_scoring_tiles[self.round_number - 1]
             ].key
         return {
-            "ruleset": "standard-v20",
+            "ruleset": "standard-v21",
             "round": max(0, min(self.round_number, MAX_ROUNDS)),
             "max_rounds": MAX_ROUNDS,
             "phase": (
@@ -3838,6 +3876,25 @@ class GaiaState:
                     else None
                 ),
                 "free_steps": self.pending_power_terraform_steps,
+            },
+            "technology_research": {
+                "active": self.pending_research_player >= 0,
+                "player": (
+                    self.pending_research_player
+                    if self.pending_research_player >= 0
+                    else None
+                ),
+                "track": (
+                    self.pending_research_track
+                    if self.pending_research_track >= 0
+                    else None
+                ),
+                "optional": self.pending_research_optional,
+                "skip_action": (
+                    SKIP_TECH_RESEARCH_ACTION
+                    if self.pending_research_optional
+                    else None
+                ),
             },
             "lost_planet_placement": {
                 "active": self.pending_lost_planet_player >= 0,

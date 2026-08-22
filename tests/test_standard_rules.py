@@ -34,6 +34,7 @@ from gaiazero.game.gaia_state import (
     PASS_BOOSTER_OFFSET,
     PASS_FINAL_ACTION,
     ROUND_SCORING_TILES,
+    SKIP_TECH_RESEARCH_ACTION,
     STANDARD_TECH_TILES,
     STANDARD_TECH_COUNT,
     STANDARD_TECH_ACTION,
@@ -89,7 +90,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(sum(len(planets) for planets in state.starting_planets), 0)
         self.assertEqual(state.round_number, 0)
         self.assertTrue(state.is_starting_placement)
-        self.assertEqual(state.snapshot()["ruleset"], "standard-v20")
+        self.assertEqual(state.snapshot()["ruleset"], "standard-v21")
 
     def test_random_setup_is_seeded_and_respects_component_counts(self) -> None:
         first = GaiaState.initial(2, seed=19)
@@ -1030,7 +1031,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         snapshot = GaiaState.initial(3, seed=41).snapshot()
         setup = snapshot["setup"]
 
-        self.assertEqual(snapshot["ruleset"], "standard-v20")
+        self.assertEqual(snapshot["ruleset"], "standard-v21")
         self.assertEqual(setup["seed"], 41)
         self.assertEqual(setup["map"]["sector_count"], 10)
         self.assertEqual(len(setup["map"]["sectors"]), 10)
@@ -1213,7 +1214,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
             state,
             standard_tech_tiles=(0, 3, 4, 5, 6, 7, 1, 2, 8),
         )._apply_tech(Track.TERRAFORMING).players[player]
-        self.assertEqual((ore_qic.ore, ore_qic.qic), (7, 2))
+        self.assertEqual((ore_qic.ore, ore_qic.qic), (5, 2))
 
         knowledge = replace(
             state,
@@ -1349,6 +1350,9 @@ class StandardGaiaRulesTests(unittest.TestCase):
             pending_tech_player=0,
         )
         advanced_by_tech = tech_state.apply(tech_state.tech_action(Track.SCIENCE))
+        advanced_by_tech = advanced_by_tech.apply(
+            advanced_by_tech.research_action(Track.SCIENCE)
+        )
 
         self.assertEqual(advanced_by_tech.players[0].knowledge, 0)
         self.assertEqual(advanced_by_tech.players[0].tracks[Track.SCIENCE], 3)
@@ -1844,7 +1848,8 @@ class StandardGaiaRulesTests(unittest.TestCase):
         )
         state = replace(state, players=tuple(players))
 
-        researched = state._apply_tech(Track.TERRAFORMING).players[0]
+        pending = state._apply_tech(Track.TERRAFORMING)
+        researched = pending._apply_free_research(Track.TERRAFORMING).players[0]
 
         self.assertEqual(researched.tracks[Track.TERRAFORMING], 1)
         self.assertEqual(researched.vp, 12)
@@ -2564,6 +2569,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         gained = choosing.apply(tech_action)
         gained_tile = choosing.standard_tech_tiles[Track.TERRAFORMING]
         self.assertTrue(gained.players[0].tech_tiles & (1 << gained_tile))
+        gained = gained.apply(gained.research_action(Track.TERRAFORMING))
         self.assertEqual(gained.players[0].tracks[Track.TERRAFORMING], 1)
         self.assertEqual(gained.pending_itars_gaia_player, 0)
         self.assertEqual(gained.player_to_move, 0)
@@ -2681,6 +2687,11 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertTrue(all(action >= pending.tech_action(Track.TERRAFORMING) for action in pending.legal_actions()))
         resolved = pending.apply(pending.tech_action(Track.TERRAFORMING))
         self.assertEqual(resolved.pending_tech_player, -1)
+        self.assertEqual(resolved.current_player, 0)
+        self.assertTrue(resolved.pending_research_optional)
+        resolved = resolved.apply(
+            resolved.research_action(Track.TERRAFORMING)
+        )
         self.assertEqual(resolved.current_player, 1)
         self.assertEqual(resolved.players[0].tracks[Track.TERRAFORMING], 1)
 
@@ -3589,6 +3600,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         pending = state.apply(state.upgrade_qic_academy_action(planet))
         self.assertEqual(pending.players[0].qic_academies, 1)
         resolved = pending.apply(pending.tech_action(0))
+        resolved = resolved.apply(SKIP_TECH_RESEARCH_ACTION)
         resolved = replace(resolved, player_to_move=0)
         self.assertIn(QIC_ACADEMY_ACTION, resolved.legal_actions())
         ore_before = resolved.players[0].ore
@@ -3672,6 +3684,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(pending.pending_tech_player, 0)
         resolved = pending.apply(pending.tech_action(0))
         self.assertEqual(resolved.pending_tech_player, -1)
+        resolved = resolved.apply(SKIP_TECH_RESEARCH_ACTION)
 
         players = list(resolved.players)
         players[0] = replace(
