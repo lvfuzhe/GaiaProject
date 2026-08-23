@@ -325,7 +325,7 @@ def command_train_all(args: argparse.Namespace) -> None:
 
 
 def command_dashboard(args: argparse.Namespace) -> None:
-    serve_dashboard(args.metrics, args.host, args.port)
+    serve_dashboard(args.metrics, args.host, args.port, args.history_dir)
 
 
 def command_evaluate(args: argparse.Namespace) -> None:
@@ -441,6 +441,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     dashboard = subparsers.add_parser("dashboard", help="serve the live training dashboard")
     dashboard.add_argument("--metrics", default="runs/metrics.jsonl")
+    dashboard.add_argument(
+        "--history-dir",
+        default=None,
+        help="local interactive-game archive (default: <metrics-dir>/history)",
+    )
     dashboard.add_argument("--host", default="127.0.0.1")
     dashboard.add_argument("--port", type=int, default=8765)
     dashboard.set_defaults(handler=command_dashboard)

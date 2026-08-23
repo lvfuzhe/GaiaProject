@@ -1,5 +1,6 @@
 import hashlib
 import json
+import shutil
 import threading
 import time
 import unittest
@@ -36,7 +37,14 @@ from gaiazero.game.gaia_state import (
     Terrain,
     Track,
 )
-from gaiazero.telemetry import JsonlTelemetry, build_history_index, read_events, read_game_trace
+from gaiazero.telemetry import (
+    JsonlTelemetry,
+    build_history_index,
+    build_local_history_index,
+    read_events,
+    read_game_trace,
+    read_local_game_trace,
+)
 
 
 PLAYER_BOARD_SHA256 = (
@@ -61,10 +69,13 @@ RESEARCH_BOARD_SHA256 = "6A9CB95AFD5410927303E56F671206821188FD309FC55E2B268116A
 class DashboardTests(unittest.TestCase):
     def setUp(self) -> None:
         self.metrics = Path(__file__).parent / ".artifacts" / "dashboard.jsonl"
+        self.history = self.metrics.parent / "history"
         self.metrics.unlink(missing_ok=True)
+        shutil.rmtree(self.history, ignore_errors=True)
 
     def tearDown(self) -> None:
         self.metrics.unlink(missing_ok=True)
+        shutil.rmtree(self.history, ignore_errors=True)
 
     def test_optional_technology_research_skip_has_a_distinct_action_kind(self) -> None:
         state = replace(
@@ -1078,10 +1089,79 @@ class DashboardTests(unittest.TestCase):
                 restored = json.loads(response.read())
             self.assertEqual(restored["session_id"], game["session_id"])
             self.assertEqual(restored["move"], 0)
+            trace = read_local_game_trace(
+                self.history,
+                run_id=game["session_id"],
+            )
+            self.assertIsNotNone(trace)
+            self.assertEqual([step["move"] for step in trace["steps"]], [0])
+            self.assertEqual(trace["roles"], ["human", "ai"])
         finally:
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
+
+    def test_interactive_history_loads_after_dashboard_restart(self) -> None:
+        setup_payload = {
+            "players": 2,
+            "seed": 29,
+            "first_player": 0,
+            "factions": [0, 2],
+            "simulations": 1,
+            "roles": ["human", "human"],
+        }
+        server = create_dashboard_server(self.metrics, port=0, quiet=True)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            base = f"http://127.0.0.1:{server.server_port}"
+            status, game = self.post_json(f"{base}/api/play/start", setup_payload)
+            self.assertEqual(status, 201)
+            run_id = game["session_id"]
+            first_action = game["legal_actions"][0]["id"]
+            _, game = self.post_json(
+                f"{base}/api/play/action",
+                {"action": first_action},
+            )
+            self.assertEqual(game["move"], 1)
+            self.assertEqual(Path(game["archive_path"]).parent, self.history.resolve())
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+        index = build_local_history_index(self.history)
+        self.assertEqual([run["run_id"] for run in index["runs"]], [run_id])
+        self.assertEqual(index["runs"][0]["source"], "local")
+        self.assertEqual(index["runs"][0]["iterations"][0]["games"][0]["moves"], 1)
+
+        restarted = create_dashboard_server(self.metrics, port=0, quiet=True)
+        restarted_thread = threading.Thread(
+            target=restarted.serve_forever,
+            daemon=True,
+        )
+        restarted_thread.start()
+        try:
+            base = f"http://127.0.0.1:{restarted.server_port}"
+            with urlopen(f"{base}/api/history", timeout=5) as response:
+                history = json.loads(response.read())
+            local_run = next(run for run in history["runs"] if run["run_id"] == run_id)
+            self.assertEqual(local_run["source"], "local")
+            self.assertEqual(history["local_source"], str(self.history.resolve()))
+            with urlopen(
+                f"{base}/api/game?run_id={run_id}&iteration=1&game=1",
+                timeout=5,
+            ) as response:
+                trace = json.loads(response.read())
+            self.assertEqual(trace["source"], "local")
+            self.assertEqual([step["move"] for step in trace["steps"]], [0, 1])
+            self.assertEqual(trace["steps"][1]["action"], first_action)
+            self.assertEqual(trace["steps"][1]["record"]["role"], "human")
+            self.assertEqual(trace["steps"][1]["state"], game["state"])
+        finally:
+            restarted.shutdown()
+            restarted.server_close()
+            restarted_thread.join(timeout=5)
 
     def test_interactive_action_ledger_marks_technology_tile_id(self) -> None:
         state = GaiaState.initial(

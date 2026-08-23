@@ -584,9 +584,10 @@
           <h3>迭代与对局</h3>
         </div>
         <div class="history-selectors">
-          <label><span>训练运行</span><select id="history-run-select" aria-label="训练运行"></select></label>
+          <label><span>历史来源</span><select id="history-run-select" aria-label="历史来源"></select></label>
           <label><span>迭代</span><select id="history-iteration-select" aria-label="迭代"></select></label>
           <label><span>对局</span><select id="history-game-select" aria-label="对局"></select></label>
+          <button id="history-refresh" class="icon-button" type="button" title="重新读取本地历史" aria-label="重新读取本地历史">↻</button>
         </div>
         <div class="history-result">
           <span>终局分数</span>
@@ -594,7 +595,7 @@
         </div>
       </section>
 
-      <div id="history-empty" class="history-empty panel content-band">暂无可回放的自博弈对局</div>
+      <div id="history-empty" class="history-empty panel content-band">暂无可加载的本地对战或自博弈记录</div>
 
       <div id="history-content" hidden>
         <div class="history-grid content-band">

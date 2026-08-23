@@ -1595,12 +1595,18 @@ function renderHistorySelectors() {
   if (!runSelect || !iterationSelect || !gameSelect) return;
   const runs = historyRuns();
   runSelect.innerHTML = runs.length
-    ? runs.map((run) => `<option value="${escapeHtml(run.run_id)}">${escapeHtml(run.ruleset || "unknown")} · ${escapeHtml(run.run_id)} · ${escapeHtml(run.status)}</option>`).join("")
+    ? runs.map((run) => {
+      const source = run.source === "local" ? "本地对战" : "训练";
+      const status = run.status === "complete" ? "已完成" : run.status === "active" ? "进行中" : run.status;
+      return `<option value="${escapeHtml(run.run_id)}">${source} · ${escapeHtml(run.ruleset || "unknown")} · ${escapeHtml(run.run_id)} · ${escapeHtml(status)}</option>`;
+    }).join("")
     : '<option value="">暂无运行</option>';
   runSelect.value = state.history.runId || "";
   const iterations = historyRun()?.iterations || [];
   iterationSelect.innerHTML = iterations.length
-    ? iterations.map((item) => `<option value="${item.iteration}">第 ${item.iteration} 轮 · ${item.games.length} 局</option>`).join("")
+    ? iterations.map((item) => historyRun()?.source === "local"
+      ? `<option value="${item.iteration}">本地记录 · ${item.games.length} 局</option>`
+      : `<option value="${item.iteration}">第 ${item.iteration} 轮 · ${item.games.length} 局</option>`).join("")
     : '<option value="">暂无迭代</option>';
   iterationSelect.value = state.history.iteration === null ? "" : String(state.history.iteration);
   const games = historyIteration()?.games || [];
@@ -1608,7 +1614,8 @@ function renderHistorySelectors() {
     ? games.map((item) => {
       const score = item.scores ? ` · ${(item.scores || []).map((value) => formatNumber(value, 1)).join("/")}` : "";
       const coverage = item.moves === null ? "" : ` · ${item.captured_moves}/${item.moves} 步`;
-      return `<option value="${item.game}">第 ${item.game} 局${score}${coverage}</option>`;
+      const label = historyRun()?.source === "local" ? "人工对局" : `第 ${item.game} 局`;
+      return `<option value="${item.game}">${label}${score}${coverage}</option>`;
     }).join("")
     : '<option value="">暂无对局</option>';
   gameSelect.value = state.history.game === null ? "" : String(state.history.game);
@@ -1778,7 +1785,9 @@ function renderHistory() {
   empty.hidden = hasTrace || state.history.loading;
   content.hidden = !hasTrace;
   if (!hasTrace) {
-    if (state.history.loading) empty.textContent = "正在读取历史快照";
+    empty.textContent = state.history.loading
+      ? "正在读取历史快照"
+      : "暂无可加载的本地对战或自博弈记录";
     return;
   }
   const steps = trace.steps;
@@ -2977,6 +2986,9 @@ async function postPlay(path, payload = {}) {
 function acceptPlaySession(session) {
   state.play.session = session?.status === "idle" ? null : session;
   if (state.play.session) state.play.workspace = "match";
+  if (state.play.session?.archive_error) {
+    setPlayMessage(`本地历史保存失败：${state.play.session.archive_error}`, "failed");
+  }
   const legalTargets = new Set(
     (state.play.session?.legal_actions || [])
       .filter((action) => action.target !== null && action.target !== undefined)
@@ -3500,6 +3512,7 @@ function selectView(name) {
     tab.setAttribute("aria-selected", String(active));
   });
   window.location.hash = selected;
+  if (selected === "history") void refreshHistoryIndex();
   requestAnimationFrame(() => {
     renderLossChart();
     renderSetup(state.manualSetup.preview);
@@ -3676,6 +3689,7 @@ byId("history-run-select").addEventListener("change", async (event) => {
   state.history.trace = null;
   await loadHistoryGame(true);
 });
+byId("history-refresh").addEventListener("click", () => refreshHistoryIndex());
 byId("history-iteration-select").addEventListener("change", async (event) => {
   stopHistoryPlayback();
   state.history.iteration = Number(event.target.value);

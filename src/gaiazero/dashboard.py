@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import uuid
+from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -82,8 +83,11 @@ from gaiazero.model import (
 from gaiazero.telemetry import (
     JsonlTelemetry,
     build_history_index,
+    build_local_history_index,
     read_events,
     read_game_trace,
+    read_local_game_trace,
+    write_local_game,
 )
 
 WEB_ROOT = Path(__file__).with_name("web")
@@ -138,9 +142,15 @@ class DashboardServer(ThreadingHTTPServer):
         address: tuple[str, int],
         metrics_path: str | Path,
         *,
+        history_path: str | Path | None = None,
         quiet: bool = False,
     ) -> None:
         self.metrics_path = Path(metrics_path).resolve()
+        self.history_path = (
+            Path(history_path).resolve()
+            if history_path is not None
+            else (self.metrics_path.parent / "history").resolve()
+        )
         self.quiet = quiet
         self.simulation_lock = threading.Lock()
         self.simulation: dict[str, Any] = {"status": "idle"}
@@ -252,6 +262,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                             HTTPStatus.CONFLICT,
                         )
                         return
+                    _save_interactive_session(self.server, session)
                     self.server.play_session = session
                     response = _interactive_session_snapshot(session)
                 self._send_json(response, HTTPStatus.CREATED)
@@ -289,6 +300,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             if action not in state.legal_actions():
                 raise ValueError(f"illegal action {action}")
             _apply_interactive_action(session, action, "human")
+            _save_interactive_session(self.server, session)
             response = _interactive_session_snapshot(session)
         self._send_json(response)
 
@@ -306,6 +318,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 state.num_players,
             )
             session["revision"] += 1
+            _save_interactive_session(self.server, session)
             response = _interactive_session_snapshot(session)
         self._send_json(response)
 
@@ -319,6 +332,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "AI move is running"}, HTTPStatus.CONFLICT)
                 return
             undone = _undo_interactive_action(session)
+            _save_interactive_session(self.server, session)
             response = {**_interactive_session_snapshot(session), "undone_actions": undone}
         self._send_json(response)
 
@@ -375,6 +389,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 return
             _apply_interactive_action(session, action, "ai", search_summary)
             session["busy"] = False
+            _save_interactive_session(self.server, session)
             response = _interactive_session_snapshot(session)
         self._send_json(response)
 
@@ -409,7 +424,20 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         )
 
     def _serve_history(self) -> None:
-        self._send_json({**build_history_index(self.server.metrics_path), "source": str(self.server.metrics_path)})
+        training = build_history_index(self.server.metrics_path)
+        for run in training["runs"]:
+            run["source"] = "training"
+        local = build_local_history_index(self.server.history_path)
+        runs = [*training["runs"], *local["runs"]]
+        runs.sort(key=lambda run: str(run.get("started_at") or ""))
+        self._send_json(
+            {
+                "runs": runs,
+                "latest_sequence": training["latest_sequence"],
+                "source": str(self.server.metrics_path),
+                "local_source": str(self.server.history_path),
+            }
+        )
 
     def _serve_game(self, query: dict[str, list[str]]) -> None:
         run_id = query.get("run_id", [""])[0]
@@ -425,12 +453,19 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         if not run_id:
             self._send_json({"error": "run_id is required"}, HTTPStatus.BAD_REQUEST)
             return
-        trace = read_game_trace(
-            self.server.metrics_path,
+        trace = read_local_game_trace(
+            self.server.history_path,
             run_id=run_id,
             iteration=iteration,
             game=game,
         )
+        if trace is None:
+            trace = read_game_trace(
+                self.server.metrics_path,
+                run_id=run_id,
+                iteration=iteration,
+                game=game,
+            )
         if trace is None:
             self._send_json({"error": "game not found"}, HTTPStatus.NOT_FOUND)
             return
@@ -486,9 +521,15 @@ def create_dashboard_server(
     host: str = "127.0.0.1",
     port: int = 8765,
     *,
+    history_path: str | Path | None = None,
     quiet: bool = False,
 ) -> DashboardServer:
-    return DashboardServer((host, port), metrics_path, quiet=quiet)
+    return DashboardServer(
+        (host, port),
+        metrics_path,
+        history_path=history_path,
+        quiet=quiet,
+    )
 
 
 def _normalize_manual_config(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1874,6 +1915,8 @@ def _create_interactive_session(
     config: dict[str, Any],
     roles: list[str],
 ) -> dict[str, Any]:
+    created_at = datetime.now(UTC).isoformat()
+    initial_snapshot = initial.snapshot()
     evaluator, engine = _interactive_ai_components(initial)
     searches = [
         PUCTSearch(
@@ -1890,6 +1933,10 @@ def _create_interactive_session(
     return {
         "status": "active",
         "session_id": f"play-{uuid.uuid4().hex[:10]}",
+        "created_at": created_at,
+        "completed_at": None,
+        "started_clock": perf_counter(),
+        "duration_seconds": 0.0,
         "config": dict(config),
         "roles": roles,
         "state": initial,
@@ -1897,11 +1944,29 @@ def _create_interactive_session(
         "engine": engine,
         "move": 0,
         "history": [],
+        "trace_steps": [
+            {
+                "sequence": 0,
+                "timestamp": created_at,
+                "move": 0,
+                "player": initial_snapshot.get("current_player"),
+                "role": None,
+                "action": None,
+                "action_label": "initial state",
+                "legal_actions": len(initial.legal_actions()),
+                "search_sampled": False,
+                "root_value": None,
+                "candidates": [],
+                "record": None,
+                "state": initial_snapshot,
+            }
+        ],
         "undo_stack": [],
         "last_action": None,
         "last_search": None,
         "busy": False,
         "error": None,
+        "archive_error": None,
         "revision": 0,
     }
 
@@ -1925,6 +1990,7 @@ def _apply_interactive_action(
     player = before.current_player
     if action not in before.legal_actions():
         raise ValueError(f"illegal action {action}")
+    legal_action_count = len(before.legal_actions())
     session["undo_stack"].append(
         {
             "state": before,
@@ -1946,9 +2012,27 @@ def _apply_interactive_action(
     )
     session["last_search"] = search_summary
     session["history"].append(session["last_action"])
+    session["trace_steps"].append(
+        {
+            "sequence": session["move"],
+            "timestamp": datetime.now(UTC).isoformat(),
+            "move": session["move"],
+            "player": player,
+            "role": role,
+            "action": action,
+            "action_label": session["last_action"]["label"],
+            "legal_actions": legal_action_count,
+            "search_sampled": search_summary is not None,
+            "root_value": (search_summary or {}).get("root_value"),
+            "candidates": (search_summary or {}).get("candidates") or [],
+            "record": session["last_action"],
+            "state": after.snapshot(),
+        }
+    )
     session["error"] = None
     if after.is_terminal:
         session["status"] = "complete"
+        session["completed_at"] = datetime.now(UTC).isoformat()
 
 
 def _undo_interactive_action(session: dict[str, Any]) -> int:
@@ -1967,6 +2051,7 @@ def _undo_interactive_action(session: dict[str, Any]) -> int:
     undone = len(history) - human_index
     del history[human_index:]
     del undo_stack[human_index:]
+    del session["trace_steps"][human_index + 1 :]
     session["state"] = frame["state"]
     session["status"] = frame["status"]
     session["move"] = len(history)
@@ -1976,6 +2061,64 @@ def _undo_interactive_action(session: dict[str, Any]) -> int:
     session["error"] = None
     session["revision"] += 1
     return undone
+
+
+def _persist_interactive_session(
+    server: DashboardServer,
+    session: dict[str, Any],
+) -> None:
+    state = session.get("state")
+    if not isinstance(state, GaiaState):
+        raise ValueError("no interactive game has been started")
+    session["duration_seconds"] = max(
+        0.0,
+        perf_counter() - float(session["started_clock"]),
+    )
+    state_snapshot = state.snapshot()
+    config = dict(session["config"])
+    config["random_setup"] = _resolved_random_setup(state)
+    scores = list(state.final_scores()) if state.is_terminal else None
+    record = {
+        "run_id": session["session_id"],
+        "source": "local",
+        "started_at": session["created_at"],
+        "updated_at": datetime.now(UTC).isoformat(),
+        "completed_at": session.get("completed_at"),
+        "status": session["status"],
+        "ruleset": state_snapshot.get("ruleset"),
+        "config": config,
+        "roles": list(session["roles"]),
+        "engine": session["engine"],
+        "trace": {
+            "run_id": session["session_id"],
+            "iteration": 1,
+            "game": 1,
+            "started_at": session["created_at"],
+            "completed_at": session.get("completed_at"),
+            "summary": {
+                "moves": session["move"],
+                "positions": session["move"],
+                "scores": scores,
+                "returns": None,
+                "duration_seconds": session["duration_seconds"],
+            },
+            "trace_complete": True,
+            "captured_moves": session["move"],
+            "steps": list(session["trace_steps"]),
+        },
+    }
+    session["archive_path"] = str(write_local_game(server.history_path, record))
+
+
+def _save_interactive_session(
+    server: DashboardServer,
+    session: dict[str, Any],
+) -> None:
+    try:
+        _persist_interactive_session(server, session)
+        session["archive_error"] = None
+    except OSError as error:
+        session["archive_error"] = f"{type(error).__name__}: {error}"
 
 
 def _interactive_undo_count(session: dict[str, Any]) -> int:
@@ -2017,6 +2160,8 @@ def _interactive_session_snapshot(session: dict[str, Any]) -> dict[str, Any]:
         "last_action": session.get("last_action"),
         "last_search": session.get("last_search"),
         "history": list(session["history"]),
+        "archive_path": session.get("archive_path"),
+        "archive_error": session.get("archive_error"),
         "can_undo": undo_count > 0 and not session.get("busy"),
         "undo_count": undo_count,
     }
@@ -2163,10 +2308,17 @@ def serve_dashboard(
     metrics_path: str | Path,
     host: str = "127.0.0.1",
     port: int = 8765,
+    history_path: str | Path | None = None,
 ) -> None:
-    server = create_dashboard_server(metrics_path, host, port)
+    server = create_dashboard_server(
+        metrics_path,
+        host,
+        port,
+        history_path=history_path,
+    )
     print(f"GaiaZero dashboard: http://{host}:{server.server_port}")
     print(f"Metrics source: {server.metrics_path}")
+    print(f"Local history: {server.history_path}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

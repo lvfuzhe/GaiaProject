@@ -86,10 +86,17 @@ gaiazero evaluate runs/models/gaia-standard-4p-katago.pt --players 4 --games 20 
 
 ## 训练监控台
 
-训练命令默认把结构化事件写入 `runs/metrics.jsonl`。在另一个终端启动只读仪表盘：
+训练命令默认把结构化事件写入 `runs/metrics.jsonl`。在另一个终端启动仪表盘：
 
 ```powershell
 gaiazero dashboard --metrics runs/metrics.jsonl --port 8765
+```
+
+人工对战会按局原子保存到指标文件同级的 `history` 目录，默认即
+`runs/history/play-*.json`。可以显式指定其他本地目录：
+
+```powershell
+gaiazero dashboard --metrics runs/metrics.jsonl --history-dir runs/play-history --port 8765
 ```
 
 浏览器访问 `http://127.0.0.1:8765`。监控台包含概览、人工对战、自博弈、历史回放和诊断
@@ -99,9 +106,11 @@ gaiazero dashboard --metrics runs/metrics.jsonl --port 8765
 初始设置地图使用本地化的实体星区扫描图；图片来源与版权说明见
 [`src/gaiazero/web/assets/sectors/ATTRIBUTION.md`](src/gaiazero/web/assets/sectors/ATTRIBUTION.md)。
 
-历史回放按训练运行、迭代和对局建立索引。每局可使用滑杆或播放控制逐步检查棋盘、资源、
-科研轨与动作账本；页面同时检查轨迹连续性、轮次顺序、资源上限、星球所有权、终局状态和
-规则引擎动作转移。新训练会记录每一步规则状态，旧日志缺少的步骤会标记为“需补录”。
+历史回放会合并本地人工对战与训练自博弈记录。人工对战在新建、每步行动、角色切换和撤销后
+自动更新本地 JSON，关闭并重启仪表盘后仍可从“历史回放”选择加载。每局可使用滑杆或播放
+控制逐步检查棋盘、资源、科研轨与动作账本；页面同时检查轨迹连续性、轮次顺序、资源上限、
+星球所有权、终局状态和规则引擎动作转移。新训练会记录每一步规则状态，旧日志缺少的步骤会
+标记为“需补录”。
 
 训练过程会记录每一步棋盘状态，并默认每隔四步附带一次完整搜索候选；可按运行规模调整
 搜索详情的采样间隔：
@@ -111,8 +120,8 @@ gaiazero train --metrics runs/experiment-a.jsonl --metrics-move-interval 8
 gaiazero dashboard --metrics runs/experiment-a.jsonl --port 8765
 ```
 
-Dashboard 与训练进程相互独立，只读取 JSONL 文件，不加载模型或占用 GPU 显存。文件保留后，
-训练结束或异常退出时仍可查看最后状态。
+Dashboard 与训练进程相互独立，不会修改训练 JSONL；人工对战历史单独写入本地历史目录。
+监控过程不加载训练模型或占用 GPU 显存。文件保留后，训练或服务结束时仍可查看最后状态。
 
 CPU 冒烟训练可以显著缩小参数：
 
@@ -161,7 +170,7 @@ src/gaiazero/replay.py          有界经验回放
 src/gaiazero/training.py        AlphaZero 联合损失训练器
 src/gaiazero/arena.py           座位轮换评测
 src/gaiazero/telemetry.py       结构化 JSONL 训练事件
-src/gaiazero/dashboard.py       只读监控 HTTP 服务
+src/gaiazero/dashboard.py       监控及本地历史 HTTP 服务
 src/gaiazero/web/               响应式监控页面
 src/gaiazero/cli.py             命令行入口
 tests/                          规则、搜索和训练回归测试
