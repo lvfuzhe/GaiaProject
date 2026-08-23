@@ -435,6 +435,18 @@ def read_local_game_trace(
     return trace
 
 
+def delete_local_game(path: str | Path, *, run_id: str) -> bool:
+    """Delete one validated local replay without accepting arbitrary paths."""
+
+    if not _LOCAL_HISTORY_ID.fullmatch(run_id):
+        raise ValueError("local history run_id contains unsupported characters")
+    target = Path(path) / f"{run_id}.json"
+    if _read_local_game(target) is None:
+        return False
+    target.unlink()
+    return True
+
+
 def _read_local_game(path: Path) -> dict[str, Any] | None:
     try:
         with path.open("r", encoding="utf-8") as stream:

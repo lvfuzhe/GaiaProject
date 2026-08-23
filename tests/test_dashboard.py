@@ -724,6 +724,8 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("player-board-grid", page)
             self.assertIn("history-player-board-grid", page)
             self.assertIn("history-star-map-frame", page)
+            self.assertIn("history-delete", page)
+            self.assertIn("function deleteSelectedHistory", app_script)
             self.assertEqual(sector_content_type, "image/gif")
             self.assertTrue(sector_image.startswith(b"GIF"))
             self.assertTrue(outlined_sector_image.startswith(b"GIF"))
@@ -1125,6 +1127,14 @@ class DashboardTests(unittest.TestCase):
             )
             self.assertEqual(game["move"], 1)
             self.assertEqual(Path(game["archive_path"]).parent, self.history.resolve())
+            delete_request = Request(
+                f"{base}/api/history?run_id={run_id}",
+                method="DELETE",
+            )
+            with self.assertRaises(HTTPError) as raised:
+                urlopen(delete_request, timeout=5)
+            self.assertEqual(raised.exception.code, 409)
+            self.assertTrue((self.history / f"{run_id}.json").is_file())
         finally:
             server.shutdown()
             server.server_close()
@@ -1158,6 +1168,33 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(trace["steps"][1]["action"], first_action)
             self.assertEqual(trace["steps"][1]["record"]["role"], "human")
             self.assertEqual(trace["steps"][1]["state"], game["state"])
+
+            invalid_request = Request(
+                f"{base}/api/history?run_id=..%2Fevil",
+                method="DELETE",
+            )
+            with self.assertRaises(HTTPError) as raised:
+                urlopen(invalid_request, timeout=5)
+            self.assertEqual(raised.exception.code, 400)
+
+            delete_request = Request(
+                f"{base}/api/history?run_id={run_id}",
+                method="DELETE",
+            )
+            with urlopen(delete_request, timeout=5) as response:
+                deleted = json.loads(response.read())
+            self.assertTrue(deleted["deleted"])
+            self.assertEqual(deleted["run_id"], run_id)
+            self.assertFalse((self.history / f"{run_id}.json").exists())
+            with urlopen(f"{base}/api/history", timeout=5) as response:
+                after_delete = json.loads(response.read())
+            self.assertFalse(any(run["run_id"] == run_id for run in after_delete["runs"]))
+            with self.assertRaises(HTTPError) as raised:
+                urlopen(
+                    f"{base}/api/game?run_id={run_id}&iteration=1&game=1",
+                    timeout=5,
+                )
+            self.assertEqual(raised.exception.code, 404)
         finally:
             restarted.shutdown()
             restarted.server_close()

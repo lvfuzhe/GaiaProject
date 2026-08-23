@@ -650,7 +650,10 @@
           <label><span>历史来源</span><select id="history-run-select" aria-label="历史来源"></select></label>
           <label><span>迭代</span><select id="history-iteration-select" aria-label="迭代"></select></label>
           <label><span>对局</span><select id="history-game-select" aria-label="对局"></select></label>
-          <button id="history-refresh" class="icon-button" type="button" title="重新读取本地历史" aria-label="重新读取本地历史">↻</button>
+          <div class="history-selector-actions">
+            <button id="history-refresh" class="icon-button" type="button" title="重新读取本地历史" aria-label="重新读取本地历史">↻</button>
+            <button id="history-delete" class="secondary-command history-delete-command" type="button" title="删除当前本地历史">删除</button>
+          </div>
         </div>
         <div class="history-result">
           <span>终局分数</span>

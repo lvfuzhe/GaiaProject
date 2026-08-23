@@ -204,6 +204,7 @@ const state = {
     trace: null,
     step: 0,
     loading: false,
+    deleting: false,
     playing: false,
     timer: null
   },
@@ -1773,6 +1774,7 @@ function renderHistorySelectors() {
   const runSelect = byId("history-run-select");
   const iterationSelect = byId("history-iteration-select");
   const gameSelect = byId("history-game-select");
+  const deleteButton = byId("history-delete");
   if (!runSelect || !iterationSelect || !gameSelect) return;
   const runs = historyRuns();
   runSelect.innerHTML = runs.length
@@ -1805,6 +1807,46 @@ function renderHistorySelectors() {
   runSelect.disabled = !runs.length;
   iterationSelect.disabled = !iterations.length;
   gameSelect.disabled = !games.length;
+  if (deleteButton) {
+    const source = historyRun()?.source;
+    const deletable = ["local", "bga"].includes(source);
+    deleteButton.disabled = state.history.deleting || state.history.loading || !deletable;
+    deleteButton.textContent = state.history.deleting ? "删除中" : "删除";
+    deleteButton.title = deletable
+      ? "永久删除当前本地历史"
+      : source === "training" ? "训练记录来自指标日志，不能在此删除" : "没有可删除的历史";
+  }
+}
+
+async function deleteSelectedHistory() {
+  const selected = historyRun();
+  if (state.history.deleting || !["local", "bga"].includes(selected?.source)) return;
+  const sourceLabel = selected.source === "bga" ? "BGA 复盘" : "人工对局";
+  const confirmed = window.confirm(`永久删除当前${sourceLabel}？\n${selected.run_id}`);
+  if (!confirmed) return;
+  const runs = historyRuns();
+  const selectedIndex = runs.findIndex((run) => run.run_id === selected.run_id);
+  const fallback = runs[selectedIndex - 1] || runs[selectedIndex + 1] || null;
+  state.history.deleting = true;
+  stopHistoryPlayback();
+  renderHistorySelectors();
+  try {
+    const params = new URLSearchParams({ run_id: selected.run_id });
+    const response = await fetch(`/api/history?${params.toString()}`, { method: "DELETE" });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    state.history.runId = fallback?.run_id || null;
+    state.history.iteration = null;
+    state.history.game = null;
+    state.history.trace = null;
+    state.history.step = 0;
+    await refreshHistoryIndex();
+  } catch (error) {
+    window.alert(error.message || String(error));
+  } finally {
+    state.history.deleting = false;
+    renderHistory();
+  }
 }
 
 function snapshotRoundLabel(snapshot, compact = false) {
@@ -3990,6 +4032,7 @@ byId("history-run-select").addEventListener("change", async (event) => {
   await loadHistoryGame(true);
 });
 byId("history-refresh").addEventListener("click", () => refreshHistoryIndex());
+byId("history-delete").addEventListener("click", deleteSelectedHistory);
 byId("history-iteration-select").addEventListener("change", async (event) => {
   stopHistoryPlayback();
   state.history.iteration = Number(event.target.value);

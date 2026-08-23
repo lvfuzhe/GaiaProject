@@ -94,6 +94,7 @@ from gaiazero.telemetry import (
     JsonlTelemetry,
     build_history_index,
     build_local_history_index,
+    delete_local_game,
     read_events,
     read_game_trace,
     read_local_game_trace,
@@ -268,6 +269,59 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         )
         worker.start()
         self._send_json(self._simulation_status(), HTTPStatus.ACCEPTED)
+
+    def do_DELETE(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        request = urlparse(self.path)
+        if request.path != "/api/history":
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        self._handle_history_delete(parse_qs(request.query))
+
+    def _handle_history_delete(self, query: dict[str, list[str]]) -> None:
+        run_id = query.get("run_id", [""])[0]
+        if not run_id:
+            self._send_json({"error": "run_id is required"}, HTTPStatus.BAD_REQUEST)
+            return
+        if not self.server.bga_import_lock.acquire(blocking=False):
+            self._send_json(
+                {"error": "BGA 复盘正在导入，请稍后再删除"},
+                HTTPStatus.CONFLICT,
+            )
+            return
+        try:
+            with self.server.play_lock:
+                session = self.server.play_session
+                selected_live_game = session.get("session_id") == run_id
+                if selected_live_game and session.get("status") != "complete":
+                    self._send_json(
+                        {"error": "正在进行的人工对局不能删除"},
+                        HTTPStatus.CONFLICT,
+                    )
+                    return
+                try:
+                    deleted = delete_local_game(
+                        self.server.history_path,
+                        run_id=run_id,
+                    )
+                except ValueError as error:
+                    self._send_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+                    return
+                if not deleted:
+                    self._send_json(
+                        {"error": "未找到可删除的本地历史记录"},
+                        HTTPStatus.NOT_FOUND,
+                    )
+                    return
+                if selected_live_game:
+                    self.server.play_session = {"status": "idle"}
+            self._send_json({"ok": True, "deleted": True, "run_id": run_id})
+        except OSError as error:
+            self._send_json(
+                {"error": f"无法删除历史记录: {error}"},
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
+        finally:
+            self.server.bga_import_lock.release()
 
     def _handle_bga_import(self) -> None:
         if not self.server.bga_import_lock.acquire(blocking=False):

@@ -1964,8 +1964,33 @@ main {
 
 .history-selectors {
   display: grid;
-  grid-template-columns: minmax(170px, 1.3fr) minmax(120px, 0.7fr) minmax(120px, 0.7fr);
+  grid-template-columns: minmax(170px, 1.3fr) minmax(120px, 0.7fr) minmax(120px, 0.7fr) max-content;
   gap: 10px;
+}
+
+.history-selector-actions {
+  display: flex;
+  align-items: flex-end;
+  gap: 7px;
+}
+
+.history-delete-command {
+  min-height: 34px;
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 45%, var(--line));
+  background: #fff8f6;
+}
+
+.history-delete-command:hover:not(:disabled),
+.history-delete-command:focus-visible:not(:disabled) {
+  color: #fff;
+  border-color: var(--red);
+  outline: none;
+  background: var(--red);
+}
+
+.history-delete-command:disabled {
+  cursor: not-allowed;
 }
 
 .history-selectors label,
@@ -4358,6 +4383,10 @@ footer {
 
   .history-selectors {
     grid-template-columns: 1fr;
+  }
+
+  .history-selector-actions {
+    justify-content: flex-end;
   }
 
   .playback-row {
