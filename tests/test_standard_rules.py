@@ -588,6 +588,184 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(formed._final_scoring_metric(0, 1), 2)
         self.assertEqual(formed._final_scoring_metric(0, 5), plan[1] + 1)
 
+    def test_federation_uses_exact_shared_shortest_satellite_path(self) -> None:
+        state = GaiaState.initial(
+            2,
+            seed=1,
+            faction_indices=(0, 2),
+            first_player=0,
+        )
+        coordinates = ((2, 0), (-2, 2), (0, -2))
+        active = [False] * len(state.active_planets)
+        planet_q = [0] * len(state.planet_q)
+        planet_r = [0] * len(state.planet_r)
+        owners = [-1] * len(state.owners)
+        buildings = [Building.EMPTY] * len(state.buildings)
+        for planet, ((q, r), building) in enumerate(zip(
+            coordinates,
+            (Building.PLANETARY_INSTITUTE, Building.ACADEMY, Building.MINE),
+            strict=True,
+        )):
+            active[planet] = True
+            planet_q[planet] = q
+            planet_r[planet] = r
+            owners[planet] = 0
+            buildings[planet] = building
+        players = list(state.players)
+        players[0] = replace(players[0], bowl_one=20, bowl_two=0, bowl_three=0)
+        state = replace(
+            state,
+            round_number=1,
+            player_to_move=0,
+            active_planets=tuple(active),
+            planet_q=tuple(planet_q),
+            planet_r=tuple(planet_r),
+            owners=tuple(owners),
+            buildings=tuple(int(building) for building in buildings),
+            players=tuple(players),
+        )
+
+        plan = state._federation_plan_details(0)
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        locations, satellite_spaces = plan
+        self.assertEqual(locations, (0, 1, 2))
+        self.assertEqual(len(satellite_spaces), 4)
+
+        formed = state._apply_federation(0)
+        satellite_coordinates = {
+            (satellite["q"], satellite["r"])
+            for satellite in formed.snapshot()["satellites"]
+        }
+        self.assertEqual(
+            satellite_coordinates,
+            {(-1, 1), (0, -1), (0, 0), (1, 0)},
+        )
+        self.assertEqual(formed.players[0].satellites, 4)
+
+    def test_federation_shortest_path_uses_unselected_planet_hop(self) -> None:
+        state = GaiaState.initial(
+            2,
+            seed=1,
+            faction_indices=(0, 2),
+            first_player=0,
+        )
+        coordinates = ((-3, 0), (-3, 1), (3, 0), (0, 0))
+        structures = (
+            Building.PLANETARY_INSTITUTE,
+            Building.MINE,
+            Building.ACADEMY,
+            Building.MINE,
+        )
+        active = [False] * len(state.active_planets)
+        planet_q = [0] * len(state.planet_q)
+        planet_r = [0] * len(state.planet_r)
+        owners = [-1] * len(state.owners)
+        buildings = [Building.EMPTY] * len(state.buildings)
+        for planet, ((q, r), building) in enumerate(zip(
+            coordinates,
+            structures,
+            strict=True,
+        )):
+            active[planet] = True
+            planet_q[planet] = q
+            planet_r[planet] = r
+            owners[planet] = 0
+            buildings[planet] = building
+        players = list(state.players)
+        players[0] = replace(players[0], bowl_one=25, bowl_two=0, bowl_three=0)
+        state = replace(
+            state,
+            round_number=1,
+            player_to_move=0,
+            active_planets=tuple(active),
+            planet_q=tuple(planet_q),
+            planet_r=tuple(planet_r),
+            owners=tuple(owners),
+            buildings=tuple(int(building) for building in buildings),
+            players=tuple(players),
+        )
+
+        plan = state._federation_plan_details(0)
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        locations, satellite_spaces = plan
+        self.assertEqual(locations, (0, 1, 2, 3))
+        self.assertEqual(len(satellite_spaces), 4)
+        self.assertIn(3, locations)
+
+    def test_new_federation_avoids_existing_federation_and_adjacent_builds_join_it(self) -> None:
+        state = GaiaState.initial(
+            2,
+            seed=1,
+            faction_indices=(0, 2),
+            first_player=0,
+        )
+        coordinates = ((-3, 0), (-3, 1), (3, 0), (0, 3), (1, 0))
+        structures = (
+            Building.PLANETARY_INSTITUTE,
+            Building.MINE,
+            Building.ACADEMY,
+            Building.MINE,
+            Building.MINE,
+        )
+        active = [False] * len(state.active_planets)
+        planet_q = [0] * len(state.planet_q)
+        planet_r = [0] * len(state.planet_r)
+        owners = [-1] * len(state.owners)
+        buildings = [Building.EMPTY] * len(state.buildings)
+        federated = [False] * len(state.federated)
+        for planet, ((q, r), building) in enumerate(zip(
+            coordinates,
+            structures,
+            strict=True,
+        )):
+            active[planet] = True
+            planet_q[planet] = q
+            planet_r[planet] = r
+            owners[planet] = 0
+            buildings[planet] = building
+        federated[3] = True
+        satellite_owners = [0] * len(state.satellite_owners)
+        old_satellite = state._board_spaces().index((0, 0))
+        satellite_owners[old_satellite] = 1
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            bowl_one=25,
+            bowl_two=0,
+            bowl_three=0,
+            satellites=1,
+            board_federations=1,
+        )
+        state = replace(
+            state,
+            round_number=1,
+            player_to_move=0,
+            active_planets=tuple(active),
+            planet_q=tuple(planet_q),
+            planet_r=tuple(planet_r),
+            owners=tuple(owners),
+            buildings=tuple(int(building) for building in buildings),
+            federated=tuple(federated),
+            satellite_owners=tuple(satellite_owners),
+            players=tuple(players),
+        )
+
+        state = state._mark_adjacent_structure_federated(0, 4)
+        self.assertTrue(state.federated[4])
+        plan = state._federation_plan_details(0)
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        _, satellite_spaces = plan
+        existing_coordinates = ((0, 0), (0, 3), (1, 0))
+        for space in satellite_spaces:
+            q, r = state._board_spaces()[space]
+            self.assertTrue(all(
+                hex_distance(q, r, old_q, old_r) > 1
+                for old_q, old_r in existing_coordinates
+            ))
+
     def test_ambas_pi_swap_is_once_per_round_and_has_no_upgrade_effects(self) -> None:
         state = finish_starting_placement(
             GaiaState.initial(2, faction_indices=(5, 0), first_player=0)

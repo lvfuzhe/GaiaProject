@@ -2369,6 +2369,24 @@ function drawBoard(canvas, snapshot, options = {}) {
   }
 
   if (options.showPlayerPieces !== false) {
+    for (const satellite of snapshot.satellites || []) {
+      const x = offsetX + Math.sqrt(3) * (Number(satellite.q) + Number(satellite.r) / 2) * scale;
+      const y = offsetY + 1.5 * Number(satellite.r) * scale;
+      const owners = Array.isArray(satellite.owners) ? satellite.owners : [];
+      const markerSize = compactMap ? Math.max(2.5, size * 0.2) : Math.max(3.5, size * 0.25);
+      owners.forEach((owner, index) => {
+        const offset = (index - (owners.length - 1) / 2) * markerSize * 1.35;
+        context.save();
+        context.translate(x + offset, y);
+        context.rotate(Math.PI / 4);
+        context.fillStyle = PLAYER_COLORS[owner] || "#d9e2e8";
+        context.strokeStyle = "rgba(5, 11, 20, 0.9)";
+        context.lineWidth = compactMap ? 0.7 : 1;
+        context.fillRect(-markerSize / 2, -markerSize / 2, markerSize, markerSize);
+        context.strokeRect(-markerSize / 2, -markerSize / 2, markerSize, markerSize);
+        context.restore();
+      });
+    }
     for (const station of snapshot.space_stations || []) {
       const x = offsetX + Math.sqrt(3) * (Number(station.q) + Number(station.r) / 2) * scale;
       const y = offsetY + 1.5 * Number(station.r) * scale;

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from enum import IntEnum
+from heapq import heappop, heappush
 from itertools import combinations
 from math import exp
 
@@ -377,6 +378,14 @@ BOOSTER_LABELS: tuple[str, ...] = (
 # Setup maps still contain at most MAX_PLANETS printed planets.
 N = MAX_PLANETS + 1
 LOST_PLANET_SLOT = N - 1
+HEX_DIRECTIONS: tuple[tuple[int, int], ...] = (
+    (1, 0),
+    (0, 1),
+    (-1, 1),
+    (-1, 0),
+    (0, -1),
+    (1, -1),
+)
 BUILD_OFFSET = 0
 GAIA_OFFSET = BUILD_OFFSET + N
 UPGRADE_TRADING_OFFSET = GAIA_OFFSET + N
@@ -530,6 +539,7 @@ class GaiaState:
     terrains: tuple[int, ...]
     gaiaformer_owner: tuple[int, ...]
     federated: tuple[bool, ...]
+    satellite_owners: tuple[int, ...]
     space_station_owner: tuple[int, ...]
     space_station_federated: tuple[bool, ...]
     booster_owner: tuple[int, ...]
@@ -644,6 +654,7 @@ class GaiaState:
             terrains=(*setup.terrains, int(Terrain.LOST)),
             gaiaformer_owner=tuple([-1] * N),
             federated=tuple([False] * N),
+            satellite_owners=tuple([0] * MAX_BOARD_SPACES),
             space_station_owner=tuple([-1] * MAX_BOARD_SPACES),
             space_station_federated=tuple([False] * MAX_BOARD_SPACES),
             booster_owner=setup.booster_owner,
@@ -1349,6 +1360,8 @@ class GaiaState:
             coexisting_mine_owner=tuple(coexisting_owners),
             gaiaformer_owner=tuple(gaiaformers),
         )
+        location = N + planet if coexisting else planet
+        state = state._mark_adjacent_structure_federated(player, location)
         return state._trigger_passive_charge(
             player,
             planet,
@@ -1937,6 +1950,7 @@ class GaiaState:
             terrains=tuple(int(value) for value in terrains),
             pending_lost_planet_player=-1,
         )
+        state = state._mark_adjacent_structure_federated(player, LOST_PLANET_SLOT)
         return state._trigger_passive_charge(
             player,
             LOST_PLANET_SLOT,
@@ -1973,7 +1987,7 @@ class GaiaState:
             raise ValueError("space station must be placed on an accessible empty space")
         owners = list(self.space_station_owner)
         owners[space] = player
-        return replace(
+        state = replace(
             self,
             players=self._replace_player(
                 player,
@@ -1981,13 +1995,15 @@ class GaiaState:
             ),
             space_station_owner=tuple(owners),
         )
+        return state._mark_adjacent_structure_federated(player, 2 * N + space)
 
     def _apply_federation(self, reward: int = 0) -> GaiaState:
         player = self.player_to_move
-        plan = self._federation_plan(player)
+        plan = self._federation_plan_details(player)
         if plan is None:
             raise ValueError("no legal federation plan")
-        locations, satellites = plan
+        locations, satellite_spaces = plan
+        satellites = len(satellite_spaces)
         original = self.players[player]
         if FACTIONS[original.faction].name == "Ivits":
             info = original.spend(qic=satellites)
@@ -2015,6 +2031,9 @@ class GaiaState:
                 coexisting_federated[location - N] = True
             else:
                 space_station_federated[location - 2 * N] = True
+        satellite_owners = list(self.satellite_owners)
+        for space in satellite_spaces:
+            satellite_owners[space] |= 1 << player
         supply = list(self.federation_tile_supply)
         supply[reward] -= 1
         return replace(
@@ -2022,6 +2041,7 @@ class GaiaState:
             players=self._replace_player(player, info),
             federated=tuple(federated),
             coexisting_mine_federated=tuple(coexisting_federated),
+            satellite_owners=tuple(satellite_owners),
             space_station_federated=tuple(space_station_federated),
             federation_tile_supply=tuple(supply),
         )
@@ -2843,44 +2863,175 @@ class GaiaState:
         return state._advance_turn()
 
     def _federation_plan(self, player: int) -> tuple[tuple[int, ...], int] | None:
+        plan = self._federation_plan_details(player)
+        if plan is None:
+            return None
+        locations, satellite_spaces = plan
+        return locations, len(satellite_spaces)
+
+    def _touches_existing_federation(self, player: int, q: int, r: int) -> bool:
+        if any(
+            federated
+            and owner == player
+            and hex_distance(q, r, self.planet_q[planet], self.planet_r[planet]) <= 1
+            for planet, (owner, federated) in enumerate(
+                zip(self.owners, self.federated, strict=True)
+            )
+        ):
+            return True
+        if any(
+            federated
+            and owner == player
+            and hex_distance(q, r, self.planet_q[planet], self.planet_r[planet]) <= 1
+            for planet, (owner, federated) in enumerate(
+                zip(
+                    self.coexisting_mine_owner,
+                    self.coexisting_mine_federated,
+                    strict=True,
+                )
+            )
+        ):
+            return True
+        if any(
+            owner == player
+            and federated
+            and hex_distance(q, r, station_q, station_r) <= 1
+            for owner, federated, (station_q, station_r) in zip(
+                self.space_station_owner,
+                self.space_station_federated,
+                self._board_spaces(),
+                strict=False,
+            )
+        ):
+            return True
+        return any(
+            owners & (1 << player)
+            and hex_distance(q, r, satellite_q, satellite_r) <= 1
+            for owners, (satellite_q, satellite_r) in zip(
+                self.satellite_owners,
+                self._board_spaces(),
+                strict=False,
+            )
+        )
+
+    def _mark_adjacent_structure_federated(
+        self,
+        player: int,
+        location: int,
+    ) -> GaiaState:
+        q, r = self._location_coordinate(location)
+        if not self._touches_existing_federation(player, q, r):
+            return self
+        if location < N:
+            federated = list(self.federated)
+            federated[location] = True
+            return replace(self, federated=tuple(federated))
+        if location < 2 * N:
+            coexisting = list(self.coexisting_mine_federated)
+            coexisting[location - N] = True
+            return replace(self, coexisting_mine_federated=tuple(coexisting))
+        stations = list(self.space_station_federated)
+        stations[location - 2 * N] = True
+        return replace(self, space_station_federated=tuple(stations))
+
+    def _federation_plan_details(
+        self,
+        player: int,
+    ) -> tuple[tuple[int, ...], tuple[int, ...]] | None:
         info = self.players[player]
         faction = FACTIONS[info.faction]
         is_ivits = faction.name == "Ivits"
         existing = self._structure_locations(player, federated=True) if is_ivits else ()
-        candidates = list(self._structure_locations(player, federated=False))
+        clusters = self._unfederated_structure_clusters(player)
+        if not is_ivits:
+            clusters = tuple(
+                cluster
+                for cluster in clusters
+                if not any(
+                    self._touches_existing_federation(
+                        player,
+                        *self._location_coordinate(location),
+                    )
+                    for location in cluster
+                )
+            )
+
         threshold = self._federation_threshold(player)
-        available_satellites = info.qic if faction.name == "Ivits" else self._cycle_power(info)
-        best: tuple[tuple[int, int, int], tuple[int, ...], int] | None = None
-        minimum_size = 0 if existing else 1
-        for size in range(minimum_size, len(candidates) + 1):
-            for subset in combinations(candidates, size):
-                power = sum(
-                    self._location_power(player, location)
-                    for location in subset
-                )
-                if existing:
-                    power += sum(
-                        self._location_power(player, location)
-                        for location in existing
-                    )
-                if power < threshold:
-                    continue
-                satellites = (
-                    self._minimum_extension_satellites(
-                        existing,
-                        subset,
-                    )
-                    if existing
-                    else self._minimum_satellites(subset)
-                )
-                if satellites > available_satellites or info.satellites + satellites > 25:
-                    continue
-                key = (satellites, power - threshold, size)
-                if best is None or key < best[0]:
-                    best = (key, (*existing, *subset), satellites)
-            if best is not None and best[0][0] == 0:
-                break
-        return None if best is None else (best[1], best[2])
+        existing_power = sum(
+            self._location_power(player, location) for location in existing
+        )
+        required_power = max(0, threshold - existing_power)
+        cluster_powers = tuple(
+            sum(self._location_power(player, location) for location in cluster)
+            for cluster in clusters
+        )
+        available_satellites = info.qic if is_ivits else self._cycle_power(info)
+
+        selections: list[tuple[int, ...]] = []
+        if required_power == 0:
+            selections.append(())
+        else:
+            for size in range(1, len(clusters) + 1):
+                for selection in combinations(range(len(clusters)), size):
+                    power = sum(cluster_powers[index] for index in selection)
+                    if power < required_power:
+                        continue
+                    if any(
+                        power - cluster_powers[index] >= required_power
+                        for index in selection
+                    ):
+                        continue
+                    selections.append(selection)
+
+        selections.sort(
+            key=lambda selection: (
+                self._federation_distance_estimate(
+                    tuple(clusters[index] for index in selection),
+                    existing,
+                ),
+                sum(cluster_powers[index] for index in selection) - required_power,
+                len(selection),
+                selection,
+            )
+        )
+        for selection in selections:
+            selected = tuple(
+                location
+                for index in selection
+                for location in clusters[index]
+            )
+            satellite_spaces = self._minimum_satellite_path(
+                player,
+                selected,
+                existing=existing,
+            )
+            if satellite_spaces is None:
+                continue
+            included = self._included_federation_locations(
+                selected,
+                satellite_spaces,
+                clusters,
+            )
+            total_power = existing_power + sum(
+                self._location_power(player, location) for location in included
+            )
+            if total_power < threshold:
+                continue
+            if not is_ivits and not self._valid_federation_reduction(
+                player,
+                included,
+                satellite_spaces,
+                threshold,
+            ):
+                continue
+            satellite_count = len(satellite_spaces)
+            if (
+                satellite_count > available_satellites
+                or info.satellites + satellite_count > 25
+            ):
+                continue
+            return (*existing, *included), satellite_spaces
+        return None
 
     def _location_coordinate(self, location: int) -> tuple[int, int]:
         if location < 2 * N:
@@ -2927,41 +3078,357 @@ class GaiaState:
         )
         return (*primary, *coexisting, *space_stations)
 
-    def _minimum_extension_satellites(
+    def _unfederated_structure_clusters(
         self,
-        existing: tuple[int, ...],
-        additions: tuple[int, ...],
-    ) -> int:
-        connected = set(existing)
-        remaining = set(additions)
-        cost = 0
+        player: int,
+    ) -> tuple[tuple[int, ...], ...]:
+        remaining = set(self._structure_locations(player, federated=False))
+        clusters: list[tuple[int, ...]] = []
         while remaining:
-            distance, target = min(
-                (self._location_distance(source, candidate), candidate)
-                for source in connected
-                for candidate in remaining
-            )
-            cost += max(0, distance - 1)
-            connected.add(target)
-            remaining.remove(target)
-        return cost
+            component = {min(remaining)}
+            frontier = list(component)
+            remaining -= component
+            while frontier:
+                source = frontier.pop()
+                adjacent = {
+                    candidate
+                    for candidate in remaining
+                    if self._location_distance(source, candidate) <= 1
+                }
+                remaining -= adjacent
+                component |= adjacent
+                frontier.extend(adjacent)
+            clusters.append(tuple(sorted(component)))
+        return tuple(clusters)
 
-    def _minimum_satellites(self, locations: tuple[int, ...]) -> int:
-        if len(locations) < 2:
+    def _federation_distance_estimate(
+        self,
+        clusters: tuple[tuple[int, ...], ...],
+        existing: tuple[int, ...],
+    ) -> int:
+        groups = [tuple(existing)] if existing else []
+        groups.extend(clusters)
+        if len(groups) < 2:
             return 0
-        connected = {locations[0]}
-        remaining = set(locations[1:])
-        cost = 0
+        connected = {0}
+        remaining = set(range(1, len(groups)))
+        estimate = 0
         while remaining:
             distance, target = min(
-                (self._location_distance(source, candidate), candidate)
-                for source in connected
+                (
+                    min(
+                        self._location_distance(source, destination)
+                        for source in groups[connected_index]
+                        for destination in groups[candidate]
+                    ),
+                    candidate,
+                )
+                for connected_index in connected
                 for candidate in remaining
             )
-            cost += max(0, distance - 1)
+            estimate += max(0, distance - 1)
             connected.add(target)
             remaining.remove(target)
-        return cost
+        return estimate
+
+    def _minimum_satellite_path(
+        self,
+        player: int,
+        selected: tuple[int, ...],
+        *,
+        existing: tuple[int, ...] = (),
+    ) -> tuple[int, ...] | None:
+        """Return an exact minimum-node Steiner path on the assembled hex map."""
+        if not selected:
+            return () if existing else None
+
+        board_spaces = self._board_spaces()
+        coordinate_to_space = {
+            coordinate: space for space, coordinate in enumerate(board_spaces)
+        }
+        candidate_locations = self._structure_locations(player, federated=False)
+        free_coordinates = {
+            self._location_coordinate(location) for location in candidate_locations
+        }
+        root_coordinates = {
+            self._location_coordinate(location) for location in existing
+        }
+        if existing:
+            root_coordinates.update(
+                board_spaces[space]
+                for space, owners in enumerate(self.satellite_owners[:len(board_spaces)])
+                if owners & (1 << player)
+            )
+
+        forbidden: set[tuple[int, int]] = set()
+        if not existing:
+            old_coordinates = {
+                self._location_coordinate(location)
+                for location in self._structure_locations(player, federated=True)
+            }
+            old_coordinates.update(
+                board_spaces[space]
+                for space, owners in enumerate(self.satellite_owners[:len(board_spaces)])
+                if owners & (1 << player)
+            )
+            for q, r in old_coordinates:
+                forbidden.add((q, r))
+                forbidden.update((q + dq, r + dr) for dq, dr in HEX_DIRECTIONS)
+
+        planet_coordinates = {
+            (self.planet_q[planet], self.planet_r[planet])
+            for planet in range(N)
+            if self.active_planets[planet]
+        }
+        allowed_spaces = tuple(
+            space
+            for space, coordinate in enumerate(board_spaces)
+            if coordinate not in forbidden
+            and (
+                coordinate not in planet_coordinates
+                or coordinate in free_coordinates
+                or coordinate in root_coordinates
+            )
+        )
+        allowed = set(allowed_spaces)
+        neighbors: dict[int, tuple[int, ...]] = {}
+        for space in allowed_spaces:
+            q, r = board_spaces[space]
+            neighbors[space] = tuple(
+                coordinate_to_space[(q + dq, r + dr)]
+                for dq, dr in HEX_DIRECTIONS
+                if coordinate_to_space.get((q + dq, r + dr)) in allowed
+            )
+        node_cost = {
+            space: int(
+                board_spaces[space] not in free_coordinates
+                and board_spaces[space] not in root_coordinates
+            )
+            for space in allowed_spaces
+        }
+
+        selected_clusters = self._location_clusters(selected)
+        terminal_groups: list[tuple[int, ...]] = []
+        if existing:
+            root_spaces = tuple(
+                coordinate_to_space[coordinate]
+                for coordinate in sorted(root_coordinates)
+                if coordinate_to_space.get(coordinate) in allowed
+            )
+            if not root_spaces:
+                return None
+            terminal_groups.append(root_spaces)
+        for cluster in selected_clusters:
+            spaces = tuple(
+                coordinate_to_space[self._location_coordinate(location)]
+                for location in cluster
+                if coordinate_to_space.get(self._location_coordinate(location)) in allowed
+            )
+            if not spaces:
+                return None
+            terminal_groups.append(spaces)
+
+        terminal_count = len(terminal_groups)
+        full_mask = (1 << terminal_count) - 1
+        infinity = MAX_BOARD_SPACES * 10
+        distances = [
+            [infinity] * len(board_spaces) for _ in range(full_mask + 1)
+        ]
+        parents: dict[tuple[int, int], tuple[str, int, int]] = {}
+
+        def relax(mask: int) -> None:
+            heap = [
+                (distances[mask][space], space)
+                for space in allowed_spaces
+                if distances[mask][space] < infinity
+            ]
+            while heap:
+                distance, space = heappop(heap)
+                if distance != distances[mask][space]:
+                    continue
+                for neighbor in neighbors[space]:
+                    candidate = distance + node_cost[neighbor]
+                    if candidate >= distances[mask][neighbor]:
+                        continue
+                    distances[mask][neighbor] = candidate
+                    parents[(mask, neighbor)] = ("move", space, 0)
+                    heappush(heap, (candidate, neighbor))
+
+        for terminal, spaces in enumerate(terminal_groups):
+            mask = 1 << terminal
+            for space in spaces:
+                distances[mask][space] = 0
+                parents[(mask, space)] = ("terminal", terminal, 0)
+            relax(mask)
+
+        for mask in range(1, full_mask + 1):
+            if mask & (mask - 1) == 0:
+                continue
+            subset = (mask - 1) & mask
+            while subset:
+                other = mask ^ subset
+                if other and subset < other:
+                    for space in allowed_spaces:
+                        candidate = (
+                            distances[subset][space]
+                            + distances[other][space]
+                            - node_cost[space]
+                        )
+                        if candidate < distances[mask][space]:
+                            distances[mask][space] = candidate
+                            parents[(mask, space)] = ("merge", subset, other)
+                subset = (subset - 1) & mask
+            relax(mask)
+
+        best_space = min(
+            allowed_spaces,
+            key=lambda space: (distances[full_mask][space], space),
+        )
+        if distances[full_mask][best_space] >= infinity:
+            return None
+
+        used_spaces: set[int] = set()
+        visited_states: set[tuple[int, int]] = set()
+
+        def collect(mask: int, space: int) -> None:
+            state = (mask, space)
+            if state in visited_states:
+                return
+            visited_states.add(state)
+            used_spaces.add(space)
+            parent = parents.get(state)
+            if parent is None or parent[0] == "terminal":
+                return
+            if parent[0] == "move":
+                collect(mask, parent[1])
+                return
+            collect(parent[1], space)
+            collect(parent[2], space)
+
+        collect(full_mask, best_space)
+        return tuple(sorted(
+            space for space in used_spaces if node_cost[space] == 1
+        ))
+
+    def _location_clusters(
+        self,
+        locations: tuple[int, ...],
+    ) -> tuple[tuple[int, ...], ...]:
+        remaining = set(locations)
+        clusters: list[tuple[int, ...]] = []
+        while remaining:
+            component = {min(remaining)}
+            frontier = list(component)
+            remaining -= component
+            while frontier:
+                source = frontier.pop()
+                adjacent = {
+                    candidate
+                    for candidate in remaining
+                    if self._location_distance(source, candidate) <= 1
+                }
+                remaining -= adjacent
+                component |= adjacent
+                frontier.extend(adjacent)
+            clusters.append(tuple(sorted(component)))
+        return tuple(clusters)
+
+    def _included_federation_locations(
+        self,
+        selected: tuple[int, ...],
+        satellite_spaces: tuple[int, ...],
+        clusters: tuple[tuple[int, ...], ...],
+    ) -> tuple[int, ...]:
+        board_spaces = self._board_spaces()
+        connected_coordinates = {
+            self._location_coordinate(location) for location in selected
+        }
+        connected_coordinates.update(board_spaces[space] for space in satellite_spaces)
+        included = set(selected)
+        changed = True
+        while changed:
+            changed = False
+            for cluster in clusters:
+                if any(location in included for location in cluster):
+                    continue
+                if not any(
+                    any(
+                        hex_distance(q, r, connected_q, connected_r) <= 1
+                        for connected_q, connected_r in connected_coordinates
+                    )
+                    for q, r in (
+                        self._location_coordinate(location) for location in cluster
+                    )
+                ):
+                    continue
+                included.update(cluster)
+                connected_coordinates.update(
+                    self._location_coordinate(location) for location in cluster
+                )
+                changed = True
+        return tuple(sorted(included))
+
+    def _valid_federation_reduction(
+        self,
+        player: int,
+        locations: tuple[int, ...],
+        satellite_spaces: tuple[int, ...],
+        threshold: int,
+    ) -> bool:
+        """Apply the FAQ rule-three planet-cluster plus satellite reduction test."""
+        if not satellite_spaces:
+            return True
+        board_spaces = self._board_spaces()
+        clusters = self._location_clusters(locations)
+        cluster_coordinates = tuple(
+            {
+                self._location_coordinate(location) for location in cluster
+            }
+            for cluster in clusters
+        )
+        satellite_coordinates = {
+            space: board_spaces[space] for space in satellite_spaces
+        }
+        for removed in satellite_spaces:
+            nodes = set().union(*cluster_coordinates)
+            nodes.update(
+                coordinate
+                for space, coordinate in satellite_coordinates.items()
+                if space != removed
+            )
+            remaining = set(nodes)
+            components: list[set[tuple[int, int]]] = []
+            while remaining:
+                component = {min(remaining)}
+                frontier = list(component)
+                remaining -= component
+                while frontier:
+                    q, r = frontier.pop()
+                    adjacent = {
+                        (q + dq, r + dr)
+                        for dq, dr in HEX_DIRECTIONS
+                        if (q + dq, r + dr) in remaining
+                    }
+                    remaining -= adjacent
+                    component |= adjacent
+                    frontier.extend(adjacent)
+                components.append(component)
+            for component in components:
+                included_clusters = [
+                    index
+                    for index, coordinates in enumerate(cluster_coordinates)
+                    if coordinates & component
+                ]
+                if len(included_clusters) >= len(clusters):
+                    continue
+                power = sum(
+                    self._location_power(player, location)
+                    for index in included_clusters
+                    for location in clusters[index]
+                )
+                if power >= threshold:
+                    return False
+        return True
 
     def _can_colonize(
         self,
@@ -3587,6 +4054,10 @@ class GaiaState:
                 for player in range(self.num_players)
             )
             values.append(float(present and self.space_station_federated[space]))
+            values.extend(
+                float(present and self.satellite_owners[space] & (1 << player) != 0)
+                for player in range(self.num_players)
+            )
         return np.asarray(values, dtype=np.float32)
 
     def describe_action(self, action: int) -> str:
@@ -4066,6 +4537,20 @@ class GaiaState:
                 }
                 for space, (q, r) in enumerate(self._board_spaces())
                 if self.space_station_owner[space] >= 0
+            ],
+            "satellites": [
+                {
+                    "id": space,
+                    "q": q,
+                    "r": r,
+                    "owners": [
+                        player
+                        for player in range(self.num_players)
+                        if self.satellite_owners[space] & (1 << player)
+                    ],
+                }
+                for space, (q, r) in enumerate(self._board_spaces())
+                if self.satellite_owners[space]
             ],
             "setup": {
                 "seed": self.setup_seed,
