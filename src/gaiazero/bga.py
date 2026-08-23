@@ -23,11 +23,7 @@ from gaiazero.telemetry import write_local_game
 
 ACCOUNT_URL = "https://boardgamearena.com/account"
 LOGIN_URL = "https://en.boardgamearena.com/account/auth/loginUserWithPassword.html"
-ALLOWED_BGA_HOSTS = {
-    "boardgamearena.com",
-    "www.boardgamearena.com",
-    "en.boardgamearena.com",
-}
+BGA_ROOT_DOMAIN = "boardgamearena.com"
 REQUEST_TOKEN_PATTERNS = (
     re.compile(r"requestToken\s*:\s*['\"]([^'\"]+)['\"]"),
     re.compile(r"['\"]request_token['\"]\s*:\s*['\"]([^'\"]+)['\"]"),
@@ -1356,7 +1352,9 @@ def _normalize_replay_address(address: str) -> tuple[str, int, str]:
 
 def _validate_bga_url(url: str):
     parsed = urlparse(url)
-    if parsed.scheme != "https" or (parsed.hostname or "").lower() not in ALLOWED_BGA_HOSTS:
+    host = (parsed.hostname or "").lower()
+    is_bga_host = host == BGA_ROOT_DOMAIN or host.endswith(f".{BGA_ROOT_DOMAIN}")
+    if parsed.scheme != "https" or not is_bga_host:
         raise BgaReplayError("只允许访问 boardgamearena.com 的 HTTPS 地址")
     if parsed.username or parsed.password:
         raise BgaReplayError("复盘地址不能包含账号信息")

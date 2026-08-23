@@ -252,8 +252,23 @@ class BgaImportTests(unittest.TestCase):
     def test_only_bga_replay_addresses_are_accepted(self) -> None:
         address = f"https://boardgamearena.com/gamereview?table={TABLE_ID}"
         self.assertEqual(_normalize_replay_address(address), (address, TABLE_ID, "review"))
+
+        localized_address = f"https://zh-cn.boardgamearena.com/gamereview?table={TABLE_ID}"
+        self.assertEqual(
+            _normalize_replay_address(localized_address),
+            (localized_address, TABLE_ID, "review"),
+        )
+
         with self.assertRaises(BgaReplayError):
             _normalize_replay_address("https://example.com/gamereview?table=1")
+        with self.assertRaises(BgaReplayError):
+            _normalize_replay_address("https://evilboardgamearena.com/gamereview?table=1")
+        with self.assertRaises(BgaReplayError):
+            _normalize_replay_address(
+                "https://boardgamearena.com.evil.example/gamereview?table=1"
+            )
+        with self.assertRaises(BgaReplayError):
+            _normalize_replay_address("http://zh-cn.boardgamearena.com/gamereview?table=1")
         with self.assertRaises(BgaReplayError):
             _normalize_replay_address("https://boardgamearena.com/player?id=1")
 
