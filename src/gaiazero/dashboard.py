@@ -13,6 +13,14 @@ from urllib.parse import parse_qs, urlparse
 
 import numpy as np
 
+from gaiazero.bga import (
+    BgaAuthenticationError,
+    BgaError,
+    BgaNetworkError,
+    BgaRateLimitError,
+    BgaReplayError,
+    import_bga_replay,
+)
 from gaiazero.game import GaiaHeuristicEvaluator, GaiaState
 from gaiazero.game.gaia_state import (
     ADVANCED_TECH_ACTION_OFFSET,
@@ -97,6 +105,7 @@ ASSETS = {
     "/setup/random": ("index.html", "text/html; charset=utf-8"),
     "/setup/manual": ("index.html", "text/html; charset=utf-8"),
     "/play": ("index.html", "text/html; charset=utf-8"),
+    "/import/bga": ("index.html", "text/html; charset=utf-8"),
     "/styles.css": ("styles.css", "text/css; charset=utf-8"),
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
 }
@@ -156,6 +165,7 @@ class DashboardServer(ThreadingHTTPServer):
         self.simulation: dict[str, Any] = {"status": "idle"}
         self.play_lock = threading.Lock()
         self.play_session: dict[str, Any] = {"status": "idle"}
+        self.bga_import_lock = threading.Lock()
         super().__init__(address, DashboardRequestHandler)
 
 
@@ -196,6 +206,9 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         request = urlparse(self.path)
+        if request.path == "/api/bga/import":
+            self._handle_bga_import()
+            return
         if request.path.startswith("/api/play/"):
             self._handle_play_request(request.path)
             return
@@ -246,6 +259,44 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         )
         worker.start()
         self._send_json(self._simulation_status(), HTTPStatus.ACCEPTED)
+
+    def _handle_bga_import(self) -> None:
+        if not self.server.bga_import_lock.acquire(blocking=False):
+            self._send_json(
+                {"error": "已有 BGA 复盘正在下载"},
+                HTTPStatus.CONFLICT,
+            )
+            return
+        try:
+            payload = self._read_json_body()
+            username = payload.get("username")
+            password = payload.get("password")
+            replay_address = payload.get("replay_address")
+            if not isinstance(username, str) or not isinstance(password, str):
+                raise TypeError("BGA username and password must be strings")
+            if not isinstance(replay_address, str):
+                raise TypeError("BGA replay address must be a string")
+            result = import_bga_replay(
+                username=username,
+                password=password,
+                replay_address=replay_address,
+                history_path=self.server.history_path,
+            )
+            self._send_json(result, HTTPStatus.CREATED)
+        except BgaRateLimitError as error:
+            self._send_json({"error": str(error)}, HTTPStatus.TOO_MANY_REQUESTS)
+        except BgaAuthenticationError as error:
+            self._send_json({"error": str(error)}, HTTPStatus.UNAUTHORIZED)
+        except BgaReplayError as error:
+            self._send_json({"error": str(error)}, HTTPStatus.UNPROCESSABLE_ENTITY)
+        except BgaNetworkError as error:
+            self._send_json({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
+        except (json.JSONDecodeError, TypeError, ValueError) as error:
+            self._send_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+        except BgaError as error:
+            self._send_json({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
+        finally:
+            self.server.bga_import_lock.release()
 
     def _handle_play_request(self, path: str) -> None:
         try:

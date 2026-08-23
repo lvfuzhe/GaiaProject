@@ -35,6 +35,7 @@
     <button class="tab" type="button" data-view="play" aria-selected="false">人工对战</button>
     <button class="tab" type="button" data-view="selfplay" aria-selected="false">自博弈</button>
     <button class="tab" type="button" data-view="history" aria-selected="false">历史回放</button>
+    <button class="tab" type="button" data-view="bga-import" aria-selected="false">BGA 导入</button>
     <button class="tab" type="button" data-view="diagnostics" aria-selected="false">诊断</button>
   </nav>
 
@@ -574,6 +575,61 @@
           </table>
         </div>
       </section>
+    </section>
+
+    <section id="bga-import" class="view" aria-labelledby="bga-import-title" hidden>
+      <h2 id="bga-import-title" class="sr-only">BGA 复盘导入</h2>
+      <div class="bga-import-layout content-band">
+        <section class="panel bga-import-form-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Manual import</p>
+              <h3>下载 BGA 复盘</h3>
+            </div>
+            <span id="bga-import-badge" class="health-badge waiting">等待</span>
+          </div>
+          <form id="bga-import-form" class="bga-import-form" autocomplete="off">
+            <label>
+              <span>BGA 账号</span>
+              <input id="bga-import-username" name="username" type="text" maxlength="120" autocomplete="off" required>
+            </label>
+            <label>
+              <span>BGA 密码</span>
+              <input id="bga-import-password" name="password" type="password" maxlength="256" autocomplete="new-password" required>
+            </label>
+            <label class="bga-replay-address">
+              <span>复盘地址</span>
+              <input id="bga-import-address" name="replay_address" type="url" maxlength="2048" placeholder="https://boardgamearena.com/gamereview?table=..." autocomplete="off" spellcheck="false" required>
+            </label>
+            <div class="bga-import-actions">
+              <span>凭据仅用于本次下载，不写入本地历史</span>
+              <button id="bga-import-submit" class="primary-command" type="submit">下载并转换</button>
+            </div>
+          </form>
+          <div id="bga-import-message" class="bga-import-message ready" role="status" aria-live="polite">等待输入复盘地址</div>
+        </section>
+
+        <section class="panel bga-import-result-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Local archive</p>
+              <h3>本地文件</h3>
+            </div>
+          </div>
+          <div id="bga-import-empty" class="bga-import-empty">尚未下载复盘</div>
+          <div id="bga-import-result" hidden>
+            <dl class="bga-import-result-list">
+              <div><dt>桌号</dt><dd id="bga-import-table" class="mono">--</dd></div>
+              <div><dt>本地记录</dt><dd id="bga-import-run" class="mono">--</dd></div>
+              <div><dt>行动步数</dt><dd id="bga-import-moves">--</dd></div>
+              <div><dt>终局分数</dt><dd id="bga-import-scores" class="mono">--</dd></div>
+              <div class="bga-import-file-row"><dt>保存位置</dt><dd id="bga-import-file" class="mono">--</dd></div>
+            </dl>
+            <div id="bga-import-players" class="bga-import-players"></div>
+            <button id="bga-import-open-history" class="secondary-command" type="button">打开历史回放</button>
+          </div>
+        </section>
+      </div>
     </section>
 
     <section id="history" class="view" aria-labelledby="history-title" hidden>

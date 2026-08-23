@@ -207,6 +207,12 @@ const state = {
     playing: false,
     timer: null
   },
+  bgaImport: {
+    busy: false,
+    status: "ready",
+    message: "等待输入复盘地址",
+    result: null,
+  },
   play: {
     workspace: "setup",
     session: null,
@@ -304,6 +310,7 @@ function render() {
   renderPlay();
   renderSelfPlay();
   renderHistory();
+  renderBgaImport();
   renderDiagnostics();
   byId("footer-source").textContent = `metrics: ${state.source}`;
   byId("footer-clock").textContent = formatTime(new Date().toISOString());
@@ -1500,6 +1507,96 @@ async function randomizeManualSetup() {
   }
 }
 
+function setBgaImportMessage(message, status = "ready") {
+  state.bgaImport.message = message;
+  state.bgaImport.status = status;
+  renderBgaImport();
+}
+
+function renderBgaImport() {
+  const badge = byId("bga-import-badge");
+  const message = byId("bga-import-message");
+  const submit = byId("bga-import-submit");
+  if (!badge || !message || !submit) return;
+  const statusLabels = {
+    ready: "等待",
+    running: "下载中",
+    complete: "已保存",
+    failed: "失败",
+  };
+  const statusClasses = {
+    ready: "waiting",
+    running: "warning",
+    complete: "connected",
+    failed: "failed",
+  };
+  badge.className = `health-badge ${statusClasses[state.bgaImport.status] || "waiting"}`;
+  badge.textContent = statusLabels[state.bgaImport.status] || "等待";
+  message.className = `bga-import-message ${state.bgaImport.status}`;
+  message.textContent = state.bgaImport.message;
+  submit.disabled = state.bgaImport.busy;
+  submit.textContent = state.bgaImport.busy ? "正在下载" : "下载并转换";
+
+  const result = state.bgaImport.result;
+  byId("bga-import-empty").hidden = Boolean(result);
+  byId("bga-import-result").hidden = !result;
+  if (!result) return;
+  byId("bga-import-table").textContent = String(result.table_id ?? "--");
+  byId("bga-import-run").textContent = result.run_id || "--";
+  byId("bga-import-moves").textContent = `${formatNumber(result.moves)} 步`;
+  byId("bga-import-scores").textContent = (result.scores || []).map((value) => formatNumber(value, 1)).join(" / ") || "--";
+  byId("bga-import-file").textContent = result.archive_path || "--";
+  byId("bga-import-players").innerHTML = (result.players || []).map((player) => `<div>
+    <span>P${formatNumber(player.seat)} · ${escapeHtml(player.name || "--")}</span>
+    <strong>${escapeHtml(player.faction || "--")}</strong>
+    <b>${formatNumber(player.score, 1)} VP</b>
+  </div>`).join("");
+}
+
+async function submitBgaImport(event) {
+  event.preventDefault();
+  if (state.bgaImport.busy) return;
+  const passwordInput = byId("bga-import-password");
+  const request = {
+    username: byId("bga-import-username").value.trim(),
+    password: passwordInput.value,
+    replay_address: byId("bga-import-address").value.trim(),
+  };
+  state.bgaImport.busy = true;
+  state.bgaImport.result = null;
+  setBgaImportMessage("正在登录 BGA 并下载复盘", "running");
+  try {
+    const response = await fetch("/api/bga/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    state.bgaImport.result = data;
+    setBgaImportMessage(`桌号 ${data.table_id} 已写入本地历史`, "complete");
+    await refreshHistoryIndex();
+  } catch (error) {
+    setBgaImportMessage(error.message || String(error), "failed");
+  } finally {
+    passwordInput.value = "";
+    request.password = "";
+    state.bgaImport.busy = false;
+    renderBgaImport();
+  }
+}
+
+async function openImportedBgaHistory() {
+  const runId = state.bgaImport.result?.run_id;
+  if (!runId) return;
+  state.history.runId = runId;
+  state.history.iteration = 1;
+  state.history.game = 1;
+  state.history.trace = null;
+  selectView("history");
+  await refreshHistoryIndex();
+}
+
 function historyRuns() {
   return state.history.index?.runs || [];
 }
@@ -1596,7 +1693,7 @@ function renderHistorySelectors() {
   const runs = historyRuns();
   runSelect.innerHTML = runs.length
     ? runs.map((run) => {
-      const source = run.source === "local" ? "本地对战" : "训练";
+      const source = run.source === "bga" ? "BGA 复盘" : run.source === "local" ? "本地对战" : "训练";
       const status = run.status === "complete" ? "已完成" : run.status === "active" ? "进行中" : run.status;
       return `<option value="${escapeHtml(run.run_id)}">${source} · ${escapeHtml(run.ruleset || "unknown")} · ${escapeHtml(run.run_id)} · ${escapeHtml(status)}</option>`;
     }).join("")
@@ -1604,7 +1701,7 @@ function renderHistorySelectors() {
   runSelect.value = state.history.runId || "";
   const iterations = historyRun()?.iterations || [];
   iterationSelect.innerHTML = iterations.length
-    ? iterations.map((item) => historyRun()?.source === "local"
+    ? iterations.map((item) => ["local", "bga"].includes(historyRun()?.source)
       ? `<option value="${item.iteration}">本地记录 · ${item.games.length} 局</option>`
       : `<option value="${item.iteration}">第 ${item.iteration} 轮 · ${item.games.length} 局</option>`).join("")
     : '<option value="">暂无迭代</option>';
@@ -1614,7 +1711,9 @@ function renderHistorySelectors() {
     ? games.map((item) => {
       const score = item.scores ? ` · ${(item.scores || []).map((value) => formatNumber(value, 1)).join("/")}` : "";
       const coverage = item.moves === null ? "" : ` · ${item.captured_moves}/${item.moves} 步`;
-      const label = historyRun()?.source === "local" ? "人工对局" : `第 ${item.game} 局`;
+      const label = historyRun()?.source === "bga"
+        ? "BGA 对局"
+        : historyRun()?.source === "local" ? "人工对局" : `第 ${item.game} 局`;
       return `<option value="${item.game}">${label}${score}${coverage}</option>`;
     }).join("")
     : '<option value="">暂无对局</option>';
@@ -1641,6 +1740,7 @@ function snapshotRoundLabel(snapshot, compact = false) {
 
 function auditHistoryTrace(trace) {
   if (!trace) return [];
+  if (trace.source === "bga") return auditBgaHistoryTrace(trace);
   const steps = trace.steps || [];
   const summary = trace.summary || {};
   const expected = Number(summary.moves);
@@ -1738,6 +1838,58 @@ function auditHistoryTrace(trace) {
   return checks;
 }
 
+function auditBgaHistoryTrace(trace) {
+  const steps = trace.steps || [];
+  const moves = steps.filter((step) => Number(step.move) > 0);
+  const expected = Number(trace.summary?.moves);
+  const states = steps.map((step) => step.state).filter(Boolean);
+  const complete = Number.isFinite(expected)
+    && trace.trace_complete
+    && moves.length === expected
+    && moves.every((step, index) => Number(step.move) === index + 1);
+  const rounds = states.map((snapshot) => Number(snapshot.round)).filter(Number.isFinite);
+  const roundsValid = rounds.length > 0 && rounds.every((round, index) => (
+    round >= 0 && round <= 6 && (index === 0 || round >= rounds[index - 1])
+  ));
+  const noticesPreserved = moves.length > 0 && moves.every((step) => (
+    step.record?.role === "bga"
+    && Array.isArray(step.record?.bga?.notifications)
+  ));
+  const snapshotsCompatible = states.length === steps.length && states.every((snapshot) => (
+    Array.isArray(snapshot.players)
+    && Array.isArray(snapshot.planets)
+    && snapshot.players.every((player, index) => Number(player.id) === index)
+  ));
+  const terminal = Boolean(states.at(-1)?.terminal);
+  return [
+    {
+      status: complete ? "pass" : "fail",
+      title: complete ? "BGA 行动已完整转换" : "BGA 行动编号不连续",
+      detail: `${moves.length} / ${Number.isFinite(expected) ? expected : "--"} 步`,
+    },
+    {
+      status: noticesPreserved ? "pass" : "warn",
+      title: noticesPreserved ? "BGA 原始通知已关联到步骤" : "部分步骤缺少 BGA 通知",
+      detail: noticesPreserved ? "可用板块 ID、开销和收入字段核对转换结果" : "请重新下载该复盘",
+    },
+    {
+      status: snapshotsCompatible ? "pass" : "fail",
+      title: snapshotsCompatible ? "本地回放状态格式兼容" : "本地状态快照不完整",
+      detail: snapshotsCompatible ? `${states.at(-1)?.players?.length || 0} 名玩家 · ${states.at(-1)?.planets?.length || 0} 颗星球` : "玩家或星图字段缺失",
+    },
+    {
+      status: roundsValid ? "pass" : "fail",
+      title: roundsValid ? "轮次顺序有效" : "轮次顺序异常",
+      detail: rounds.length ? `范围 ${Math.min(...rounds)} - ${Math.max(...rounds)}` : "没有轮次状态",
+    },
+    {
+      status: terminal ? "pass" : "warn",
+      title: terminal ? "BGA 复盘已到终局" : "BGA 复盘未到终局",
+      detail: terminal ? `最终分数 ${(trace.summary?.scores || []).map((value) => formatNumber(value, 1)).join(" / ")}` : "可能下载了未完成或截断的记录",
+    },
+  ];
+}
+
 function historyDelta(previous, current, step) {
   if (!current) return "等待状态变化";
   if (!previous) return "初始状态 · 没有前置动作";
@@ -1804,7 +1956,10 @@ function renderHistory() {
   byId("history-ruleset").textContent = snapshot?.ruleset || "--";
   byId("history-action-code").textContent = step.action === null || step.action === undefined ? "--" : String(step.action);
   byId("history-action-label").textContent = step.action_label || "状态快照";
-  byId("history-action-player").textContent = step.player === null || step.player === undefined ? "P--" : `P${step.player}`;
+  const actionPlayer = snapshot?.players?.find((player) => Number(player.id) === Number(step.player));
+  byId("history-action-player").textContent = step.player === null || step.player === undefined
+    ? "P--"
+    : `P${step.player}${actionPlayer?.name ? ` · ${actionPlayer.name}` : ""}`;
   byId("history-step-slider").max = String(Math.max(0, steps.length - 1));
   byId("history-step-slider").value = String(state.history.step);
   byId("history-step-label").textContent = `${step.move} / ${Math.max(0, steps.length - 1)}`;
@@ -3500,7 +3655,7 @@ function toggleHistoryPlayback() {
 }
 
 function selectView(name) {
-  const selected = ["overview", "play", "selfplay", "history", "diagnostics"].includes(name) ? name : "overview";
+  const selected = ["overview", "play", "selfplay", "history", "bga-import", "diagnostics"].includes(name) ? name : "overview";
   document.querySelectorAll(".view").forEach((view) => {
     const active = view.id === selected;
     view.classList.toggle("active", active);
@@ -3715,6 +3870,8 @@ byId("history-action-table").addEventListener("click", (event) => {
     setHistoryStep(row.dataset.step);
   }
 });
+byId("bga-import-form").addEventListener("submit", submitBgaImport);
+byId("bga-import-open-history").addEventListener("click", openImportedBgaHistory);
 window.addEventListener("resize", () => {
   renderLossChart();
   renderSetup(state.manualSetup.preview);
@@ -3728,7 +3885,9 @@ const initialHash = window.location.hash.replace("#", "");
 if (window.location.pathname.startsWith("/setup/") || initialHash === "setup") state.play.workspace = "setup";
 const pathView = window.location.pathname.startsWith("/setup/")
   ? "play"
-  : window.location.pathname === "/play" ? "play" : "";
+  : window.location.pathname === "/play"
+    ? "play"
+    : window.location.pathname === "/import/bga" ? "bga-import" : "";
 selectView((initialHash === "setup" ? "play" : initialHash) || pathView || "overview");
 pollEvents(true);
 pollInteractiveGame();

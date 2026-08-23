@@ -366,6 +366,7 @@ def build_local_history_index(path: str | Path) -> dict[str, Any]:
         except (TypeError, ValueError):
             continue
         status = str(record.get("status") or "active")
+        record_source = "bga" if record.get("source") == "bga" else "local"
         completed_at = record.get("completed_at")
         run_id = str(record["run_id"])
         game = {
@@ -384,7 +385,7 @@ def build_local_history_index(path: str | Path) -> dict[str, Any]:
         runs.append(
             {
                 "run_id": run_id,
-                "source": "local",
+                "source": record_source,
                 "started_at": record.get("started_at"),
                 "updated_at": record.get("updated_at"),
                 "completed_at": completed_at,
@@ -396,7 +397,7 @@ def build_local_history_index(path: str | Path) -> dict[str, Any]:
                 "iterations": [
                     {
                         "iteration": 1,
-                        "source": "local",
+                        "source": record_source,
                         "metrics": None,
                         "games": [game],
                     }
@@ -422,8 +423,9 @@ def read_local_game_trace(
     if record is None:
         return None
     trace = dict(record["trace"])
+    record_source = "bga" if record.get("source") == "bga" else "local"
     trace.update(
-        source="local",
+        source=record_source,
         status=record.get("status"),
         updated_at=record.get("updated_at"),
         config=record.get("config") or {},
