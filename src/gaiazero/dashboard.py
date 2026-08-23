@@ -19,6 +19,8 @@ from gaiazero.bga import (
     BgaNetworkError,
     BgaRateLimitError,
     BgaReplayError,
+    BgaSessionError,
+    BgaSessionStore,
     import_bga_replay,
 )
 from gaiazero.game import GaiaHeuristicEvaluator, GaiaState
@@ -160,6 +162,7 @@ class DashboardServer(ThreadingHTTPServer):
             if history_path is not None
             else (self.metrics_path.parent / "history").resolve()
         )
+        self.bga_session_path = self.history_path / ".bga-session.bin"
         self.quiet = quiet
         self.simulation_lock = threading.Lock()
         self.simulation: dict[str, Any] = {"status": "idle"}
@@ -182,6 +185,9 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             return
         if request.path == "/api/history":
             self._serve_history()
+            return
+        if request.path == "/api/bga/session":
+            self._serve_bga_session()
             return
         if request.path == "/api/game":
             self._serve_game(parse_qs(request.query))
@@ -208,6 +214,9 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         request = urlparse(self.path)
         if request.path == "/api/bga/import":
             self._handle_bga_import()
+            return
+        if request.path == "/api/bga/session/clear":
+            self._handle_bga_session_clear()
             return
         if request.path.startswith("/api/play/"):
             self._handle_play_request(request.path)
@@ -272,15 +281,20 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             username = payload.get("username")
             password = payload.get("password")
             replay_address = payload.get("replay_address")
+            remember = payload.get("remember", True)
             if not isinstance(username, str) or not isinstance(password, str):
                 raise TypeError("BGA username and password must be strings")
             if not isinstance(replay_address, str):
                 raise TypeError("BGA replay address must be a string")
+            if not isinstance(remember, bool):
+                raise TypeError("BGA remember must be a boolean")
             result = import_bga_replay(
                 username=username,
                 password=password,
                 replay_address=replay_address,
                 history_path=self.server.history_path,
+                session_path=self.server.bga_session_path,
+                remember=remember,
             )
             self._send_json(result, HTTPStatus.CREATED)
         except BgaRateLimitError as error:
@@ -297,6 +311,20 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self._send_json({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
         finally:
             self.server.bga_import_lock.release()
+
+    def _serve_bga_session(self) -> None:
+        try:
+            metadata = BgaSessionStore(self.server.bga_session_path).metadata()
+            self._send_json(metadata)
+        except BgaSessionError as error:
+            self._send_json(
+                {"saved": False, "error": str(error)},
+                HTTPStatus.UNPROCESSABLE_ENTITY,
+            )
+
+    def _handle_bga_session_clear(self) -> None:
+        BgaSessionStore(self.server.bga_session_path).clear()
+        self._send_json({"ok": True, "saved": False})
 
     def _handle_play_request(self, path: str) -> None:
         try:

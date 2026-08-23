@@ -104,11 +104,14 @@ gaiazero dashboard --metrics runs/metrics.jsonl --history-dir runs/play-history 
 计分/科技/助推板块，并可在同一局中切换人工与 AI；训练模型不会读取这套人工对局配置。
 
 在 `http://127.0.0.1:8765/import/bga` 输入 BGA 账号、密码和一条已结束对局的
-`gamereview?table=...` 或 `archive/replay/...` 地址，可以手动下载单局复盘。下载器只在该次
-请求中使用凭据，不会把账号、密码或 Cookie 写入文件。转换结果保存为
+`gamereview?table=...` 或 `archive/replay/...` 地址，可以手动下载单局复盘。勾选“加密保存”后，
+账号、密码和 Cookie 会通过 Windows DPAPI 绑定到当前系统用户，并保存到历史目录中的
+`.bga-session.bin`；它们不会写入复盘 JSON，也不会由 API 返回给前端。页面可随时清除保存的会话。
+转换结果保存为
 `runs/history/bga-<table>.json`（或 `--history-dir` 指定的目录），重复导入同一桌号会原子更新
 同一文件。完成后可在“历史回放”中查看连续行动、玩家资源、科研轨、建筑和星图；BGA 原始
-通知也会保存在文件中，便于对照板块编号、开销和收入。
+通知也会保存在文件中。每个步骤额外记录 VP 前值、计分通知、增减值和后值，并核对 BGA 结果页
+终局分数，便于对照板块编号、开销、收入和计分修复规则。
 
 初始设置地图使用本地化的实体星区扫描图；图片来源与版权说明见
 [`src/gaiazero/web/assets/sectors/ATTRIBUTION.md`](src/gaiazero/web/assets/sectors/ATTRIBUTION.md)。

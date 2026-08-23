@@ -4,6 +4,7 @@ import json
 import shutil
 import threading
 import unittest
+from http.cookiejar import Cookie
 from pathlib import Path
 from unittest.mock import patch
 from urllib.request import Request, urlopen
@@ -11,9 +12,11 @@ from urllib.request import Request, urlopen
 from gaiazero.bga import (
     BgaClient,
     BgaReplayError,
+    BgaSessionStore,
     _ReplayLinkParser,
     _normalize_replay_address,
     convert_bga_replay,
+    import_bga_replay,
 )
 from gaiazero.dashboard import create_dashboard_server
 from gaiazero.telemetry import (
@@ -157,7 +160,14 @@ def replay_packets() -> list[dict[str, object]]:
                         player=one_after,
                         map=map_payload(),
                         playerId=PLAYER_ONE,
-                    )
+                    ),
+                    notice(
+                        "notifyScore",
+                        player_name="Alice",
+                        playerId=PLAYER_ONE,
+                        vp=2,
+                        desc="round scoring",
+                    ),
                 ],
                 [
                     notice(
@@ -166,6 +176,13 @@ def replay_packets() -> list[dict[str, object]]:
                         whichResearch=1,
                         knowledgeCost=4,
                         playerId=PLAYER_ONE,
+                    ),
+                    notice(
+                        "notifyPass",
+                        player_name="Alice",
+                        playerId=PLAYER_ONE,
+                        boosterId=3,
+                        vp=5,
                     ),
                     notice("notifyRoundEnd", roundNum=6, playerList=[PLAYER_ONE, PLAYER_TWO]),
                     {"type": "simpleNode", "log": "End of game", "args": []},
@@ -287,6 +304,116 @@ class BgaImportTests(unittest.TestCase):
         self.assertEqual(record["trace"]["summary"]["moves"], 6)
         self.assertTrue(record["trace"]["steps"][-1]["state"]["terminal"])
 
+    def test_cookie_cache_round_trips_through_client(self) -> None:
+        cookie = Cookie(
+            version=0,
+            name="bga-session",
+            value="cookie-secret",
+            port=None,
+            port_specified=False,
+            domain=".boardgamearena.com",
+            domain_specified=True,
+            domain_initial_dot=True,
+            path="/",
+            path_specified=True,
+            secure=True,
+            expires=None,
+            discard=True,
+            comment=None,
+            comment_url=None,
+            rest={"HttpOnly": None},
+            rfc2109=False,
+        )
+        source = BgaClient()
+        source._cookies.set_cookie(cookie)
+
+        restored = BgaClient(cookies=source.export_cookies())
+
+        self.assertEqual(restored.export_cookies(), source.export_cookies())
+
+    @unittest.skipUnless(__import__("os").name == "nt", "Windows DPAPI only")
+    def test_session_store_encrypts_credentials_for_current_windows_user(self) -> None:
+        path = self.root / ".bga-session.bin"
+        cookies = [{"domain": ".boardgamearena.com", "name": "sid", "value": "cookie"}]
+        store = BgaSessionStore(path)
+
+        store.save(username="alice", password="secret", cookies=cookies)
+
+        payload = store.load()
+        self.assertEqual(payload["username"], "alice")
+        self.assertEqual(payload["password"], "secret")
+        self.assertEqual(payload["cookies"], cookies)
+        self.assertNotIn(b"alice", path.read_bytes())
+        self.assertNotIn(b"secret", path.read_bytes())
+        self.assertEqual(
+            store.metadata(),
+            {
+                "saved": True,
+                "username": "alice",
+                "cookie_count": 1,
+                "updated_at": payload["updated_at"],
+            },
+        )
+        store.clear()
+        self.assertFalse(path.exists())
+
+    @unittest.skipUnless(__import__("os").name == "nt", "Windows DPAPI only")
+    def test_import_reuses_saved_credentials_and_cookie_without_login(self) -> None:
+        session_path = self.root / ".bga-session.bin"
+        cached_cookies = [
+            {"domain": ".boardgamearena.com", "name": "sid", "value": "cached-cookie"}
+        ]
+        BgaSessionStore(session_path).save(
+            username="alice",
+            password="secret",
+            cookies=cached_cookies,
+        )
+        review = _ReplayLinkParser(TABLE_ID)
+        review.feed(review_html())
+        record = convert_bga_replay(
+            table_id=TABLE_ID,
+            source_url=f"https://boardgamearena.com/gamereview?table={TABLE_ID}",
+            replay_url=f"https://boardgamearena.com/archive/replay/test/?table={TABLE_ID}",
+            game_data=game_data(),
+            packets=replay_packets(),
+            review_players=review.players,
+        )
+        calls: list[object] = []
+
+        class CachedSessionClient:
+            def __init__(self, *, timeout: float, cookies: list[dict[str, object]]) -> None:
+                calls.append(("init", timeout, cookies))
+                self.cookies = cookies
+
+            def login(self, username: str, password: str) -> None:
+                calls.append(("login", username, password))
+
+            def download(self, replay_address: str) -> dict[str, object]:
+                calls.append(("download", replay_address))
+                return record
+
+            def export_cookies(self) -> list[dict[str, object]]:
+                return self.cookies
+
+        archive = self.root / f"bga-{TABLE_ID}.json"
+        with (
+            patch("gaiazero.bga.BgaClient", CachedSessionClient),
+            patch("gaiazero.bga.write_local_game", return_value=archive),
+        ):
+            result = import_bga_replay(
+                username="",
+                password="",
+                replay_address=f"https://boardgamearena.com/gamereview?table={TABLE_ID}",
+                history_path=self.root,
+                session_path=session_path,
+                remember=True,
+            )
+
+        self.assertEqual(calls[0], ("init", 30.0, cached_cookies))
+        self.assertFalse(any(call[0] == "login" for call in calls))
+        self.assertTrue(result["used_cached_session"])
+        self.assertTrue(result["session_saved"])
+
     def test_converted_replay_round_trips_through_local_history(self) -> None:
         review = _ReplayLinkParser(TABLE_ID)
         review.feed(review_html())
@@ -308,6 +435,18 @@ class BgaImportTests(unittest.TestCase):
         self.assertEqual(trace["source"], "bga")
         self.assertEqual([step["move"] for step in trace["steps"]], list(range(7)))
         self.assertEqual(trace["summary"]["scores"], [123, 98])
+        score_step = trace["steps"][5]
+        self.assertEqual(score_step["record"]["vp"]["before"], [10, 10])
+        self.assertEqual(score_step["record"]["vp"]["after"], [12, 10])
+        self.assertEqual(score_step["record"]["vp"]["events"][0]["delta"], 2)
+        final_ledger = trace["steps"][-1]["record"]["vp"]
+        self.assertEqual(final_ledger["raw_after"], [17, 10])
+        self.assertEqual(final_ledger["after"], [123, 98])
+        self.assertFalse(final_ledger["matches_result_page"])
+        self.assertEqual(
+            [change["delta"] for change in final_ledger["reconciliation"]],
+            [106, 88],
+        )
         final = trace["steps"][-1]["state"]
         self.assertEqual([planet["terrain"] for planet in final["planets"]], [0, 1])
         self.assertEqual([player["faction"] for player in final["players"]], ["Terrans", "Xenos"])
@@ -346,11 +485,18 @@ class BgaImportTests(unittest.TestCase):
             self.assertIn("bga-import-address", page)
             self.assertNotIn('value="alice"', page)
             self.assertNotIn('value="secret"', page)
+            with urlopen(
+                f"http://127.0.0.1:{server.server_port}/api/bga/session",
+                timeout=5,
+            ) as session_response:
+                session_payload = json.loads(session_response.read().decode("utf-8"))
+            self.assertEqual(session_payload["saved"], False)
             body = json.dumps(
                 {
                     "username": "alice",
                     "password": "secret",
                     "replay_address": f"https://boardgamearena.com/gamereview?table={TABLE_ID}",
+                    "remember": True,
                 }
             ).encode("utf-8")
             request = Request(
@@ -368,6 +514,8 @@ class BgaImportTests(unittest.TestCase):
             self.assertNotIn("alice", response_body)
             self.assertNotIn("secret", response_body)
             importer.assert_called_once()
+            self.assertEqual(importer.call_args.kwargs["session_path"], server.bga_session_path)
+            self.assertTrue(importer.call_args.kwargs["remember"])
         finally:
             server.shutdown()
             server.server_close()

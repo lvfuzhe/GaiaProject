@@ -1754,7 +1754,7 @@ main {
   font-weight: 700;
 }
 
-.bga-import-form input {
+.bga-import-form input:not([type="checkbox"]) {
   width: 100%;
   min-width: 0;
   height: 38px;
@@ -1766,15 +1766,43 @@ main {
   font-size: 11px;
 }
 
-.bga-import-form input:focus-visible {
+.bga-import-form input:not([type="checkbox"]):focus-visible {
   outline: 2px solid color-mix(in srgb, var(--green) 36%, transparent);
   outline-offset: 1px;
   border-color: var(--green);
 }
 
 .bga-replay-address,
+.bga-session-controls,
 .bga-import-actions {
   grid-column: 1 / -1;
+}
+
+.bga-session-controls {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.bga-import-form .bga-session-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.bga-import-form .bga-session-option > span {
+  font-size: 10px;
+}
+
+.bga-session-option input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--green);
 }
 
 .bga-import-actions {
@@ -4387,8 +4415,14 @@ footer {
   }
 
   .bga-import-form label,
+  .bga-session-controls,
   .bga-import-actions {
     grid-column: 1;
+  }
+
+  .bga-session-controls {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .bga-import-actions {

@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import re
 from collections import defaultdict
 from datetime import UTC, datetime
 from html.parser import HTMLParser
-from http.cookiejar import CookieJar
+from http.cookiejar import Cookie, CookieJar
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -103,6 +104,72 @@ class BgaReplayError(BgaError):
     pass
 
 
+class BgaSessionError(BgaError):
+    pass
+
+
+class BgaSessionStore:
+    """Persist BGA credentials and cookies encrypted for the current Windows user."""
+
+    HEADER = b"GAIAZERO-BGA-SESSION-V1\n"
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path).resolve()
+
+    def load(self) -> dict[str, Any] | None:
+        if not self.path.is_file():
+            return None
+        source = self.path.read_bytes()
+        if not source.startswith(self.HEADER):
+            raise BgaSessionError("BGA 本地会话文件格式无效，请清除后重新保存")
+        try:
+            payload = json.loads(_unprotect_session(source[len(self.HEADER):]))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise BgaSessionError(
+                "无法读取 BGA 本地会话，可能由其他 Windows 用户创建"
+            ) from error
+        if not isinstance(payload, dict) or payload.get("version") != 1:
+            raise BgaSessionError("BGA 本地会话版本不受支持")
+        return payload
+
+    def save(
+        self,
+        *,
+        username: str,
+        password: str,
+        cookies: list[dict[str, Any]],
+    ) -> None:
+        payload = {
+            "version": 1,
+            "username": username.strip(),
+            "password": password,
+            "cookies": cookies,
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
+        encrypted = _protect_session(
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        )
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.path.with_name(f"{self.path.name}.tmp")
+        temporary.write_bytes(self.HEADER + encrypted)
+        temporary.replace(self.path)
+
+    def clear(self) -> None:
+        self.path.unlink(missing_ok=True)
+
+    def metadata(self) -> dict[str, Any]:
+        payload = self.load()
+        if payload is None:
+            return {"saved": False, "username": "", "cookie_count": 0, "updated_at": None}
+        cookies = payload.get("cookies")
+        return {
+            "saved": True,
+            "username": str(payload.get("username") or ""),
+            "cookie_count": len(cookies) if isinstance(cookies, list) else 0,
+            "updated_at": payload.get("updated_at"),
+        }
+
+
 class _BgaRedirectHandler(HTTPRedirectHandler):
     def redirect_request(
         self,
@@ -190,13 +257,25 @@ class _ReplayLinkParser(HTMLParser):
 class BgaClient:
     """Short-lived authenticated BGA client used by one manual import."""
 
-    def __init__(self, *, timeout: float = 30.0) -> None:
+    def __init__(
+        self,
+        *,
+        timeout: float = 30.0,
+        cookies: list[dict[str, Any]] | None = None,
+    ) -> None:
         self.timeout = timeout
         self._cookies = CookieJar()
+        for cookie in cookies or []:
+            restored = _restore_cookie(cookie)
+            if restored is not None:
+                self._cookies.set_cookie(restored)
         self._opener = build_opener(
             _BgaRedirectHandler(),
             HTTPCookieProcessor(self._cookies),
         )
+
+    def export_cookies(self) -> list[dict[str, Any]]:
+        return [_serialize_cookie(cookie) for cookie in self._cookies]
 
     def login(self, username: str, password: str) -> None:
         if not username.strip() or not password:
@@ -313,12 +392,54 @@ def import_bga_replay(
     replay_address: str,
     history_path: str | Path,
     timeout: float = 30.0,
+    session_path: str | Path | None = None,
+    remember: bool = False,
 ) -> dict[str, Any]:
     """Download one BGA replay and atomically add it to the local archive."""
 
-    client = BgaClient(timeout=timeout)
-    client.login(username, password)
-    record = client.download(replay_address)
+    store = BgaSessionStore(session_path) if session_path is not None else None
+    saved: dict[str, Any] | None = None
+    if store is not None:
+        try:
+            saved = store.load()
+        except BgaSessionError:
+            if not username.strip() or not password:
+                raise
+
+    supplied_username = username.strip()
+    saved_username = str((saved or {}).get("username") or "").strip()
+    effective_username = supplied_username or saved_username
+    effective_password = password
+    if not effective_password and saved is not None and effective_username == saved_username:
+        effective_password = str(saved.get("password") or "")
+    if not effective_username or not effective_password:
+        raise BgaAuthenticationError("请输入 BGA 账号和密码，或先保存有效的本地会话")
+
+    saved_cookies = (saved or {}).get("cookies")
+    reusable_cookies = (
+        saved_cookies
+        if effective_username == saved_username and isinstance(saved_cookies, list)
+        else []
+    )
+    client = BgaClient(timeout=timeout, cookies=reusable_cookies)
+    used_cached_session = False
+    if reusable_cookies:
+        try:
+            record = client.download(replay_address)
+            used_cached_session = True
+        except (BgaAuthenticationError, BgaReplayError):
+            client.login(effective_username, effective_password)
+            record = client.download(replay_address)
+    else:
+        client.login(effective_username, effective_password)
+        record = client.download(replay_address)
+
+    if remember and store is not None:
+        store.save(
+            username=effective_username,
+            password=effective_password,
+            cookies=client.export_cookies(),
+        )
     target = write_local_game(history_path, record)
     trace = record["trace"]
     return {
@@ -330,6 +451,8 @@ def import_bga_replay(
         "scores": trace["summary"]["scores"],
         "players": record["bga"]["players"],
         "imported_at": record["updated_at"],
+        "session_saved": bool(remember and store is not None),
+        "used_cached_session": used_cached_session,
     }
 
 
@@ -383,8 +506,23 @@ def convert_bga_replay(
         ]
         actor = state.actor_for(notifications)
         label, kind = _action_label(notifications)
+        vp_before = [player["vp"] for player in state.players]
+        vp_events = _vp_events(notifications, state.player_index)
         for notice in notifications:
             state.apply_notification(notice)
+        vp_after = [player["vp"] for player in state.players]
+        vp_changes = [
+            {
+                "player": player,
+                "bga_player_id": state.players[player]["bga_player_id"],
+                "name": state.players[player].get("name") or f"P{player}",
+                "before": vp_before[player],
+                "delta": vp_after[player] - vp_before[player],
+                "after": vp_after[player],
+            }
+            for player in range(len(state.players))
+            if vp_after[player] != vp_before[player]
+        ]
         record = {
             "role": "bga",
             "kind": kind,
@@ -392,6 +530,12 @@ def convert_bga_replay(
             "components": _notification_components(notifications),
             "effects": [],
             "changes": [],
+            "vp": {
+                "before": vp_before,
+                "changes": vp_changes,
+                "after": vp_after,
+                "events": vp_events,
+            },
             "bga": {
                 "packet_ids": [packet.get("packet_id") for packet in move_packets],
                 "notifications": [_compact_notification(item) for item in notifications],
@@ -411,6 +555,7 @@ def convert_bga_replay(
 
     if review_players:
         final_players = steps[-1]["state"]["players"]
+        final_vp_before = [player["vp"] for player in final_players]
         for player in final_players:
             result = review_players.get(player["bga_player_id"])
             if not result:
@@ -420,6 +565,24 @@ def convert_bga_replay(
             if result.get("score") is not None:
                 player["vp"] = _as_int(result["score"], player["vp"])
         steps[-1]["state"]["scores"] = [player["vp"] for player in final_players]
+        final_vp_after = [player["vp"] for player in final_players]
+        reconciliation = [
+            {
+                "player": player,
+                "bga_player_id": final_players[player]["bga_player_id"],
+                "name": final_players[player].get("name") or f"P{player}",
+                "before": final_vp_before[player],
+                "delta": final_vp_after[player] - final_vp_before[player],
+                "after": final_vp_after[player],
+            }
+            for player in range(len(final_players))
+            if final_vp_after[player] != final_vp_before[player]
+        ]
+        final_ledger = steps[-1]["record"]["vp"]
+        final_ledger["raw_after"] = list(final_ledger["after"])
+        final_ledger["after"] = final_vp_after
+        final_ledger["reconciliation"] = reconciliation
+        final_ledger["matches_result_page"] = not reconciliation
         steps[-1]["record"]["components"].append(
             {
                 "code": "BGA-FINAL-SCORE",
@@ -656,6 +819,7 @@ class _BgaReplayState:
         elif notice_type == "notifyFormFederation" and player is not None:
             self._mark_federation(args, player)
         elif notice_type == "notifyPass" and player is not None:
+            player["vp"] += _as_int(args.get("vp"), 0)
             player["passed"] = True
             self._set_booster(player, args.get("boosterId"))
         elif notice_type == "notifyRoundEnd":
@@ -1278,6 +1442,8 @@ def _action_label(notifications: list[dict[str, Any]]) -> tuple[str, str]:
     suffix = f" · 支付 {pay}" if pay else ""
     if gain:
         suffix += f" · 获得 {gain}"
+    pass_vp = _as_int(args.get("vp"), 0)
+    pass_label = "过轮" + (f" · 计分 {_signed(pass_vp)} VP" if pass_vp else "")
     labels = {
         "notifyPlaceStartingBldg": (f"放置起始{building_names.get(building_id, '建筑')}", "starting_building"),
         "notifyChooseBoosterTile": (f"选择助推板块 #{_as_int(args.get('boosterId'), 0)}", "choose_booster"),
@@ -1292,7 +1458,7 @@ def _action_label(notifications: list[dict[str, Any]]) -> tuple[str, str]:
         "notifyGainTech": (f"获得科技板块 #{_as_int(args.get('techId'), 0)}", "technology"),
         "notifyConvert": (f"自由兑换{suffix}", "convert"),
         "notifyAction": (f"执行行动 #{_as_int(args.get('actionId'), 0)}", "special_action"),
-        "notifyPass": ("过轮", "pass"),
+        "notifyPass": (pass_label, "pass"),
         "notifyChooseRace": (f"选择{_faction_label(args.get('raceId'))}", "choose_faction"),
         "notifyTakeFedToken": (f"获得联邦板块 #{_as_int(args.get('fedTokenId'), 0)}", "federation_tile"),
         "notifyRoundEnd": (f"第 {_as_int(args.get('roundNum'), 0)} 轮结束", "round_end"),
@@ -1314,6 +1480,36 @@ def _notification_components(notifications: list[dict[str, Any]]) -> list[dict[s
         label, _kind = _action_label([notice])
         components.append({"code": notice_type, "label": label})
     return components
+
+
+def _vp_events(
+    notifications: list[dict[str, Any]],
+    player_index: dict[int, int],
+) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for notice in notifications:
+        notice_type = str(notice.get("type") or "")
+        if notice_type not in ("notifyScore", "notifyPass"):
+            continue
+        args = notice.get("args") or {}
+        if not isinstance(args, dict) or "vp" not in args:
+            continue
+        bga_player_id = _player_id(args.get("playerId"))
+        if bga_player_id not in player_index:
+            continue
+        events.append(
+            {
+                "player": player_index[bga_player_id],
+                "bga_player_id": bga_player_id,
+                "delta": _as_int(args.get("vp"), 0),
+                "source": notice_type,
+                "reason": str(
+                    args.get("desc")
+                    or ("过轮计分" if notice_type == "notifyPass" else "BGA 计分")
+                ),
+            }
+        )
+    return events
 
 
 def _compact_notification(notice: dict[str, Any]) -> dict[str, Any]:
@@ -1359,6 +1555,116 @@ def _validate_bga_url(url: str):
     if parsed.username or parsed.password:
         raise BgaReplayError("复盘地址不能包含账号信息")
     return parsed
+
+
+def _serialize_cookie(cookie: Cookie) -> dict[str, Any]:
+    return {
+        "version": cookie.version,
+        "name": cookie.name,
+        "value": cookie.value,
+        "port": cookie.port,
+        "port_specified": cookie.port_specified,
+        "domain": cookie.domain,
+        "domain_specified": cookie.domain_specified,
+        "domain_initial_dot": cookie.domain_initial_dot,
+        "path": cookie.path,
+        "path_specified": cookie.path_specified,
+        "secure": cookie.secure,
+        "expires": cookie.expires,
+        "discard": cookie.discard,
+        "comment": cookie.comment,
+        "comment_url": cookie.comment_url,
+        "rest": dict(getattr(cookie, "_rest", {})),
+        "rfc2109": cookie.rfc2109,
+    }
+
+
+def _restore_cookie(payload: dict[str, Any]) -> Cookie | None:
+    if not isinstance(payload, dict):
+        return None
+    domain = str(payload.get("domain") or "").lstrip(".").lower()
+    if domain != BGA_ROOT_DOMAIN and not domain.endswith(f".{BGA_ROOT_DOMAIN}"):
+        return None
+    name = str(payload.get("name") or "")
+    if not name:
+        return None
+    return Cookie(
+        version=_as_int(payload.get("version"), 0),
+        name=name,
+        value=str(payload.get("value") or ""),
+        port=payload.get("port"),
+        port_specified=bool(payload.get("port_specified")),
+        domain=str(payload.get("domain") or ""),
+        domain_specified=bool(payload.get("domain_specified")),
+        domain_initial_dot=bool(payload.get("domain_initial_dot")),
+        path=str(payload.get("path") or "/"),
+        path_specified=bool(payload.get("path_specified", True)),
+        secure=bool(payload.get("secure", True)),
+        expires=(
+            _as_int(payload.get("expires"), 0)
+            if payload.get("expires") is not None
+            else None
+        ),
+        discard=bool(payload.get("discard")),
+        comment=payload.get("comment"),
+        comment_url=payload.get("comment_url"),
+        rest=payload.get("rest") if isinstance(payload.get("rest"), dict) else {},
+        rfc2109=bool(payload.get("rfc2109")),
+    )
+
+
+def _protect_session(source: bytes) -> bytes:
+    return _windows_dpapi(source, protect=True)
+
+
+def _unprotect_session(source: bytes) -> str:
+    return _windows_dpapi(source, protect=False).decode("utf-8")
+
+
+def _windows_dpapi(source: bytes, *, protect: bool) -> bytes:
+    if os.name != "nt":
+        raise BgaSessionError("当前系统不支持 Windows DPAPI，无法安全保存 BGA 会话")
+    import ctypes
+    from ctypes import wintypes
+
+    class DataBlob(ctypes.Structure):
+        _fields_ = [
+            ("size", wintypes.DWORD),
+            ("data", ctypes.POINTER(ctypes.c_ubyte)),
+        ]
+
+    buffer = (ctypes.c_ubyte * len(source)).from_buffer_copy(source)
+    source_blob = DataBlob(len(source), buffer)
+    result_blob = DataBlob()
+    crypt32 = ctypes.windll.crypt32
+    kernel32 = ctypes.windll.kernel32
+    flags = 0x1  # CRYPTPROTECT_UI_FORBIDDEN
+    if protect:
+        succeeded = crypt32.CryptProtectData(
+            ctypes.byref(source_blob),
+            "GaiaZero BGA session",
+            None,
+            None,
+            None,
+            flags,
+            ctypes.byref(result_blob),
+        )
+    else:
+        succeeded = crypt32.CryptUnprotectData(
+            ctypes.byref(source_blob),
+            None,
+            None,
+            None,
+            None,
+            flags,
+            ctypes.byref(result_blob),
+        )
+    if not succeeded:
+        raise OSError(ctypes.get_last_error(), "Windows DPAPI operation failed")
+    try:
+        return ctypes.string_at(result_blob.data, result_blob.size)
+    finally:
+        kernel32.LocalFree(result_blob.data)
 
 
 def _extract_json_assignment(source: str, name: str) -> dict[str, Any]:

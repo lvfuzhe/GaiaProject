@@ -212,6 +212,12 @@ const state = {
     status: "ready",
     message: "等待输入复盘地址",
     result: null,
+    session: {
+      saved: false,
+      username: "",
+      cookie_count: 0,
+      updated_at: null,
+    },
   },
   play: {
     workspace: "setup",
@@ -1537,6 +1543,31 @@ function renderBgaImport() {
   submit.disabled = state.bgaImport.busy;
   submit.textContent = state.bgaImport.busy ? "正在下载" : "下载并转换";
 
+  const session = state.bgaImport.session || {};
+  const usernameInput = byId("bga-import-username");
+  const passwordInput = byId("bga-import-password");
+  const clearSession = byId("bga-import-clear-session");
+  const sessionStatus = byId("bga-import-session-status");
+  if (session.saved && usernameInput && !usernameInput.value) {
+    usernameInput.value = session.username || "";
+  }
+  if (passwordInput) {
+    passwordInput.required = !session.saved;
+    passwordInput.placeholder = session.saved ? "已保存，可留空" : "";
+  }
+  if (clearSession) {
+    clearSession.hidden = !session.saved;
+    clearSession.disabled = state.bgaImport.busy;
+  }
+  if (sessionStatus) {
+    if (session.saved) {
+      const updated = session.updated_at ? formatTime(session.updated_at) : "--";
+      sessionStatus.textContent = `已保存 ${session.username || "BGA 账号"} · ${formatNumber(session.cookie_count || 0)} 个 Cookie · ${updated}`;
+    } else {
+      sessionStatus.textContent = "登录信息使用 Windows 当前用户加密，不写入复盘历史";
+    }
+  }
+
   const result = state.bgaImport.result;
   byId("bga-import-empty").hidden = Boolean(result);
   byId("bga-import-result").hidden = !result;
@@ -1561,6 +1592,7 @@ async function submitBgaImport(event) {
     username: byId("bga-import-username").value.trim(),
     password: passwordInput.value,
     replay_address: byId("bga-import-address").value.trim(),
+    remember: byId("bga-import-remember").checked,
   };
   state.bgaImport.busy = true;
   state.bgaImport.result = null;
@@ -1574,13 +1606,65 @@ async function submitBgaImport(event) {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
     state.bgaImport.result = data;
-    setBgaImportMessage(`桌号 ${data.table_id} 已写入本地历史`, "complete");
+    const sessionNote = data.used_cached_session ? " · 已复用 Cookie" : "";
+    setBgaImportMessage(`桌号 ${data.table_id} 已写入本地历史${sessionNote}`, "complete");
+    await loadBgaSession();
     await refreshHistoryIndex();
   } catch (error) {
     setBgaImportMessage(error.message || String(error), "failed");
   } finally {
     passwordInput.value = "";
     request.password = "";
+    state.bgaImport.busy = false;
+    renderBgaImport();
+  }
+}
+
+async function loadBgaSession() {
+  try {
+    const response = await fetch("/api/bga/session", { cache: "no-store" });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    state.bgaImport.session = {
+      saved: Boolean(data.saved),
+      username: data.username || "",
+      cookie_count: Number(data.cookie_count || 0),
+      updated_at: data.updated_at || null,
+    };
+  } catch (error) {
+    state.bgaImport.session = {
+      saved: false,
+      username: "",
+      cookie_count: 0,
+      updated_at: null,
+    };
+    if (state.bgaImport.status === "ready") {
+      state.bgaImport.message = error.message || String(error);
+      state.bgaImport.status = "failed";
+    }
+  }
+  renderBgaImport();
+}
+
+async function clearBgaSession() {
+  if (state.bgaImport.busy || !state.bgaImport.session?.saved) return;
+  state.bgaImport.busy = true;
+  setBgaImportMessage("正在清除本地 BGA 登录信息", "running");
+  try {
+    const response = await fetch("/api/bga/session/clear", { method: "POST" });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    state.bgaImport.session = {
+      saved: false,
+      username: "",
+      cookie_count: 0,
+      updated_at: null,
+    };
+    byId("bga-import-password").value = "";
+    setBgaImportMessage("本地 BGA 账号、密码和 Cookie 已清除", "complete");
+  } catch (error) {
+    setBgaImportMessage(error.message || String(error), "failed");
+  } finally {
     state.bgaImport.busy = false;
     renderBgaImport();
   }
@@ -1860,6 +1944,21 @@ function auditBgaHistoryTrace(trace) {
     && Array.isArray(snapshot.planets)
     && snapshot.players.every((player, index) => Number(player.id) === index)
   ));
+  const vpLedgersComplete = moves.length > 0 && moves.every((step) => {
+    const ledger = step.record?.vp;
+    const beforeState = steps.find((candidate) => Number(candidate.move) === Number(step.move) - 1)?.state;
+    const beforeScores = beforeState?.scores || [];
+    const afterScores = step.state?.scores || [];
+    return Array.isArray(ledger?.before)
+      && Array.isArray(ledger?.after)
+      && Array.isArray(ledger?.events)
+      && ledger.before.length === beforeScores.length
+      && ledger.after.length === afterScores.length
+      && ledger.before.every((value, index) => Number(value) === Number(beforeScores[index]))
+      && ledger.after.every((value, index) => Number(value) === Number(afterScores[index]));
+  });
+  const finalLedger = moves.at(-1)?.record?.vp;
+  const finalVpMatches = vpLedgersComplete && finalLedger?.matches_result_page !== false;
   const terminal = Boolean(states.at(-1)?.terminal);
   return [
     {
@@ -1871,6 +1970,15 @@ function auditBgaHistoryTrace(trace) {
       status: noticesPreserved ? "pass" : "warn",
       title: noticesPreserved ? "BGA 原始通知已关联到步骤" : "部分步骤缺少 BGA 通知",
       detail: noticesPreserved ? "可用板块 ID、开销和收入字段核对转换结果" : "请重新下载该复盘",
+    },
+    {
+      status: finalVpMatches ? "pass" : vpLedgersComplete ? "warn" : "warn",
+      title: finalVpMatches ? "逐步 VP 与 BGA 终局分数一致" : vpLedgersComplete ? "逐步 VP 存在终局校准" : "旧记录缺少逐步 VP 账本",
+      detail: finalVpMatches
+        ? "每步均保存 VP 前值、计分事件和后值"
+        : vpLedgersComplete
+          ? `${(finalLedger.reconciliation || []).length} 名玩家需要对照 BGA 通知排查`
+          : "重新下载该复盘可补齐过轮和行动计分",
     },
     {
       status: snapshotsCompatible ? "pass" : "fail",
@@ -1894,7 +2002,9 @@ function historyDelta(previous, current, step) {
   if (!current) return "等待状态变化";
   if (!previous) return "初始状态 · 没有前置动作";
   const changes = [];
-  const labels = [["credits", "信用点"], ["ore", "矿石"], ["knowledge", "知识"], ["qic", "QIC"], ["vp", "VP"]];
+  const vpLedger = step.record?.vp;
+  const labels = [["credits", "信用点"], ["ore", "矿石"], ["knowledge", "知识"], ["qic", "QIC"]];
+  if (!vpLedger) labels.push(["vp", "VP"]);
   const player = Number(step.player);
   const before = previous.players?.[player];
   const after = current.players?.[player];
@@ -1908,6 +2018,23 @@ function historyDelta(previous, current, step) {
     }
     if (before.tracks && after.tracks && before.tracks.join() !== after.tracks.join()) {
       changes.push(`科研 ${after.tracks.join("·")}`);
+    }
+  }
+  if (Array.isArray(vpLedger?.events) && vpLedger.events.length) {
+    for (const event of vpLedger.events) {
+      const delta = Number(event.delta || 0);
+      changes.push(`P${event.player} ${event.reason || "计分"} ${delta >= 0 ? "+" : ""}${delta} VP`);
+    }
+  } else if (Array.isArray(vpLedger?.changes)) {
+    for (const change of vpLedger.changes) {
+      const delta = Number(change.delta || 0);
+      changes.push(`P${change.player} VP ${formatNumber(change.before, 1)} → ${formatNumber(change.after, 1)} (${delta >= 0 ? "+" : ""}${formatNumber(delta, 1)})`);
+    }
+  }
+  if (Array.isArray(vpLedger?.reconciliation) && vpLedger.reconciliation.length) {
+    for (const change of vpLedger.reconciliation) {
+      const delta = Number(change.delta || 0);
+      changes.push(`P${change.player} BGA 终局校准 ${delta >= 0 ? "+" : ""}${formatNumber(delta, 1)} VP`);
     }
   }
   if (current.phase === "starting_placement" || current.placement?.active) {
@@ -3890,6 +4017,7 @@ byId("history-action-table").addEventListener("click", (event) => {
 });
 byId("bga-import-form").addEventListener("submit", submitBgaImport);
 byId("bga-import-open-history").addEventListener("click", openImportedBgaHistory);
+byId("bga-import-clear-session").addEventListener("click", clearBgaSession);
 window.addEventListener("resize", () => {
   renderLossChart();
   renderSetup(state.manualSetup.preview);
@@ -3907,6 +4035,7 @@ const pathView = window.location.pathname.startsWith("/setup/")
     ? "play"
     : window.location.pathname === "/import/bga" ? "bga-import" : "";
 selectView((initialHash === "setup" ? "play" : initialHash) || pathView || "overview");
+loadBgaSession();
 pollEvents(true);
 pollInteractiveGame();
 setInterval(() => pollEvents(false), POLL_INTERVAL_MS);

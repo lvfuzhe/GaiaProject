@@ -588,21 +588,28 @@
             </div>
             <span id="bga-import-badge" class="health-badge waiting">等待</span>
           </div>
-          <form id="bga-import-form" class="bga-import-form" autocomplete="off">
+          <form id="bga-import-form" class="bga-import-form" autocomplete="on">
             <label>
               <span>BGA 账号</span>
-              <input id="bga-import-username" name="username" type="text" maxlength="120" autocomplete="off" required>
+              <input id="bga-import-username" name="username" type="text" maxlength="120" autocomplete="username" required>
             </label>
             <label>
               <span>BGA 密码</span>
-              <input id="bga-import-password" name="password" type="password" maxlength="256" autocomplete="new-password" required>
+              <input id="bga-import-password" name="password" type="password" maxlength="256" autocomplete="current-password" required>
             </label>
             <label class="bga-replay-address">
               <span>复盘地址</span>
               <input id="bga-import-address" name="replay_address" type="url" maxlength="2048" placeholder="https://boardgamearena.com/gamereview?table=..." autocomplete="off" spellcheck="false" required>
             </label>
+            <div class="bga-session-controls">
+              <label class="bga-session-option">
+                <input id="bga-import-remember" type="checkbox" checked>
+                <span>加密保存账号、密码和 Cookie</span>
+              </label>
+              <button id="bga-import-clear-session" class="secondary-command" type="button" hidden>清除保存</button>
+            </div>
             <div class="bga-import-actions">
-              <span>凭据仅用于本次下载，不写入本地历史</span>
+              <span id="bga-import-session-status">登录信息使用 Windows 当前用户加密，不写入复盘历史</span>
               <button id="bga-import-submit" class="primary-command" type="submit">下载并转换</button>
             </div>
           </form>
