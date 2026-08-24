@@ -731,6 +731,28 @@
           <div id="history-delta" class="history-delta">等待状态变化</div>
         </section>
 
+        <section class="panel content-band history-research-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Research at step</p>
+              <h3>科研与科技</h3>
+            </div>
+            <span id="history-research-status" class="muted">等待历史快照</span>
+          </div>
+          <div class="history-research-layout">
+            <div class="history-research-board-column">
+              <div class="research-board-scroll history-research-board-scroll" role="region" aria-label="历史回放科研轨" tabindex="0">
+                <div id="history-research-stage" class="research-board-stage">
+                  <img class="research-board-art" src="/assets/boards/research-board.png?source=bga-260630-1810" alt="盖亚计划科研背景板块">
+                  <div id="history-research-tech" class="research-board-tech" aria-label="历史快照科技板块"></div>
+                  <div id="history-research-markers" class="research-board-markers" aria-label="历史快照玩家科研轨位置"></div>
+                </div>
+              </div>
+              <div id="history-research-player-legend" class="research-player-legend"></div>
+            </div>
+          </div>
+        </section>
+
         <section class="panel content-band players-panel">
           <div class="panel-heading">
             <div>
@@ -766,11 +788,8 @@
             </div>
             <span id="history-move-count" class="muted">0 步</span>
           </div>
-          <div class="table-scroll history-log-scroll">
-            <table>
-              <thead><tr><th>步</th><th>轮次</th><th>玩家</th><th>动作</th><th>动作编号</th><th>局面分数</th></tr></thead>
-              <tbody id="history-action-table"><tr><td colspan="6" class="empty-cell">暂无动作记录</td></tr></tbody>
-            </table>
+          <div id="history-action-log" class="play-action-timeline history-action-timeline" role="log" aria-live="polite">
+            <div class="play-action-log-empty">暂无动作记录</div>
           </div>
         </section>
       </div>

@@ -687,6 +687,12 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("play-live-roles", page)
             self.assertIn("play-research-stage", page)
             self.assertIn("play-research-markers", page)
+            self.assertIn("history-research-stage", page)
+            self.assertIn("history-research-tech", page)
+            self.assertIn("history-research-markers", page)
+            self.assertIn("history-research-player-legend", page)
+            self.assertIn("history-action-log", page)
+            self.assertNotIn("history-action-table", page)
             self.assertNotIn("play-research-players", page)
             self.assertNotIn("玩家科研等级", page)
             self.assertIn("play-auto-ai", page)
@@ -698,7 +704,7 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("function drawPlanetArtwork", app_script)
             self.assertIn("function drawStarMapBoard", app_script)
             self.assertIn(
-                'drawStarMapBoard(byId("history-board-canvas"), snapshot, true)',
+                'drawStarMapBoard(byId("history-board-canvas"), snapshot, true, {',
                 app_script,
             )
             self.assertIn("function handlePlanetEditorClick", app_script)
@@ -711,6 +717,9 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("function submitHumanAction", app_script)
             self.assertIn("function runInteractiveAiTurn", app_script)
             self.assertIn("function renderLiveResearchBoard", app_script)
+            self.assertIn("function renderHistoryResearchBoard", app_script)
+            self.assertIn("function renderHistoryActionEntry", app_script)
+            self.assertIn('renderResearchBoard(snapshot, "history")', app_script)
             self.assertIn("function undoInteractiveTurn", app_script)
             self.assertIn("function updateLivePlayRole", app_script)
             self.assertIn("function planetAtPlayEvent", app_script)

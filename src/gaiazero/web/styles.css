@@ -2172,18 +2172,102 @@ main {
   font-size: 9px;
 }
 
-.history-log-scroll {
-  max-height: 440px;
+.history-research-panel {
+  margin-top: 14px;
+}
+
+.history-research-layout {
+  margin-top: 14px;
+}
+
+.history-research-board-column {
+  min-width: 0;
+}
+
+.history-research-board-scroll {
+  max-width: 560px;
+}
+
+.history-research-board-scroll .research-board-stage {
+  width: min(100%, 540px);
+}
+
+.history-action-timeline {
+  max-height: 720px;
+  margin-top: 14px;
+  padding-right: 6px;
   overflow-y: auto;
 }
 
-#history-action-table tr[data-step] {
+.history-action-entry {
   cursor: pointer;
+  border-left: 3px solid transparent;
+  border-radius: 3px;
+  transition: background 120ms ease, border-color 120ms ease;
 }
 
-#history-action-table tr.current-step {
+.history-action-entry:hover,
+.history-action-entry:focus-visible {
+  border-left-color: var(--green);
+  outline: none;
+  background: #f6faf7;
+}
+
+.history-action-entry.current-step {
+  border-left-color: var(--green);
   background: var(--green-soft);
-  box-shadow: inset 3px 0 0 var(--green);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--green) 26%, transparent);
+}
+
+.history-action-entry > .play-log-entry {
+  border-left: 0;
+}
+
+.history-log-vp,
+.history-log-notifications,
+.history-log-meta,
+.history-log-delta {
+  margin: -6px 14px 12px 64px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.history-log-delta {
+  padding: 8px 10px;
+  display: block;
+  color: var(--ink-soft);
+  border-left: 2px solid var(--line-strong);
+  background: #f8faf8;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.history-log-vp span,
+.history-log-notifications span,
+.history-log-meta span {
+  min-height: 22px;
+  padding: 4px 7px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--surface);
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.history-log-vp b {
+  color: var(--ink);
+}
+
+.history-log-notifications span {
+  color: #4c6680;
+  border-color: #dce7ef;
+  background: #f6fafc;
+  font-family: Consolas, monospace;
 }
 
 .panel-heading {
@@ -4021,6 +4105,10 @@ footer {
     grid-template-columns: 1fr;
   }
 
+  .history-research-board-scroll {
+    max-width: 500px;
+  }
+
   .research-board-scroll {
     max-width: 500px;
   }
@@ -4333,6 +4421,18 @@ footer {
 
   .history-log-panel {
     padding: 14px;
+  }
+
+  .history-action-timeline {
+    max-height: 620px;
+    padding-right: 0;
+  }
+
+  .history-log-vp,
+  .history-log-notifications,
+  .history-log-meta,
+  .history-log-delta {
+    margin-left: 14px;
   }
 
   .play-log-entry-heading {

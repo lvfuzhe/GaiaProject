@@ -2072,19 +2072,46 @@ function historyDelta(previous, current, step) {
   const vpLedger = step.record?.vp;
   const labels = [["credits", "信用点"], ["ore", "矿石"], ["knowledge", "知识"], ["qic", "QIC"]];
   if (!vpLedger) labels.push(["vp", "VP"]);
-  const player = Number(step.player);
-  const before = previous.players?.[player];
-  const after = current.players?.[player];
-  if (before && after) {
+  for (const after of current.players || []) {
+    const player = Number(after.id);
+    const before = previous.players?.find((candidate) => Number(candidate.id) === player);
+    if (!before) continue;
     for (const [key, label] of labels) {
       const delta = Number(after[key]) - Number(before[key]);
-      if (delta) changes.push(`${label} ${delta > 0 ? "+" : ""}${delta}`);
+      if (delta) changes.push(`P${player} ${label} ${delta > 0 ? "+" : ""}${delta}`);
     }
     if (before.power && after.power && before.power.join() !== after.power.join()) {
-      changes.push(`能量 ${before.power.join("/")} → ${after.power.join("/")}`);
+      changes.push(`P${player} 能量 ${before.power.join("/")} → ${after.power.join("/")}`);
     }
     if (before.tracks && after.tracks && before.tracks.join() !== after.tracks.join()) {
-      changes.push(`科研 ${after.tracks.join("·")}`);
+      const trackChanges = after.tracks.flatMap((level, track) => (
+        Number(level) === Number(before.tracks[track])
+          ? []
+          : [`${TRACK_LABELS[TRACK_KEYS[track]] || `科研轨 ${track + 1}`} L${before.tracks[track]} → L${level}`]
+      ));
+      changes.push(`P${player} ${trackChanges.join("，")}`);
+    }
+  }
+  const previousPlanets = new Map((previous.planets || []).map((planet) => [Number(planet.id), planet]));
+  for (const planet of current.planets || []) {
+    const before = previousPlanets.get(Number(planet.id));
+    if (!before) continue;
+    if (Number(before.owner) !== Number(planet.owner) || before.building !== planet.building) {
+      const building = BUILDING_SPECS.find((item) => item.key === planet.building)?.label || planet.building;
+      changes.push(`星球 P-${planet.id}：${Number(planet.owner) >= 0 ? `P${planet.owner} ${building}` : "建筑移除"}`);
+    }
+    const beforeCoexisting = Number(before.coexisting_mine_owner ?? -1);
+    const afterCoexisting = Number(planet.coexisting_mine_owner ?? -1);
+    if (beforeCoexisting !== afterCoexisting) {
+      changes.push(`星球 P-${planet.id}：${afterCoexisting >= 0 ? `P${afterCoexisting} 共存矿场` : "共存矿场移除"}`);
+    }
+    const beforeGaiaformer = Number(before.gaiaformer ?? -1);
+    const afterGaiaformer = Number(planet.gaiaformer ?? -1);
+    if (beforeGaiaformer !== afterGaiaformer) {
+      changes.push(`星球 P-${planet.id}：盖亚塑形者 ${beforeGaiaformer} → ${afterGaiaformer}`);
+    }
+    if (Number(before.terrain) !== Number(planet.terrain)) {
+      changes.push(`星球 P-${planet.id}：${TERRAIN_LABELS[before.terrain] || before.terrain} → ${TERRAIN_LABELS[planet.terrain] || planet.terrain}`);
     }
   }
   if (Array.isArray(vpLedger?.events) && vpLedger.events.length) {
@@ -2145,7 +2172,10 @@ function renderHistory() {
   state.history.step = Math.max(0, Math.min(state.history.step, steps.length - 1));
   const step = steps[state.history.step];
   const snapshot = step.state;
-  drawStarMapBoard(byId("history-board-canvas"), snapshot, true);
+  drawStarMapBoard(byId("history-board-canvas"), snapshot, true, {
+    showPlanetIds: true,
+    selectedPlanetId: step.record?.target ?? null,
+  });
   byId("history-board-empty").hidden = Boolean(snapshot);
   byId("history-board-round").textContent = snapshotRoundLabel(snapshot);
   const summary = trace.summary || {};
@@ -2164,6 +2194,7 @@ function renderHistory() {
   byId("history-step-label").textContent = `${step.move} / ${Math.max(0, steps.length - 1)}`;
   const previous = steps[state.history.step - 1]?.state;
   byId("history-delta").textContent = historyDelta(previous, snapshot, step);
+  renderHistoryResearchBoard(snapshot);
   renderPlayerRows("history-players-table", snapshot, "history-active-player");
   renderPersonalBoards("history-player-board-grid", snapshot);
   const checks = auditHistoryTrace(trace);
@@ -2173,19 +2204,30 @@ function renderHistory() {
   badge.className = `health-badge ${failed ? "failed" : warned ? "warning" : "connected"}`;
   badge.textContent = failed ? "发现异常" : warned ? "需补录" : "通过";
   byId("history-check-list").innerHTML = checks.map((check) => `<li class="${check.status}"><span>${escapeHtml(check.title)}</span><small>${escapeHtml(check.detail)}</small></li>`).join("");
-  byId("history-move-count").textContent = `${Math.max(0, steps.length - 1)} 步`;
-  byId("history-action-table").innerHTML = steps.map((item, index) => {
-    const itemState = item.state || {};
-    const scores = (itemState.scores || []).map((value) => formatNumber(value, 1)).join(" / ");
-    return `<tr data-step="${index}" class="${index === state.history.step ? "current-step" : ""}">
-      <td>${formatNumber(item.move)}</td>
-      <td>${escapeHtml(snapshotRoundLabel(itemState, true))}</td>
-      <td>${item.player === null || item.player === undefined ? "--" : `P${item.player}`}</td>
-      <td>${escapeHtml(item.action_label || "状态快照")}</td>
-      <td class="mono">${item.action === null || item.action === undefined ? "--" : item.action}</td>
-      <td class="mono">${scores || "--"}</td>
-    </tr>`;
-  }).join("");
+  const automaticSteps = steps.reduce(
+    (total, item) => total + (item.record?.automatic_steps?.length || 0),
+    0,
+  );
+  byId("history-move-count").textContent = automaticSteps
+    ? `${Math.max(0, steps.length - 1)} 个动作 · ${automaticSteps} 个系统步骤`
+    : `${Math.max(0, steps.length - 1)} 个动作`;
+  const actionLog = byId("history-action-log");
+  actionLog.innerHTML = steps.length
+    ? steps.map((item, index) => renderHistoryActionEntry(
+      item,
+      steps[index - 1],
+      index,
+      state.history.step,
+    )).join("")
+    : '<div class="play-action-log-empty">暂无动作记录</div>';
+  const currentEntry = actionLog.querySelector(".current-step");
+  if (currentEntry) {
+    const logBounds = actionLog.getBoundingClientRect();
+    const entryBounds = currentEntry.getBoundingClientRect();
+    if (entryBounds.top < logBounds.top || entryBounds.bottom > logBounds.bottom) {
+      actionLog.scrollTop += entryBounds.top - logBounds.top - actionLog.clientHeight / 3;
+    }
+  }
 }
 
 function latestState() {
@@ -2972,17 +3014,17 @@ function drawLostPlanetMarker(context, x, y, color, scale = 1) {
   context.restore();
 }
 
-function renderLiveResearchBoard(snapshot) {
-  const stage = byId("play-research-stage");
-  const techLayer = byId("play-research-tech");
-  const markerLayer = byId("play-research-markers");
-  const legend = byId("play-research-player-legend");
-  const status = byId("play-research-status");
+function renderResearchBoard(snapshot, scope = "play") {
+  const stage = byId(`${scope}-research-stage`);
+  const techLayer = byId(`${scope}-research-tech`);
+  const markerLayer = byId(`${scope}-research-markers`);
+  const legend = byId(`${scope}-research-player-legend`);
+  const status = byId(`${scope}-research-status`);
   if (!stage || !techLayer || !markerLayer || !legend || !status) return;
 
   const setup = snapshot?.setup;
   const players = snapshot?.players || [];
-  if (!setup?.standard_tech || !setup?.advanced_tech || !players.length) {
+  if (!players.length) {
     status.textContent = "等待科研轨数据";
     techLayer.innerHTML = "";
     markerLayer.innerHTML = "";
@@ -2990,12 +3032,14 @@ function renderLiveResearchBoard(snapshot) {
     return;
   }
 
-  const standardByTrack = new Map(setup.standard_tech.filter((tile) => tile.track).map((tile) => [tile.track, tile]));
-  const advancedByTrack = new Map(setup.advanced_tech.map((tile) => [tile.track, tile]));
-  const freeStandardTech = setup.standard_tech.filter((tile) => !tile.track);
+  const standardTech = Array.isArray(setup?.standard_tech) ? setup.standard_tech : [];
+  const advancedTech = Array.isArray(setup?.advanced_tech) ? setup.advanced_tech : [];
+  const standardByTrack = new Map(standardTech.filter((tile) => tile.track).map((tile) => [tile.track, tile]));
+  const advancedByTrack = new Map(advancedTech.map((tile) => [tile.track, tile]));
+  const freeStandardTech = standardTech.filter((tile) => !tile.track);
   const techSignature = [
-    ...setup.standard_tech.map((tile) => `s${tile.space}:${tile.id}`),
-    ...setup.advanced_tech.map((tile, index) => `a${index}:${tile.id}`),
+    ...standardTech.map((tile) => `s${tile.space}:${tile.id}`),
+    ...advancedTech.map((tile, index) => `a${index}:${tile.id}`),
   ].join("|");
   if (techLayer.dataset.signature !== techSignature) {
     const trackTechSlots = Object.entries(TRACK_LABELS).flatMap(([track, label], trackIndex) => {
@@ -3004,9 +3048,9 @@ function renderLiveResearchBoard(snapshot) {
       const standardName = setupLabel(standard);
       const advancedName = ADVANCED_TECH_NAMES[advanced?.id] || advanced?.label || "--";
       return [
-        `<span class="research-tech-slot advanced track-${trackIndex}" role="img" tabindex="0" aria-label="${escapeHtml(label)}高级科技：${escapeHtml(advancedName)}" title="${escapeHtml(label)}高级科技 · ${escapeHtml(advancedName)}"><img src="${tileAsset("advanced", advanced?.id, advanced?.key)}" alt="" aria-hidden="true"></span>`,
-        `<span class="research-tech-slot standard track-${trackIndex}" role="img" tabindex="0" aria-label="${escapeHtml(label)}基础科技：${escapeHtml(standardName)}" title="${escapeHtml(label)}基础科技 · ${escapeHtml(standardName)}"><img src="${tileAsset("standard", standard?.id, standard?.key)}" alt="" aria-hidden="true"></span>`,
-      ];
+        advanced ? `<span class="research-tech-slot advanced track-${trackIndex}" role="img" tabindex="0" aria-label="${escapeHtml(label)}高级科技：${escapeHtml(advancedName)}" title="${escapeHtml(label)}高级科技 · ${escapeHtml(advancedName)}"><img src="${tileAsset("advanced", advanced.id, advanced.key)}" alt="" aria-hidden="true"></span>` : "",
+        standard ? `<span class="research-tech-slot standard track-${trackIndex}" role="img" tabindex="0" aria-label="${escapeHtml(label)}基础科技：${escapeHtml(standardName)}" title="${escapeHtml(label)}基础科技 · ${escapeHtml(standardName)}"><img src="${tileAsset("standard", standard.id, standard.key)}" alt="" aria-hidden="true"></span>` : "",
+      ].filter(Boolean);
     });
     const freeTechSlots = freeStandardTech.map((tile, index) => {
       const name = setupLabel(tile);
@@ -3028,10 +3072,23 @@ function renderLiveResearchBoard(snapshot) {
   const active = snapshot.current_player === null || snapshot.current_player === undefined
     ? "对局已结束"
     : `当前行动 P${snapshot.current_player}`;
-  status.textContent = `${active} · ${players.length} 位玩家`;
+  const techStatus = standardTech.length || advancedTech.length
+    ? ""
+    : " · 科技板块编号未记录";
+  status.textContent = `${active} · ${players.length} 位玩家${techStatus}`;
+}
+
+function renderLiveResearchBoard(snapshot) {
+  renderResearchBoard(snapshot, "play");
+}
+
+function renderHistoryResearchBoard(snapshot) {
+  renderResearchBoard(snapshot, "history");
 }
 
 const PLAY_ACTION_LABELS = {
+  history_state: "历史状态快照",
+  bga_state: "BGA 状态同步",
   starting_placement: "放置起始基地",
   select_booster: "选择起始助推板块",
   build: "建造矿场",
@@ -3223,18 +3280,78 @@ function renderPlayAutomaticStep(step) {
 }
 
 function renderPlayActionEntry(item) {
-  const actionName = PLAY_ACTION_LABELS[item.kind] || PLAY_ACTION_LABELS.other;
+  const actionName = ["bga_state", "history_state"].includes(item.kind) && (item.label || item.action_label)
+    ? (item.label || item.action_label)
+    : (PLAY_ACTION_LABELS[item.kind] || item.label || item.action_label || PLAY_ACTION_LABELS.other);
   const round = item.round > 0 ? `第 ${item.round} 轮` : "初始设置";
+  const player = item.player === null || item.player === undefined ? null : Number(item.player);
+  const actor = player === null
+    ? "系统"
+    : `<i class="player-color p${player}"></i>P${player}`;
+  const role = item.role === "human" ? "人工" : item.role === "ai" ? "AI" : item.role === "bga" ? "BGA" : "系统";
   return `<article class="play-log-entry">
     <header class="play-log-entry-heading">
       <span class="play-log-move">#${item.move}</span>
-      <div><strong><i class="player-color p${item.player}"></i>P${item.player} · ${escapeHtml(actionName)}</strong><small>${round} · ${item.role === "human" ? "人工" : "AI"}</small></div>
+      <div><strong>${actor} · ${escapeHtml(actionName)}</strong><small>${round} · ${role}</small></div>
     </header>
     ${renderPlayLogComponents(item.components)}
     <div class="play-log-effects">${(item.effects || []).map((effect) => renderPlayLogEffect(effect)).join("")}</div>
     ${renderPlayLogChanges(item.changes)}
     ${(item.automatic_steps || []).map(renderPlayAutomaticStep).join("")}
   </article>`;
+}
+
+function renderHistoryVpChanges(vp = {}) {
+  const before = Array.isArray(vp.before) ? vp.before : [];
+  const after = Array.isArray(vp.after) ? vp.after : [];
+  const changes = after.map((value, player) => ({
+    player,
+    before: Number(before[player]),
+    after: Number(value),
+  })).filter((item) => Number.isFinite(item.before) && item.after !== item.before);
+  if (!changes.length) return "";
+  return `<div class="history-log-vp">${changes.map((item) => {
+    const delta = item.after - item.before;
+    return `<span><i class="player-color p${item.player}"></i>P${item.player} VP ${formatNumber(item.before, 1)} → ${formatNumber(item.after, 1)} <b>${delta >= 0 ? "+" : ""}${formatNumber(delta, 1)}</b></span>`;
+  }).join("")}</div>`;
+}
+
+function renderHistoryActionEntry(step, previousStep, index, currentStep) {
+  const record = step.record || {};
+  const item = {
+    ...record,
+    move: Number(step.move ?? index),
+    player: step.player ?? record.player ?? null,
+    role: record.role || step.role || (step.record ? "system" : null),
+    round: Number(record.round ?? step.state?.round ?? 0),
+    kind: record.kind || "history_state",
+    label: record.label || step.action_label || "状态快照",
+    components: record.components || [],
+    effects: record.effects || [],
+    changes: record.changes || [],
+    automatic_steps: record.automatic_steps || [],
+  };
+  const scores = (step.state?.scores || []).map((value) => formatNumber(value, 1)).join(" / ");
+  const notifications = record.bga?.notifications || [];
+  const notificationTypes = [...new Set(notifications.map((notice) => notice.type).filter(Boolean))];
+  const metadata = [
+    step.action === null || step.action === undefined ? null : `动作 ${step.action}`,
+    scores ? `局面分数 ${scores}` : null,
+    notifications.length ? `${notifications.length} 条 BGA 通知` : null,
+  ].filter(Boolean);
+  const hasStructuredChanges = item.effects.length
+    || item.changes.length
+    || item.automatic_steps.length;
+  const fallbackDelta = hasStructuredChanges
+    ? ""
+    : historyDelta(previousStep?.state, step.state, step);
+  return `<div class="history-action-entry ${index === currentStep ? "current-step" : ""}" data-step="${index}" tabindex="0" role="button" aria-label="跳转到第 ${item.move} 步">
+    ${renderPlayActionEntry(item)}
+    ${fallbackDelta ? `<div class="history-log-delta">${escapeHtml(fallbackDelta)}</div>` : ""}
+    ${renderHistoryVpChanges(record.vp)}
+    ${notificationTypes.length ? `<div class="history-log-notifications">${notificationTypes.slice(0, 6).map((type) => `<span>${escapeHtml(type)}</span>`).join("")}</div>` : ""}
+    ${metadata.length ? `<div class="history-log-meta">${metadata.map((value) => `<span>${escapeHtml(value)}</span>`).join("")}</div>` : ""}
+  </div>`;
 }
 
 function ensurePlaySeats(players = state.play.players) {
@@ -4089,12 +4206,20 @@ byId("history-step-slider").addEventListener("input", (event) => setHistoryStep(
 byId("history-previous").addEventListener("click", () => setHistoryStep(state.history.step - 1));
 byId("history-next").addEventListener("click", () => setHistoryStep(state.history.step + 1));
 byId("history-play").addEventListener("click", toggleHistoryPlayback);
-byId("history-action-table").addEventListener("click", (event) => {
-  const row = event.target.closest("tr[data-step]");
-  if (row) {
+byId("history-action-log").addEventListener("click", (event) => {
+  const entry = event.target.closest("[data-step]");
+  if (entry) {
     stopHistoryPlayback();
-    setHistoryStep(row.dataset.step);
+    setHistoryStep(entry.dataset.step);
   }
+});
+byId("history-action-log").addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  const entry = event.target.closest("[data-step]");
+  if (!entry) return;
+  event.preventDefault();
+  stopHistoryPlayback();
+  setHistoryStep(entry.dataset.step);
 });
 byId("bga-import-form").addEventListener("submit", submitBgaImport);
 byId("bga-import-open-history").addEventListener("click", openImportedBgaHistory);
