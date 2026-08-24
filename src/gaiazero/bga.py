@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import gzip
 import json
 import os
 import re
@@ -82,6 +83,39 @@ TRACK_NAMES = (
     "经济",
     "科学",
 )
+
+BGA_FINAL_SCORING = {
+    "most structures in federations": {
+        "id": 0,
+        "key": "federation-structures",
+        "label": "Structures in federations",
+    },
+    "most structures": {
+        "id": 1,
+        "key": "structures",
+        "label": "Total structures",
+    },
+    "most planet types": {
+        "id": 2,
+        "key": "planet-types",
+        "label": "Colonized planet types",
+    },
+    "most gaia planets": {
+        "id": 3,
+        "key": "gaia-planets",
+        "label": "Colonized Gaia planets",
+    },
+    "most sectors": {
+        "id": 4,
+        "key": "sectors",
+        "label": "Colonized sectors",
+    },
+    "most satellites": {
+        "id": 5,
+        "key": "satellites",
+        "label": "Placed satellites and space stations",
+    },
+}
 
 
 class BgaError(RuntimeError):
@@ -365,6 +399,7 @@ class BgaClient:
         _validate_bga_url(url)
         request_headers = {
             "Accept": "text/html,application/json;q=0.9,*/*;q=0.8",
+            "Accept-Encoding": "gzip",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.7",
             "User-Agent": "GaiaZero-BGA-Importer/1.0",
         }
@@ -374,6 +409,7 @@ class BgaClient:
             with self._opener.open(request, timeout=self.timeout) as response:
                 body = response.read()
                 charset = response.headers.get_content_charset() or "utf-8"
+                content_encoding = response.headers.get("Content-Encoding", "").lower()
         except HTTPError as error:
             if error.code == 429:
                 raise BgaRateLimitError("BGA 请求过于频繁，请稍后再试") from error
@@ -382,6 +418,11 @@ class BgaClient:
             raise BgaNetworkError(f"BGA 返回 HTTP {error.code}") from error
         except (TimeoutError, URLError, OSError) as error:
             raise BgaNetworkError("无法连接 BGA，请检查网络后重试") from error
+        if content_encoding == "gzip":
+            try:
+                body = gzip.decompress(body)
+            except (OSError, EOFError) as error:
+                raise BgaNetworkError("BGA returned incomplete compressed data") from error
         return body.decode(charset, errors="replace")
 
 
@@ -699,6 +740,7 @@ class _BgaReplayState:
         self.current_player = self.placement_order[0] if self.placement_order else 0
         self.first_player = _find_first_player(self.notifications, self.player_index)
         self.booster_owners: dict[int, int] = {}
+        self.final_scoring = _collect_final_scoring(self.notifications)
 
         first_map, all_planet_coordinates = _collect_map_topology(self.notifications)
         ordered_coordinates = sorted(all_planet_coordinates, key=lambda item: (item[1], item[0]))
@@ -898,7 +940,7 @@ class _BgaReplayState:
                 for booster, owner in sorted(self.booster_owners.items())
             ],
             "round_scoring": [],
-            "final_scoring": [],
+            "final_scoring": copy.deepcopy(self.final_scoring),
             "standard_tech": [],
             "advanced_tech": [],
             "terraforming_federation": None,
@@ -1398,6 +1440,26 @@ def _find_first_player(
     return 0
 
 
+def _collect_final_scoring(
+    notifications: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    tiles: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for notice in notifications:
+        if notice.get("type") != "notifyScore":
+            continue
+        args = notice.get("args") or {}
+        if not isinstance(args, dict):
+            continue
+        description = re.sub(r"\s+", " ", str(args.get("desc") or "").strip().lower())
+        tile = BGA_FINAL_SCORING.get(description)
+        if tile is None or tile["id"] in seen:
+            continue
+        seen.add(tile["id"])
+        tiles.append(copy.deepcopy(tile))
+    return tiles
+
+
 def _action_label(notifications: list[dict[str, Any]]) -> tuple[str, str]:
     priorities = (
         "notifyPlaceStartingBldg",
@@ -1487,6 +1549,8 @@ def _vp_events(
     player_index: dict[int, int],
 ) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
+    final_scoring_started = False
+    unlabeled_final_scores: dict[int, int] = defaultdict(int)
     for notice in notifications:
         notice_type = str(notice.get("type") or "")
         if notice_type not in ("notifyScore", "notifyPass"):
@@ -1497,16 +1561,27 @@ def _vp_events(
         bga_player_id = _player_id(args.get("playerId"))
         if bga_player_id not in player_index:
             continue
+        description = str(args.get("desc") or "").strip()
+        normalized_description = re.sub(r"\s+", " ", description.lower())
+        if normalized_description in BGA_FINAL_SCORING:
+            final_scoring_started = True
+        if description:
+            reason = description
+        elif notice_type == "notifyPass":
+            reason = "过轮计分"
+        elif final_scoring_started:
+            occurrence = unlabeled_final_scores[bga_player_id]
+            reason = "科研轨终局计分" if occurrence == 0 else "剩余资源计分"
+            unlabeled_final_scores[bga_player_id] += 1
+        else:
+            reason = "BGA 计分"
         events.append(
             {
                 "player": player_index[bga_player_id],
                 "bga_player_id": bga_player_id,
                 "delta": _as_int(args.get("vp"), 0),
                 "source": notice_type,
-                "reason": str(
-                    args.get("desc")
-                    or ("过轮计分" if notice_type == "notifyPass" else "BGA 计分")
-                ),
+                "reason": reason,
             }
         )
     return events

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 import shutil
 import threading
@@ -303,6 +304,81 @@ class BgaImportTests(unittest.TestCase):
         self.assertEqual(record["trace"]["summary"]["scores"], [123, 98])
         self.assertEqual(record["trace"]["summary"]["moves"], 6)
         self.assertTrue(record["trace"]["steps"][-1]["state"]["terminal"])
+
+    def test_client_requests_and_decodes_gzip_responses(self) -> None:
+        class ResponseHeaders(dict[str, str]):
+            def get_content_charset(self) -> str:
+                return "utf-8"
+
+        class Response:
+            headers = ResponseHeaders({"Content-Encoding": "gzip"})
+
+            def __enter__(self) -> Response:
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return gzip.compress("BGA 压缩响应".encode("utf-8"))
+
+        class Opener:
+            request: Request | None = None
+
+            def open(self, request: Request, *, timeout: float) -> Response:
+                self.request = request
+                self.timeout = timeout
+                return Response()
+
+        client = BgaClient(timeout=12.0)
+        opener = Opener()
+        client._opener = opener
+
+        result = client._request_text("https://boardgamearena.com/account")
+
+        self.assertEqual(result, "BGA 压缩响应")
+        self.assertEqual(opener.request.get_header("Accept-encoding"), "gzip")
+        self.assertEqual(opener.timeout, 12.0)
+
+    def test_final_scoring_tiles_and_vp_reasons_are_recovered_from_bga_log(self) -> None:
+        packets = replay_packets()
+        final_notices = packets[-1]["data"]
+        final_notices[-1:-1] = [
+            notice(
+                "notifyScore",
+                player_name="Alice",
+                playerId=PLAYER_ONE,
+                vp=18,
+                desc="Most structures",
+            ),
+            notice(
+                "notifyScore",
+                player_name="Bob",
+                playerId=PLAYER_TWO,
+                vp=12,
+                desc="Most satellites",
+            ),
+            notice("notifyScore", player_name="Alice", playerId=PLAYER_ONE, vp=8),
+            notice("notifyScore", player_name="Alice", playerId=PLAYER_ONE, vp=2),
+        ]
+
+        record = convert_bga_replay(
+            table_id=TABLE_ID,
+            source_url=f"https://boardgamearena.com/gamereview?table={TABLE_ID}",
+            replay_url=f"https://boardgamearena.com/archive/replay/test/?table={TABLE_ID}",
+            game_data=game_data(),
+            packets=packets,
+        )
+
+        final_step = record["trace"]["steps"][-1]
+        self.assertEqual(
+            [tile["id"] for tile in final_step["state"]["setup"]["final_scoring"]],
+            [1, 5],
+        )
+        self.assertEqual(
+            [event["reason"] for event in final_step["record"]["vp"]["events"][-2:]],
+            ["科研轨终局计分", "剩余资源计分"],
+        )
 
     def test_cookie_cache_round_trips_through_client(self) -> None:
         cookie = Cookie(
