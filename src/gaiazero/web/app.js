@@ -1862,7 +1862,8 @@ async function deleteSelectedHistory() {
     state.history.trace = null;
     state.history.step = 0;
     state.history.message = `${sourceLabel}已删除`;
-    await refreshHistoryIndex({ loadTrace: false, force: true });
+    state.history.deleting = false;
+    await refreshHistoryIndex({ loadTrace: true, force: true });
   } catch (error) {
     state.history.message = error.name === "AbortError"
       ? "删除请求超时，请稍后重试"
@@ -1870,6 +1871,7 @@ async function deleteSelectedHistory() {
   } finally {
     window.clearTimeout(timeout);
     state.history.deleting = false;
+    renderHistorySelectors();
     renderHistory();
   }
 }

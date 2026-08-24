@@ -739,6 +739,17 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("history-action-status", page)
             self.assertIn("function deleteSelectedHistory", app_script)
             self.assertIn("AbortController", app_script)
+            self.assertIn(
+                "state.history.deleting = false;\n"
+                "    await refreshHistoryIndex({ loadTrace: true, force: true });",
+                app_script,
+            )
+            self.assertIn(
+                "state.history.deleting = false;\n"
+                "    renderHistorySelectors();\n"
+                "    renderHistory();",
+                app_script,
+            )
             self.assertEqual(sector_content_type, "image/gif")
             self.assertTrue(sector_image.startswith(b"GIF"))
             self.assertTrue(outlined_sector_image.startswith(b"GIF"))
