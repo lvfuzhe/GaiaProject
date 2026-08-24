@@ -27,6 +27,8 @@ from gaiazero.game.gaia_state import (
     LOST_PLANET_OFFSET,
     NEVLAS_CREDIT_ORE_ACTION,
     NEVLAS_POWER_TO_GAIA_ACTION,
+    PASSIVE_CHARGE_ACCEPT_ACTION,
+    PASSIVE_CHARGE_DECLINE_ACTION,
     QIC_ACADEMY_ACTION,
     SKIP_TECH_RESEARCH_ACTION,
     PowerAction,
@@ -1280,6 +1282,57 @@ class DashboardTests(unittest.TestCase):
             for change in entry["effects"][0]["changes"]
         ))
 
+    def test_interactive_action_ledger_records_passive_charge_decision_and_vp(self) -> None:
+        state = GaiaState.initial(2, seed=7, faction_indices=(0, 2), first_player=0)
+        source = next(planet for planet, active in enumerate(state.active_planets) if active)
+        neighbor = next(
+            planet
+            for planet, active in enumerate(state.active_planets)
+            if active and planet != source and state._distance(source, planet) <= 2
+        )
+        owners = [-1] * len(state.owners)
+        buildings = [Building.EMPTY] * len(state.buildings)
+        owners[neighbor] = 1
+        buildings[neighbor] = Building.PLANETARY_INSTITUTE
+        players = list(state.players)
+        players[1] = replace(players[1], bowl_one=0, bowl_two=3, bowl_three=0, vp=10)
+        state = replace(
+            state,
+            owners=tuple(owners),
+            buildings=tuple(int(value) for value in buildings),
+            players=tuple(players),
+            round_number=1,
+            player_to_move=0,
+            placement_step=len(state.placement_order),
+        )
+        pending = state._trigger_passive_charge(0, source)
+
+        accept = _interactive_action_snapshot(pending, PASSIVE_CHARGE_ACCEPT_ACTION)
+        decline = _interactive_action_snapshot(pending, PASSIVE_CHARGE_DECLINE_ACTION)
+        self.assertEqual(accept["kind"], "passive_charge_accept")
+        self.assertEqual(decline["kind"], "passive_charge_decline")
+        self.assertEqual(pending.snapshot()["passive_charge"]["vp_cost"], 2)
+
+        after = pending.apply(PASSIVE_CHARGE_ACCEPT_ACTION)
+        entry = _interactive_action_record(
+            pending,
+            after,
+            PASSIVE_CHARGE_ACCEPT_ACTION,
+            move=1,
+            player=1,
+            role="human",
+        )
+        self.assertTrue(any(
+            cost["resource"] == "vp" and cost["amount"] == 2
+            for cost in entry["effects"][0]["costs"]
+        ))
+        self.assertTrue(any(
+            component["code"] == f"P-{source}"
+            and component["relation"] == "charged_from"
+            for component in entry["components"]
+        ))
+        self.assertEqual(after.players[1].vp, 8)
+
     def test_interactive_action_ledger_tracks_brainstone_selection_and_spending(self) -> None:
         state = GaiaState.initial(
             2,
@@ -1775,6 +1828,20 @@ class DashboardTests(unittest.TestCase):
                 and change["planet"] == build_action["target"]
                 for change in build_log["changes"]
             ))
+
+            while game["state"]["phase"] == "passive_charge":
+                charge = game["state"]["passive_charge"]
+                self.assertGreater(charge["chargeable"], 0)
+                self.assertGreaterEqual(charge["vp_cost"], 0)
+                decline = next(
+                    action
+                    for action in game["legal_actions"]
+                    if action["kind"] == "passive_charge_decline"
+                )
+                _, game = self.post_json(
+                    f"{base}/api/play/action",
+                    {"action": decline["id"]},
+                )
 
             research_action = next(
                 action for action in game["legal_actions"] if action["kind"] == "research"

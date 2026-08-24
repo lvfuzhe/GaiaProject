@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -60,6 +61,8 @@ from gaiazero.game.gaia_state import (
     MAX_ROUNDS,
     PASS_BOOSTER_OFFSET,
     PASS_FINAL_ACTION,
+    PASSIVE_CHARGE_ACCEPT_ACTION,
+    PASSIVE_CHARGE_DECLINE_ACTION,
     POWER_OFFSET,
     RESEARCH_OFFSET,
     ROUND_SCORING_TILES,
@@ -936,6 +939,10 @@ def _interactive_action_snapshot(state: GaiaState, action: int) -> dict[str, Any
         kind = "nevlas_convert_qic"
     elif action == NEVLAS_KNOWLEDGE_ACTION:
         kind = "nevlas_convert_knowledge"
+    elif action == PASSIVE_CHARGE_ACCEPT_ACTION:
+        kind = "passive_charge_accept"
+    elif action == PASSIVE_CHARGE_DECLINE_ACTION:
+        kind = "passive_charge_decline"
     elif action == TAKLONS_PASSIVE_BEFORE_ACTION:
         kind = "taklons_passive_before"
     elif action == TAKLONS_PASSIVE_AFTER_ACTION:
@@ -1074,6 +1081,8 @@ def _interactive_phase(state: GaiaState) -> str:
         return "starting_placement"
     if state.is_booster_selection:
         return "booster_selection"
+    if state.pending_passive_charge_player >= 0:
+        return "passive_charge"
     if state.pending_taklons_charge_player >= 0:
         return "taklons_passive_charge"
     if state.pending_gaia_conversion_player >= 0:
@@ -1281,6 +1290,18 @@ def _interactive_action_components(
                 relation="gained",
             )
         )
+    if action["kind"] in ("passive_charge_accept", "passive_charge_decline"):
+        source = state.pending_passive_charge_planet
+        if source >= 0:
+            components.append(
+                _component_ref(
+                    "planet",
+                    source,
+                    f"Passive-charge source planet {source}",
+                    f"P-{source}",
+                    relation="charged_from",
+                )
+            )
     target = action.get("target")
     if target is not None:
         components.append(
@@ -1657,6 +1678,21 @@ def _interactive_action_costs(
     elif kind == "research":
         if state.pending_research_player < 0:
             costs["knowledge"] = 4
+    elif kind == "passive_charge_accept":
+        info = state.players[player]
+        faction = FACTIONS[info.faction]
+        if not (faction.passive_power_token and state._has_pi(player)):
+            _, charged = state._charge_power(
+                info,
+                state.pending_passive_charge_amount,
+            )
+            costs["vp"] = max(0, charged - 1)
+    elif kind in ("taklons_passive_before", "taklons_passive_after"):
+        info = state.players[player]
+        if kind == "taklons_passive_before":
+            info = replace(info, bowl_one=info.bowl_one + 1)
+        _, charged = state._charge_power(info, state.pending_taklons_charge_amount)
+        costs["vp"] = max(0, charged - 1)
     elif kind == "power":
         costs["power"] = state._power_action_cost(player, action["power_action"])
     elif kind == "hadsch_credit_ore":

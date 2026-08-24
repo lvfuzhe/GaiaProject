@@ -33,6 +33,8 @@ from gaiazero.game.gaia_state import (
     NEVLAS_QIC_ACTION,
     PASS_BOOSTER_OFFSET,
     PASS_FINAL_ACTION,
+    PASSIVE_CHARGE_ACCEPT_ACTION,
+    PASSIVE_CHARGE_DECLINE_ACTION,
     ROUND_SCORING_TILES,
     SKIP_TECH_RESEARCH_ACTION,
     STANDARD_TECH_TILES,
@@ -76,6 +78,12 @@ def finish_starting_placement(state: GaiaState) -> GaiaState:
     return state
 
 
+def decline_passive_charge(state: GaiaState) -> GaiaState:
+    while state.pending_passive_charge_player >= 0:
+        state = state.apply(PASSIVE_CHARGE_DECLINE_ACTION)
+    return state
+
+
 class StandardGaiaRulesTests(unittest.TestCase):
     def test_setup_has_full_research_and_building_model(self) -> None:
         state = GaiaState.initial(4, seed=3)
@@ -90,7 +98,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(sum(len(planets) for planets in state.starting_planets), 0)
         self.assertEqual(state.round_number, 0)
         self.assertTrue(state.is_starting_placement)
-        self.assertEqual(state.snapshot()["ruleset"], "standard-v21")
+        self.assertEqual(state.snapshot()["ruleset"], "standard-v22")
 
     def test_random_setup_is_seeded_and_respects_component_counts(self) -> None:
         first = GaiaState.initial(2, seed=19)
@@ -282,7 +290,10 @@ class StandardGaiaRulesTests(unittest.TestCase):
         )
         state = replace(state, player_to_move=0, players=tuple(players))
 
-        before_pi = state._apply_build(repeated_targets[0])
+        before_pi = replace(
+            decline_passive_charge(state._apply_build(repeated_targets[0])),
+            player_to_move=0,
+        )
         self.assertEqual(before_pi.players[0].knowledge, 0)
         self.assertTrue(
             before_pi.players[0].colonized_types & (1 << int(repeated_terrain))
@@ -301,10 +312,13 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(with_pi._income_preview(0)["power_tokens"], 1)
         self.assertEqual(with_pi._income_preview(0)["power_charge"], 4)
 
-        repeated = with_pi._apply_build(repeated_targets[1])
+        repeated = replace(
+            decline_passive_charge(with_pi._apply_build(repeated_targets[1])),
+            player_to_move=0,
+        )
         self.assertEqual(repeated.players[0].knowledge, 0)
 
-        rewarded = repeated._apply_build(different_target)
+        rewarded = decline_passive_charge(repeated._apply_build(different_target))
         self.assertEqual(rewarded.players[0].knowledge, 3)
         self.assertTrue(
             rewarded.players[0].colonized_types
@@ -431,29 +445,144 @@ class StandardGaiaRulesTests(unittest.TestCase):
             placement_step=len(state.placement_order),
         )
 
-        pending = state._trigger_passive_charge(0, target, 2)
+        pending = state._trigger_passive_charge(0, target)
         self.assertEqual(pending.player_to_move, 1)
-        self.assertEqual(pending.pending_taklons_charge_player, 1)
+        self.assertEqual(pending.pending_passive_charge_player, 1)
         self.assertEqual(
             pending.legal_actions(),
+            (PASSIVE_CHARGE_ACCEPT_ACTION, PASSIVE_CHARGE_DECLINE_ACTION),
+        )
+        self.assertEqual(pending.snapshot()["phase"], "passive_charge")
+        self.assertEqual(pending.snapshot()["passive_charge"]["amount"], 3)
+
+        accepted = pending.apply(PASSIVE_CHARGE_ACCEPT_ACTION)
+        self.assertEqual(accepted.pending_taklons_charge_player, 1)
+        self.assertEqual(
+            accepted.legal_actions(),
             (TAKLONS_PASSIVE_BEFORE_ACTION, TAKLONS_PASSIVE_AFTER_ACTION),
         )
-        self.assertEqual(pending.snapshot()["phase"], "taklons_passive_charge")
+        self.assertEqual(accepted.snapshot()["phase"], "taklons_passive_charge")
 
-        before = pending.apply(TAKLONS_PASSIVE_BEFORE_ACTION).players[1]
-        after = pending.apply(TAKLONS_PASSIVE_AFTER_ACTION).players[1]
-        self.assertEqual(before.vp, 9)
-        self.assertEqual(after.vp, 9)
+        before = accepted.apply(TAKLONS_PASSIVE_BEFORE_ACTION).players[1]
+        after = accepted.apply(TAKLONS_PASSIVE_AFTER_ACTION).players[1]
+        self.assertEqual(before.vp, 8)
+        self.assertEqual(after.vp, 8)
         self.assertEqual(before.brainstone_bowl, 2)
         self.assertEqual(after.brainstone_bowl, 2)
-        self.assertEqual((before.bowl_one, before.bowl_two, before.bowl_three), (0, 4, 0))
-        self.assertEqual((after.bowl_one, after.bowl_two, after.bowl_three), (1, 2, 1))
-        self.assertEqual(pending.apply(TAKLONS_PASSIVE_AFTER_ACTION).player_to_move, 1)
+        self.assertEqual((before.bowl_one, before.bowl_two, before.bowl_three), (0, 3, 1))
+        self.assertEqual((after.bowl_one, after.bowl_two, after.bowl_three), (1, 1, 2))
+        self.assertEqual(accepted.apply(TAKLONS_PASSIVE_AFTER_ACTION).player_to_move, 1)
 
-        tech_pending = replace(pending, pending_tech_player=0)
+        tech_pending = replace(accepted, pending_tech_player=0)
         resumed = tech_pending.apply(TAKLONS_PASSIVE_AFTER_ACTION)
         self.assertEqual(resumed.player_to_move, 0)
         self.assertEqual(resumed.pending_tech_player, 0)
+
+        declined = pending.apply(PASSIVE_CHARGE_DECLINE_ACTION)
+        self.assertEqual(declined.players[1], pending.players[1])
+        self.assertEqual(declined.player_to_move, 1)
+
+    def test_passive_charge_uses_opponents_highest_structure_and_clockwise_choices(self) -> None:
+        state = GaiaState.initial(4, seed=5, first_player=0)
+        source = next(planet for planet, active in enumerate(state.active_planets) if active)
+        nearby = [
+            planet
+            for planet, active in enumerate(state.active_planets)
+            if active and planet != source and state._distance(source, planet) <= 2
+        ]
+        self.assertGreaterEqual(len(nearby), 3)
+        owners = [-1] * len(state.owners)
+        buildings = [Building.EMPTY] * len(state.buildings)
+        owners[nearby[0]] = 1
+        buildings[nearby[0]] = Building.MINE
+        owners[nearby[1]] = 1
+        buildings[nearby[1]] = Building.PLANETARY_INSTITUTE
+        owners[nearby[2]] = 2
+        buildings[nearby[2]] = Building.MINE
+        far = next(
+            planet
+            for planet, active in enumerate(state.active_planets)
+            if active and state._distance(source, planet) > 2
+        )
+        owners[far] = 3
+        buildings[far] = Building.ACADEMY
+        players = list(state.players)
+        players[1] = replace(
+            players[1], bowl_one=0, bowl_two=4, bowl_three=0, vp=10, passed=True
+        )
+        players[2] = replace(players[2], bowl_one=0, bowl_two=4, bowl_three=0, vp=10)
+        players[3] = replace(players[3], bowl_one=0, bowl_two=4, bowl_three=0, vp=10)
+        state = replace(
+            state,
+            owners=tuple(owners),
+            buildings=tuple(int(value) for value in buildings),
+            players=tuple(players),
+            player_to_move=0,
+            round_number=1,
+            placement_step=len(state.placement_order),
+        )
+
+        first = state._trigger_passive_charge(0, source)
+        self.assertEqual(first.pending_passive_charge_player, 1)
+        self.assertEqual(first.pending_passive_charge_amount, 3)
+        self.assertEqual(first.pending_passive_charge_queue, ((2, 1),))
+        self.assertEqual(first.snapshot()["passive_charge"]["structure_power"], 3)
+        self.assertEqual(first.snapshot()["passive_charge"]["vp_cost"], 2)
+
+        second = first.apply(PASSIVE_CHARGE_DECLINE_ACTION)
+        self.assertEqual(second.pending_passive_charge_player, 2)
+        self.assertEqual(second.pending_passive_charge_amount, 1)
+        finished = second.apply(PASSIVE_CHARGE_ACCEPT_ACTION)
+        self.assertEqual(finished.players[1], state.players[1])
+        self.assertEqual(finished.players[2].vp, 10)
+        self.assertEqual(
+            (finished.players[2].bowl_two, finished.players[2].bowl_three),
+            (3, 1),
+        )
+        self.assertEqual(finished.player_to_move, 2)
+
+    def test_passive_charge_caps_by_vp_and_actual_power_capacity(self) -> None:
+        state = GaiaState.initial(2, seed=7, first_player=0)
+        source = next(planet for planet, active in enumerate(state.active_planets) if active)
+        neighbor = next(
+            planet
+            for planet, active in enumerate(state.active_planets)
+            if active and planet != source and state._distance(source, planet) <= 2
+        )
+        owners = [-1] * len(state.owners)
+        buildings = [Building.EMPTY] * len(state.buildings)
+        owners[neighbor] = 1
+        buildings[neighbor] = Building.PLANETARY_INSTITUTE
+        players = list(state.players)
+        players[1] = replace(players[1], bowl_one=0, bowl_two=1, bowl_three=0, vp=0)
+        state = replace(
+            state,
+            owners=tuple(owners),
+            buildings=tuple(int(value) for value in buildings),
+            players=tuple(players),
+            player_to_move=0,
+            round_number=1,
+            placement_step=len(state.placement_order),
+        )
+
+        pending = state._trigger_passive_charge(0, source)
+        offer = pending.snapshot()["passive_charge"]
+        self.assertEqual(offer["structure_power"], 3)
+        self.assertEqual(offer["amount"], 1)
+        self.assertEqual(offer["chargeable"], 1)
+        self.assertEqual(offer["vp_cost"], 0)
+        charged = pending.apply(PASSIVE_CHARGE_ACCEPT_ACTION)
+        self.assertEqual(charged.players[1].vp, 0)
+        self.assertEqual(
+            (charged.players[1].bowl_two, charged.players[1].bowl_three),
+            (0, 1),
+        )
+
+        full = replace(players[1], bowl_one=0, bowl_two=0, bowl_three=1, vp=10)
+        no_offer = replace(state, players=(state.players[0], full))._trigger_passive_charge(
+            0, source
+        )
+        self.assertEqual(no_offer.pending_passive_charge_player, -1)
 
     def test_ivits_pi_places_one_space_station_per_round_and_extends_range(self) -> None:
         state = finish_starting_placement(
@@ -887,6 +1016,8 @@ class StandardGaiaRulesTests(unittest.TestCase):
         before = state.players[0]
 
         downgraded = state.apply(action)
+        self.assertEqual(downgraded.pending_passive_charge_player, 1)
+        downgraded = decline_passive_charge(downgraded)
         after = downgraded.players[0]
         self.assertEqual(downgraded.buildings[first_lab], Building.TRADING_STATION)
         self.assertEqual((after.credits, after.ore, after.knowledge), (before.credits, before.ore, 0))
@@ -900,7 +1031,11 @@ class StandardGaiaRulesTests(unittest.TestCase):
                 downgraded.players[1].bowl_two,
                 downgraded.players[1].vp,
             ),
-            (2, 6, 9),
+            (
+                state.players[1].bowl_one,
+                state.players[1].bowl_two,
+                state.players[1].vp,
+            ),
         )
 
         advanced = downgraded.apply(downgraded.research_action(Track.SCIENCE))
@@ -919,6 +1054,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(rebuilt.buildings[first_lab], Building.RESEARCH_LAB)
         self.assertEqual((rebuilt.players[0].credits, rebuilt.players[0].ore), (10, 0))
         self.assertEqual(rebuilt.pending_tech_player, 0)
+        rebuilt = decline_passive_charge(rebuilt)
         tech_action = rebuilt.legal_actions()[0]
         tech_tile = rebuilt.standard_tech_tiles[tech_action - TECH_OFFSET]
         completed = rebuilt.apply(tech_action)
@@ -1128,7 +1264,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         gaia_before = with_pi._final_scoring_metric(0, 3)
         mines_before = with_pi._building_count(0, Building.MINE)
         ore_income_before = with_pi._income_preview(0)["ore"]
-        built = with_pi.apply(action)
+        built = decline_passive_charge(with_pi.apply(action))
 
         self.assertEqual((built.players[0].credits, built.players[0].ore), (8, 9))
         self.assertEqual(built.players[0].knowledge, 2)
@@ -1209,7 +1345,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         snapshot = GaiaState.initial(3, seed=41).snapshot()
         setup = snapshot["setup"]
 
-        self.assertEqual(snapshot["ruleset"], "standard-v21")
+        self.assertEqual(snapshot["ruleset"], "standard-v22")
         self.assertEqual(setup["seed"], 41)
         self.assertEqual(setup["map"]["sector_count"], 10)
         self.assertEqual(len(setup["map"]["sectors"]), 10)
@@ -3775,7 +3911,9 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertIn(state.upgrade_academy_action(planet), state.legal_actions())
         self.assertIn(state.upgrade_qic_academy_action(planet), state.legal_actions())
 
-        pending = state.apply(state.upgrade_qic_academy_action(planet))
+        pending = decline_passive_charge(
+            state.apply(state.upgrade_qic_academy_action(planet))
+        )
         self.assertEqual(pending.players[0].qic_academies, 1)
         resolved = pending.apply(pending.tech_action(0))
         resolved = resolved.apply(SKIP_TECH_RESEARCH_ACTION)

@@ -438,7 +438,9 @@ NEVLAS_QIC_ACTION = NEVLAS_ORE_ACTION + 1
 NEVLAS_KNOWLEDGE_ACTION = NEVLAS_QIC_ACTION + 1
 LOST_PLANET_OFFSET = NEVLAS_KNOWLEDGE_ACTION + 1
 LOST_PLANET_LIMIT = LOST_PLANET_OFFSET + MAX_BOARD_SPACES
-ACTION_SIZE = LOST_PLANET_LIMIT
+PASSIVE_CHARGE_ACCEPT_ACTION = LOST_PLANET_LIMIT
+PASSIVE_CHARGE_DECLINE_ACTION = PASSIVE_CHARGE_ACCEPT_ACTION + 1
+ACTION_SIZE = PASSIVE_CHARGE_DECLINE_ACTION + 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -504,8 +506,8 @@ class GaiaState:
     """Deterministic standard-rules core for neural perfect-information search.
 
     The state implements the shared Gaia Project rules. Optional out-of-turn
-    charging uses a deterministic accept-when-affordable policy for ordinary
-    factions; Taklons PI charging exposes the official before/after choice.
+    charging is represented as an accept/decline decision for every eligible
+    opponent; Taklons PI charging then exposes the official before/after choice.
     Federation building uses a canonical minimum-satellite plan so both
     mechanics fit a fixed AlphaZero action space.
     """
@@ -567,6 +569,11 @@ class GaiaState:
     pending_gaia_conversion_player: int = -1
     pending_gaia_conversion_power: int = 0
     pending_itars_gaia_player: int = -1
+    pending_passive_charge_player: int = -1
+    pending_passive_charge_acting: int = -1
+    pending_passive_charge_planet: int = -1
+    pending_passive_charge_amount: int = 0
+    pending_passive_charge_queue: tuple[tuple[int, int], ...] = ()
     pending_taklons_charge_player: int = -1
     pending_taklons_charge_acting: int = -1
     pending_taklons_charge_amount: int = 0
@@ -817,6 +824,8 @@ class GaiaState:
             if available >= 4:
                 actions.append(TERRANS_GAIA_QIC_ACTION)
             return tuple(actions)
+        if self.pending_passive_charge_player >= 0:
+            return (PASSIVE_CHARGE_ACCEPT_ACTION, PASSIVE_CHARGE_DECLINE_ACTION)
         if self.pending_taklons_charge_player >= 0:
             return (TAKLONS_PASSIVE_BEFORE_ACTION, TAKLONS_PASSIVE_AFTER_ACTION)
         if (
@@ -1107,6 +1116,8 @@ class GaiaState:
             raise ValueError(f"illegal action {action}: {self.describe_action(action)}")
         if self.pending_gaia_conversion_player >= 0:
             return self._apply_terrans_gaia_conversion(action)
+        if self.pending_passive_charge_player >= 0:
+            return self._apply_passive_charge_choice(action)
         if self.pending_taklons_charge_player >= 0:
             return self._apply_taklons_passive_charge(action)
         if action == ITARS_GAIA_TECH_ACTION:
@@ -1365,7 +1376,6 @@ class GaiaState:
         return state._trigger_passive_charge(
             player,
             planet,
-            state._structure_power(player, Building.MINE, planet),
         )
 
     def _apply_gaia(self, planet: int, *, range_bonus: int = 0) -> GaiaState:
@@ -1461,11 +1471,6 @@ class GaiaState:
         return state._trigger_passive_charge(
             player,
             lab_planet,
-            state._structure_power(
-                player,
-                Building.TRADING_STATION,
-                lab_planet,
-            ),
         )
 
     def _apply_upgrade(
@@ -1517,7 +1522,6 @@ class GaiaState:
         state = state._trigger_passive_charge(
             player,
             planet,
-            state._structure_power(player, target, planet),
         )
         if target in (Building.RESEARCH_LAB, Building.ACADEMY):
             return state
@@ -1954,7 +1958,6 @@ class GaiaState:
         return state._trigger_passive_charge(
             player,
             LOST_PLANET_SLOT,
-            state._structure_power(player, Building.MINE, LOST_PLANET_SLOT),
         )
 
     def _can_place_ivits_space_station(self, player: int, space: int) -> bool:
@@ -2098,6 +2101,7 @@ class GaiaState:
         if (
             self.pending_gaia_conversion_player >= 0
             or self.pending_itars_gaia_player >= 0
+            or self.pending_passive_charge_player >= 0
             or self.pending_taklons_charge_player >= 0
             or self.pending_tech_player >= 0
             or self.pending_advanced_tech >= 0
@@ -2789,40 +2793,95 @@ class GaiaState:
             moved = replace(moved, brainstone_bowl=4)
         return replace(moved, gaia_power=info.gaia_power + amount)
 
-    def _trigger_passive_charge(self, acting: int, planet: int, amount: int) -> GaiaState:
-        players = list(self.players)
-        for opponent, info in enumerate(players):
-            if opponent == acting:
-                continue
-            adjacent = any(
-                self._player_has_structure(opponent, other)
-                and self._distance(planet, other) <= 2
-                for other in range(N)
+    def _trigger_passive_charge(self, acting: int, planet: int) -> GaiaState:
+        offers: list[tuple[int, int]] = []
+        for offset in range(1, self.num_players):
+            opponent = (acting + offset) % self.num_players
+            info = self.players[opponent]
+            structure_power = self._passive_charge_structure_power(
+                opponent,
+                planet,
             )
-            if not adjacent:
+            amount = min(structure_power, info.vp + 1)
+            if amount <= 0:
                 continue
-            affordable = min(amount, info.vp + 1)
-            if affordable <= 0:
-                continue
-            _, chargeable = self._charge_power(info, affordable)
-            if chargeable == 0:
-                continue
+            _, chargeable = self._charge_power(info, amount)
+            if chargeable > 0:
+                offers.append((opponent, amount))
+        if not offers:
+            return self
+        opponent, amount = offers[0]
+        return replace(
+            self,
+            player_to_move=opponent,
+            pending_passive_charge_player=opponent,
+            pending_passive_charge_acting=acting,
+            pending_passive_charge_planet=planet,
+            pending_passive_charge_amount=amount,
+            pending_passive_charge_queue=tuple(offers[1:]),
+        )
+
+    def _apply_passive_charge_choice(self, action: int) -> GaiaState:
+        if action not in (PASSIVE_CHARGE_ACCEPT_ACTION, PASSIVE_CHARGE_DECLINE_ACTION):
+            raise ValueError("invalid passive-charge choice")
+        player = self.pending_passive_charge_player
+        acting = self.pending_passive_charge_acting
+        amount = self.pending_passive_charge_amount
+        if player < 0 or acting < 0 or amount <= 0:
+            raise ValueError("passive charge is not pending")
+
+        state = replace(
+            self,
+            pending_passive_charge_player=-1,
+            pending_passive_charge_amount=0,
+        )
+        if action == PASSIVE_CHARGE_ACCEPT_ACTION:
+            info = state.players[player]
             faction = FACTIONS[info.faction]
-            if faction.passive_power_token and self._has_pi(opponent):
+            if faction.passive_power_token and state._has_pi(player):
                 return replace(
-                    self,
-                    players=tuple(players),
-                    player_to_move=opponent,
-                    pending_taklons_charge_player=opponent,
+                    state,
+                    pending_taklons_charge_player=player,
                     pending_taklons_charge_acting=acting,
-                    pending_taklons_charge_amount=affordable,
+                    pending_taklons_charge_amount=amount,
                 )
-            charged_info, charged = self._charge_power(info, affordable)
-            if charged == 0:
-                continue
-            charged_info = replace(charged_info, vp=charged_info.vp - max(0, charged - 1))
-            players[opponent] = charged_info
-        return replace(self, players=tuple(players))
+            info, charged = state._charge_power(info, amount)
+            info = replace(info, vp=info.vp - max(0, charged - 1))
+            state = replace(state, players=state._replace_player(player, info))
+        return state._continue_passive_charge()
+
+    def _continue_passive_charge(self) -> GaiaState:
+        acting = self.pending_passive_charge_acting
+        if acting < 0:
+            acting = self.pending_taklons_charge_acting
+        if acting < 0:
+            raise ValueError("passive-charge acting player is missing")
+        if self.pending_passive_charge_queue:
+            opponent, amount = self.pending_passive_charge_queue[0]
+            return replace(
+                self,
+                player_to_move=opponent,
+                pending_passive_charge_player=opponent,
+                pending_passive_charge_acting=acting,
+                pending_passive_charge_amount=amount,
+                pending_passive_charge_queue=self.pending_passive_charge_queue[1:],
+                pending_taklons_charge_player=-1,
+                pending_taklons_charge_acting=-1,
+                pending_taklons_charge_amount=0,
+            )
+        state = replace(
+            self,
+            player_to_move=acting,
+            pending_passive_charge_player=-1,
+            pending_passive_charge_acting=-1,
+            pending_passive_charge_planet=-1,
+            pending_passive_charge_amount=0,
+            pending_passive_charge_queue=(),
+            pending_taklons_charge_player=-1,
+            pending_taklons_charge_acting=-1,
+            pending_taklons_charge_amount=0,
+        )
+        return state._advance_turn()
 
     def _apply_taklons_passive_charge(self, action: int) -> GaiaState:
         if action not in (TAKLONS_PASSIVE_BEFORE_ACTION, TAKLONS_PASSIVE_AFTER_ACTION):
@@ -2843,24 +2902,11 @@ class GaiaState:
         state = replace(
             self,
             players=self._replace_player(player, info),
-            player_to_move=acting,
             pending_taklons_charge_player=-1,
             pending_taklons_charge_acting=-1,
             pending_taklons_charge_amount=0,
         )
-        if (
-            state.pending_gaia_conversion_player >= 0
-            or state.pending_itars_gaia_player >= 0
-            or state.pending_tech_player >= 0
-            or state.pending_advanced_tech >= 0
-            or state.pending_research_player >= 0
-            or state.pending_lost_planet_player >= 0
-            or state.pending_power_terraform_player >= 0
-            or state.pending_booster_terraform_player >= 0
-            or state.pending_booster_range_player >= 0
-        ):
-            return state
-        return state._advance_turn()
+        return state._continue_passive_charge()
 
     def _federation_plan(self, player: int) -> tuple[tuple[int, ...], int] | None:
         plan = self._federation_plan_details(player)
@@ -3691,6 +3737,32 @@ class GaiaState:
             or self.coexisting_mine_owner[planet] == player
         )
 
+    def _player_structure_power_at(self, player: int, planet: int) -> int:
+        power = 0
+        if self.owners[planet] == player:
+            power = self._structure_power(
+                player,
+                Building(self.buildings[planet]),
+                planet,
+            )
+        if self.coexisting_mine_owner[planet] == player:
+            power = max(
+                power,
+                self._structure_power(player, Building.MINE, planet),
+            )
+        return power
+
+    def _passive_charge_structure_power(self, player: int, source: int) -> int:
+        return max(
+            (
+                self._player_structure_power_at(player, planet)
+                for planet in range(N)
+                if self._player_has_structure(player, planet)
+                and self._distance(source, planet) <= 2
+            ),
+            default=0,
+        )
+
     def _colonized_sectors(self, player: int) -> set[int]:
         return {
             self.planet_sectors[planet]
@@ -3931,6 +4003,9 @@ class GaiaState:
             float(self.pending_gaia_conversion_player >= 0),
             self.pending_gaia_conversion_power / 15.0,
             float(self.pending_itars_gaia_player >= 0),
+            float(self.pending_passive_charge_player >= 0),
+            self.pending_passive_charge_amount / 7.0,
+            len(self.pending_passive_charge_queue) / 3.0,
             float(self.pending_taklons_charge_player >= 0),
             self.pending_taklons_charge_amount / 7.0,
             float(self.pending_tech_player >= 0),
@@ -3954,6 +4029,18 @@ class GaiaState:
         values.extend(
             float(self.pending_itars_gaia_player == player)
             for player in range(self.num_players)
+        )
+        values.extend(
+            float(self.pending_passive_charge_player == player)
+            for player in range(self.num_players)
+        )
+        values.extend(
+            float(self.pending_passive_charge_acting == player)
+            for player in range(self.num_players)
+        )
+        values.extend(
+            float(self.pending_passive_charge_planet == planet)
+            for planet in range(N)
         )
         values.extend(
             float(self.pending_taklons_charge_player == player)
@@ -4162,6 +4249,10 @@ class GaiaState:
             return "pass"
         if action == BRAINSTONE_ACTION:
             return "select Brainstone as 3 power"
+        if action == PASSIVE_CHARGE_ACCEPT_ACTION:
+            return "accept passive power charge"
+        if action == PASSIVE_CHARGE_DECLINE_ACTION:
+            return "decline passive power charge"
         if action == TAKLONS_PASSIVE_BEFORE_ACTION:
             return "Taklons PI: gain 1 power token before passive charge"
         if action == TAKLONS_PASSIVE_AFTER_ACTION:
@@ -4232,6 +4323,11 @@ class GaiaState:
                 f"Starting booster selection {self.booster_selection_step}/{len(self.booster_selection_order)}"
             ]
             lines[0] += f" | player {self.player_to_move} to choose"
+        elif self.pending_passive_charge_player >= 0:
+            lines = [
+                f"Round {min(self.round_number, MAX_ROUNDS)}"
+                f" | player {self.pending_passive_charge_player} chooses whether to charge power"
+            ]
         elif self.pending_taklons_charge_player >= 0:
             lines = [
                 f"Round {min(self.round_number, MAX_ROUNDS)}"
@@ -4260,6 +4356,7 @@ class GaiaState:
             not self.is_terminal
             and not self.is_starting_placement
             and not self.is_booster_selection
+            and self.pending_passive_charge_player < 0
             and self.pending_taklons_charge_player < 0
             and self.pending_gaia_conversion_player < 0
             and self.pending_itars_gaia_player < 0
@@ -4288,6 +4385,7 @@ class GaiaState:
             not self.is_terminal
             and not self.is_starting_placement
             and not self.is_booster_selection
+            and self.pending_passive_charge_player < 0
             and self.pending_taklons_charge_player < 0
             and self.pending_gaia_conversion_player < 0
             and self.pending_itars_gaia_player < 0
@@ -4296,7 +4394,7 @@ class GaiaState:
                 self.round_scoring_tiles[self.round_number - 1]
             ].key
         return {
-            "ruleset": "standard-v21",
+            "ruleset": "standard-v22",
             "round": max(0, min(self.round_number, MAX_ROUNDS)),
             "max_rounds": MAX_ROUNDS,
             "phase": (
@@ -4304,6 +4402,8 @@ class GaiaState:
                 if self.is_starting_placement
                 else "booster_selection"
                 if self.is_booster_selection
+                else "passive_charge"
+                if self.pending_passive_charge_player >= 0
                 else "taklons_passive_charge"
                 if self.pending_taklons_charge_player >= 0
                 else "gaia_conversion"
@@ -4314,6 +4414,56 @@ class GaiaState:
                 if self.pending_itars_gaia_player >= 0
                 else "terminal" if self.is_terminal else "round"
             ),
+            "passive_charge": {
+                "active": self.pending_passive_charge_player >= 0,
+                "player": (
+                    self.pending_passive_charge_player
+                    if self.pending_passive_charge_player >= 0
+                    else None
+                ),
+                "acting_player": (
+                    self.pending_passive_charge_acting
+                    if self.pending_passive_charge_acting >= 0
+                    else None
+                ),
+                "source_planet": (
+                    self.pending_passive_charge_planet
+                    if self.pending_passive_charge_planet >= 0
+                    else None
+                ),
+                "structure_power": (
+                    self._passive_charge_structure_power(
+                        self.pending_passive_charge_player,
+                        self.pending_passive_charge_planet,
+                    )
+                    if self.pending_passive_charge_player >= 0
+                    else 0
+                ),
+                "amount": self.pending_passive_charge_amount,
+                "chargeable": (
+                    self._charge_power(
+                        self.players[self.pending_passive_charge_player],
+                        self.pending_passive_charge_amount,
+                    )[1]
+                    if self.pending_passive_charge_player >= 0
+                    else 0
+                ),
+                "vp_cost": (
+                    max(
+                        0,
+                        self._charge_power(
+                            self.players[self.pending_passive_charge_player],
+                            self.pending_passive_charge_amount,
+                        )[1]
+                        - 1,
+                    )
+                    if self.pending_passive_charge_player >= 0
+                    else 0
+                ),
+                "remaining_players": len(self.pending_passive_charge_queue),
+                "accept_action": PASSIVE_CHARGE_ACCEPT_ACTION,
+                "decline_action": PASSIVE_CHARGE_DECLINE_ACTION,
+            },
             "taklons_passive_charge": {
                 "active": self.pending_taklons_charge_player >= 0,
                 "player": (

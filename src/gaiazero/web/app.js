@@ -3049,6 +3049,8 @@ const PLAY_ACTION_LABELS = {
   skip_tech_research: "放弃科技板块的科研推进",
   power: "执行能量行动",
   brainstone: "选择脑石（按 3 能量）",
+  passive_charge_accept: "接受被动充能",
+  passive_charge_decline: "拒绝被动充能",
   taklons_passive_before: "Taklons 研究院：先获得能量片，再被动充能",
   taklons_passive_after: "Taklons 研究院：先被动充能，再获得能量片",
   ivits_space_station: "Ivits：放置空间站",
@@ -3529,6 +3531,10 @@ function playPhaseLabel(snapshot) {
   if (snapshot.phase === "booster_selection") {
     return `选择助推 ${snapshot.booster_selection.step + 1}/${snapshot.booster_selection.total}`;
   }
+  if (snapshot.phase === "passive_charge") {
+    const charge = snapshot.passive_charge || {};
+    return `被动充能：范围内最高建筑强度 ${charge.structure_power ?? 0}，可充 ${charge.chargeable ?? 0} 点，支付 ${charge.vp_cost ?? 0} VP`;
+  }
   if (snapshot.phase === "taklons_passive_charge") {
     return `Taklons 研究院：选择被动充能顺序（${snapshot.taklons_passive_charge?.amount ?? 0} 点）`;
   }
@@ -3591,6 +3597,8 @@ function renderPlayActions(session) {
   } else if (humanTurn) {
     notice.textContent = session.state.phase === "booster_selection"
       ? `P${session.state.current_player} 由人工选择一块起始助推板块`
+      : session.state.phase === "passive_charge"
+      ? `P${session.state.current_player} 决定是否接受 ${session.state.passive_charge?.chargeable ?? 0} 点被动充能（范围内最高建筑强度 ${session.state.passive_charge?.structure_power ?? 0}，支付 ${session.state.passive_charge?.vp_cost ?? 0} VP）`
       : session.state.phase === "taklons_passive_charge"
       ? `P${session.state.current_player} 选择 Taklons 研究院的被动充能顺序`
       : session.state.phase === "gaia_conversion"
