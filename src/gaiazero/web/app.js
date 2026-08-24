@@ -205,6 +205,8 @@ const state = {
     step: 0,
     loading: false,
     deleting: false,
+    indexRequestId: 0,
+    message: "",
     playing: false,
     timer: null
   },
@@ -1698,11 +1700,14 @@ function historyGame() {
   return historyIteration()?.games?.find((item) => item.game === state.history.game) || null;
 }
 
-async function refreshHistoryIndex() {
+async function refreshHistoryIndex({ loadTrace = true, force = false } = {}) {
+  if (state.history.deleting && !force) return;
+  const requestId = ++state.history.indexRequestId;
   try {
     const response = await fetch("/api/history", { cache: "no-store" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const index = await response.json();
+    if (requestId !== state.history.indexRequestId) return;
     state.history.index = index;
     const runs = historyRuns();
     if (!runs.length) {
@@ -1710,6 +1715,7 @@ async function refreshHistoryIndex() {
       state.history.iteration = null;
       state.history.game = null;
       state.history.trace = null;
+      state.history.loading = false;
       renderHistory();
       return;
     }
@@ -1725,7 +1731,7 @@ async function refreshHistoryIndex() {
     const preferredGame = games.find((item) => item.game === state.history.game) || games.at(-1);
     state.history.game = preferredGame?.game ?? null;
     renderHistorySelectors();
-    if (state.history.runId && state.history.iteration !== null && state.history.game !== null) {
+    if (loadTrace && state.history.runId && state.history.iteration !== null && state.history.game !== null) {
       const current = state.history.trace;
       const sameGame = current
         && current.run_id === state.history.runId
@@ -1734,10 +1740,14 @@ async function refreshHistoryIndex() {
       await loadHistoryGame(!sameGame);
     } else {
       state.history.trace = null;
+      state.history.loading = false;
       renderHistory();
     }
   } catch (error) {
+    if (requestId !== state.history.indexRequestId) return;
     state.history.index = state.history.index || { runs: [] };
+    state.history.loading = false;
+    state.history.message = error.message || String(error);
     renderHistory();
   }
 }
@@ -1749,6 +1759,7 @@ async function loadHistoryGame(goToEnd = true) {
     renderHistory();
     return;
   }
+  const requestId = state.history.indexRequestId;
   state.history.loading = true;
   renderHistory();
   try {
@@ -1756,7 +1767,9 @@ async function loadHistoryGame(goToEnd = true) {
     const response = await fetch(`/api/game?${params.toString()}`, { cache: "no-store" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const trace = await response.json();
-    if (trace.run_id === state.history.runId
+    if (requestId === state.history.indexRequestId
+      && !state.history.deleting
+      && trace.run_id === state.history.runId
       && trace.iteration === state.history.iteration
       && trace.game === state.history.game) {
       state.history.trace = trace;
@@ -1828,11 +1841,19 @@ async function deleteSelectedHistory() {
   const selectedIndex = runs.findIndex((run) => run.run_id === selected.run_id);
   const fallback = runs[selectedIndex - 1] || runs[selectedIndex + 1] || null;
   state.history.deleting = true;
+  state.history.indexRequestId += 1;
+  state.history.loading = false;
+  state.history.message = `正在删除${sourceLabel}...`;
   stopHistoryPlayback();
   renderHistorySelectors();
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 15_000);
   try {
     const params = new URLSearchParams({ run_id: selected.run_id });
-    const response = await fetch(`/api/history?${params.toString()}`, { method: "DELETE" });
+    const response = await fetch(`/api/history?${params.toString()}`, {
+      method: "DELETE",
+      signal: controller.signal,
+    });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
     state.history.runId = fallback?.run_id || null;
@@ -1840,10 +1861,14 @@ async function deleteSelectedHistory() {
     state.history.game = null;
     state.history.trace = null;
     state.history.step = 0;
-    await refreshHistoryIndex();
+    state.history.message = `${sourceLabel}已删除`;
+    await refreshHistoryIndex({ loadTrace: false, force: true });
   } catch (error) {
-    window.alert(error.message || String(error));
+    state.history.message = error.name === "AbortError"
+      ? "删除请求超时，请稍后重试"
+      : (error.message || String(error));
   } finally {
+    window.clearTimeout(timeout);
     state.history.deleting = false;
     renderHistory();
   }
@@ -2101,6 +2126,11 @@ function renderHistory() {
   const empty = byId("history-empty");
   if (!content || !empty) return;
   renderHistorySelectors();
+  const status = byId("history-action-status");
+  if (status) {
+    status.textContent = state.history.message || "";
+    status.hidden = !state.history.message;
+  }
   const trace = state.history.trace;
   const hasTrace = Boolean(trace?.steps?.length);
   empty.hidden = hasTrace || state.history.loading;

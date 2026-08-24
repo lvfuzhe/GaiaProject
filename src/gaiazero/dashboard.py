@@ -289,7 +289,13 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             )
             return
         try:
-            with self.server.play_lock:
+            if not self.server.play_lock.acquire(blocking=False):
+                self._send_json(
+                    {"error": "人工对战正在处理 AI 动作，请稍后再删除"},
+                    HTTPStatus.CONFLICT,
+                )
+                return
+            try:
                 session = self.server.play_session
                 selected_live_game = session.get("session_id") == run_id
                 if selected_live_game and session.get("status") != "complete":
@@ -314,6 +320,8 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     return
                 if selected_live_game:
                     self.server.play_session = {"status": "idle"}
+            finally:
+                self.server.play_lock.release()
             self._send_json({"ok": True, "deleted": True, "run_id": run_id})
         except OSError as error:
             self._send_json(

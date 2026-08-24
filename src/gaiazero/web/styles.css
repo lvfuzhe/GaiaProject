@@ -2033,6 +2033,16 @@ main {
   font-size: 14px;
 }
 
+.history-action-status {
+  display: block;
+  max-width: 260px;
+  margin-top: 5px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+  font-size: 10px;
+  font-weight: 600;
+}
+
 .history-empty {
   min-height: 260px;
   display: grid;

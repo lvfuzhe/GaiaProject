@@ -725,7 +725,9 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("history-player-board-grid", page)
             self.assertIn("history-star-map-frame", page)
             self.assertIn("history-delete", page)
+            self.assertIn("history-action-status", page)
             self.assertIn("function deleteSelectedHistory", app_script)
+            self.assertIn("AbortController", app_script)
             self.assertEqual(sector_content_type, "image/gif")
             self.assertTrue(sector_image.startswith(b"GIF"))
             self.assertTrue(outlined_sector_image.startswith(b"GIF"))
@@ -1199,6 +1201,52 @@ class DashboardTests(unittest.TestCase):
             restarted.shutdown()
             restarted.server_close()
             restarted_thread.join(timeout=5)
+
+    def test_history_delete_returns_conflict_instead_of_waiting_for_play_lock(self) -> None:
+        server = create_dashboard_server(self.metrics, port=0, quiet=True)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            run_id = "locked-delete"
+            now = "2026-01-01T00:00:00+00:00"
+            from gaiazero.telemetry import write_local_game
+
+            write_local_game(
+                self.history,
+                {
+                    "run_id": run_id,
+                    "source": "local",
+                    "status": "complete",
+                    "trace": {
+                        "run_id": run_id,
+                        "iteration": 1,
+                        "game": 1,
+                        "summary": {"moves": 0, "scores": [0]},
+                        "steps": [{"move": 0, "state": {"players": [], "planets": []}}],
+                    },
+                    "started_at": now,
+                    "updated_at": now,
+                },
+            )
+            self.assertTrue(server.play_lock.acquire(blocking=False))
+            try:
+                request = Request(
+                    f"http://127.0.0.1:{server.server_port}/api/history?run_id={run_id}",
+                    method="DELETE",
+                )
+                started = time.monotonic()
+                with self.assertRaises(HTTPError) as raised:
+                    urlopen(request, timeout=2)
+                elapsed = time.monotonic() - started
+            finally:
+                server.play_lock.release()
+            self.assertEqual(raised.exception.code, 409)
+            self.assertLess(elapsed, 1.0)
+            self.assertTrue((self.history / f"{run_id}.json").is_file())
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
 
     def test_interactive_action_ledger_marks_technology_tile_id(self) -> None:
         state = GaiaState.initial(
