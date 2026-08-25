@@ -133,7 +133,7 @@ for number in range(1, 11):
 for number in range(1, 7):
     name = f"final-scoring-{number:02d}.jpg"
     ASSETS[f"/assets/tiles/{name}"] = (f"assets/tiles/{name}", "image/jpeg")
-for number in range(1, 7):
+for number in range(1, 8):
     name = f"federation-{number:02d}.png"
     ASSETS[f"/assets/tiles/{name}"] = (f"assets/tiles/{name}", "image/png")
 for number in range(1, 11):

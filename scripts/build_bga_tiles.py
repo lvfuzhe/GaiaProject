@@ -179,7 +179,7 @@ def build(source_dir: Path, download: bool = False) -> list[Path]:
     outputs.extend(_crop_columns(
         sources["federationTokens.png"],
         first_column=1,
-        count=6,
+        count=7,
         source_size=(96, 119),
         output_size=(96, 119),
         filename_pattern="federation-{:02d}.png",

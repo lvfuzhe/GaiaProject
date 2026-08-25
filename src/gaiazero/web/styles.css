@@ -4261,18 +4261,6 @@ tbody tr:hover {
   line-height: 1.25;
 }
 
-.owned-federation-special {
-  display: grid;
-  place-items: center;
-  color: #f7f2d0;
-  border: 2px solid #d4b94d;
-  clip-path: polygon(50% 0, 95% 25%, 95% 75%, 50% 100%, 5% 75%, 5% 25%);
-  background: #42705d;
-  font-family: Consolas, monospace;
-  font-size: 11px;
-  font-weight: 800;
-}
-
 .personal-board-empty {
   padding: 28px;
   text-align: center;

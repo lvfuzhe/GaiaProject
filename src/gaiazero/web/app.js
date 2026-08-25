@@ -3150,7 +3150,10 @@ function renderPersonalBoards(containerId, snapshot) {
           <strong>${escapeHtml(FEDERATION_NAMES[id])}</strong>
         </div>`] : []),
         ...(gleensFederationTotal > 0 ? [`<div class="owned-federation-tile gleens" title="Gleens 专属联邦板块 × ${gleensFederationTotal}">
-          <div class="owned-federation-art owned-federation-special"><span>GLE</span>${gleensFederationTotal > 1 ? `<b class="owned-federation-count">×${gleensFederationTotal}</b>` : ""}</div>
+          <div class="owned-federation-art">
+            <img src="/assets/tiles/federation-07.png" alt="Gleens 专属联邦板块">
+            ${gleensFederationTotal > 1 ? `<b class="owned-federation-count">×${gleensFederationTotal}</b>` : ""}
+          </div>
           <strong>Gleens 专属联邦</strong>
         </div>`] : []),
       ].join("")

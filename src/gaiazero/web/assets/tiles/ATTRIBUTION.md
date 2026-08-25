@@ -13,7 +13,7 @@ directory are cropped from the Board Game Arena Gaia Project sprite sheets:
 the runtime assets locally. The script reads `runs/bga-tiles` by default; it
 does not require an HTTP request during normal application startup or builds.
 The generated standard-tech, booster, round-scoring, final-scoring, and federation
-file numbers preserve BGA IDs 1-9, 1-10, 1-10, 1-6, and 1-6 respectively.
+file numbers preserve BGA IDs 1-9, 1-10, 1-10, 1-6, and 1-7 respectively.
 Advanced-tech files 1-15 preserve BGA tech IDs 10-24.
 
 The original Gaia Project artwork and component designs remain the property of

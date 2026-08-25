@@ -689,6 +689,7 @@ class DashboardTests(unittest.TestCase):
                 "final-scoring-01.jpg",
                 "booster-01.jpg",
                 "federation-01.png",
+                "federation-07.png",
             ):
                 with urlopen(f"{base}/assets/tiles/{path}", timeout=5) as response:
                     tile_assets[path] = (response.headers.get_content_type(), response.read())
@@ -780,6 +781,7 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("已使用联邦片", app_script)
             self.assertIn("已获联邦板块", app_script)
             self.assertIn("owned-federation-count", app_script)
+            self.assertIn('/assets/tiles/federation-07.png', app_script)
             self.assertIn("acquiredAdvancedTech", app_script)
             self.assertIn("已被高级科技覆盖", app_script)
             self.assertIn('renderResearchBoard(snapshot, "history")', app_script)
