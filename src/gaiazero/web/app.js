@@ -12,15 +12,15 @@ const TERRAIN_LABELS = ["地球型", "沙漠", "沼泽", "火山", "氧化", "�
 // originally supplied a planet. These coordinates provide one canonical crop
 // for every printed terrain from the downloaded BGA sector artwork.
 const TERRAIN_ARTWORK_SOURCES = [
-  { tile: 1, q: 0, r: -1 },
-  { tile: 1, q: -1, r: 2 },
-  { tile: 1, q: -1, r: 1 },
-  { tile: 1, q: 2, r: 0 },
-  { tile: 1, q: 2, r: -1 },
-  { tile: 2, q: -2, r: 0 },
-  { tile: 2, q: 0, r: -1 },
-  { tile: 1, q: 1, r: -2 },
-  { tile: 3, q: -1, r: 1 },
+  { tile: 1, q: 0, r: -1 }, // Terra
+  { tile: 1, q: -1, r: 2 }, // Desert
+  { tile: 1, q: -1, r: 1 }, // Swamp
+  { tile: 1, q: 2, r: -1 }, // Volcanic
+  { tile: 1, q: 2, r: 0 }, // Oxide
+  { tile: 2, q: -2, r: 0 }, // Titanium
+  { tile: 2, q: 0, r: -1 }, // Ice
+  { tile: 1, q: 1, r: -2 }, // Transdim
+  { tile: 3, q: -1, r: 1 }, // Gaia
 ];
 const TRACK_LABELS = {
   terraforming: "地形改造",

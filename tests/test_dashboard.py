@@ -705,6 +705,8 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("function drawStarfield", app_script)
             self.assertIn("function drawPlanetArtwork", app_script)
             self.assertIn("const TERRAIN_ARTWORK_SOURCES", app_script)
+            self.assertIn("{ tile: 1, q: 2, r: -1 }, // Volcanic", app_script)
+            self.assertIn("{ tile: 1, q: 2, r: 0 }, // Oxide", app_script)
             self.assertIn(
                 'snapshot.setup?.map?.method === "bga-import"',
                 app_script,
