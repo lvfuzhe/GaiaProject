@@ -3,6 +3,7 @@
 These sprite sheets are downloaded from the Board Game Arena Gaia Project theme
 release and are used locally by the star-map renderer:
 
+- `blankHex.png`: the BGA star-sector background board.
 - `planets.png`: planet artwork, including the Lost Planet in column 10.
 - `structures.png`: faction-coloured mines, trading stations, research labs,
   planetary institutes, and academies.

@@ -694,7 +694,7 @@ class DashboardTests(unittest.TestCase):
                 with urlopen(f"{base}/assets/tiles/{path}", timeout=5) as response:
                     tile_assets[path] = (response.headers.get_content_type(), response.read())
             map_piece_assets = {}
-            for path in ("structures.png", "planets.png", "icons.png"):
+            for path in ("blankHex.png", "structures.png", "planets.png", "icons.png"):
                 with urlopen(f"{base}/assets/map-pieces/{path}", timeout=5) as response:
                     map_piece_assets[path] = (response.headers.get_content_type(), response.read())
             with urlopen(f"{base}/api/history", timeout=5) as response:
@@ -750,14 +750,14 @@ class DashboardTests(unittest.TestCase):
             self.assertNotIn('data-view="setup"', page)
             self.assertIn("function drawStarfield", app_script)
             self.assertIn("function drawPlanetArtwork", app_script)
-            self.assertIn("const TERRAIN_ARTWORK_SOURCES", app_script)
-            self.assertIn("{ tile: 1, q: 2, r: -1 }, // Volcanic", app_script)
-            self.assertIn("{ tile: 1, q: 2, r: 0 }, // Oxide", app_script)
             self.assertIn(
-                'snapshot.setup?.map?.method === "bga-import"',
+                "const BGA_PLANET_COLUMNS = [1, 4, 5, 3, 2, 6, 7, 9, 8, 10]",
                 app_script,
             )
             self.assertIn("function drawStarMapBoard", app_script)
+            self.assertIn("function drawSectorArtworkBackground", app_script)
+            self.assertIn("const artworkScale = compactMap ? 0.89 : 0.92", app_script)
+            self.assertIn("const useSectorArtwork = options.sectorArtwork ?? true", app_script)
             self.assertIn("function setupSectorCount", app_script)
             self.assertIn(
                 'drawStarMapBoard(byId("history-board-canvas"), snapshot, true, {',
@@ -789,6 +789,7 @@ class DashboardTests(unittest.TestCase):
             self.assertIn('/assets/map-pieces/structures.png', app_script)
             self.assertIn('/assets/map-pieces/planets.png', app_script)
             self.assertIn('/assets/map-pieces/icons.png', app_script)
+            self.assertIn('/assets/map-pieces/blankHex.png', app_script)
             self.assertIn("const markerSize = compactMap ? Math.max(4, size * 0.34)", app_script)
             self.assertNotIn("context.arc(x, y, size + (compactMap ? 2 : 4)", app_script)
             self.assertIn("acquiredAdvancedTech", app_script)

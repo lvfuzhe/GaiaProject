@@ -8,20 +8,6 @@ const TERRAIN_COLORS = [
 ];
 const SECTOR_FILLS = ["#eef4f1", "#f4f0e8", "#eef2f7", "#f5eeee", "#eff3ea"];
 const TERRAIN_LABELS = ["地球型", "沙漠", "沼泽", "火山", "氧化", "钛金", "冰冻", "跨维", "盖亚", "失落星球"];
-// BGA random maps retain each assembled slot, but not the printed sector that
-// originally supplied a planet. These coordinates provide one canonical crop
-// for every printed terrain from the downloaded BGA sector artwork.
-const TERRAIN_ARTWORK_SOURCES = [
-  { tile: 1, q: 0, r: -1 }, // Terra
-  { tile: 1, q: -1, r: 2 }, // Desert
-  { tile: 1, q: -1, r: 1 }, // Swamp
-  { tile: 1, q: 2, r: -1 }, // Volcanic
-  { tile: 1, q: 2, r: 0 }, // Oxide
-  { tile: 2, q: -2, r: 0 }, // Titanium
-  { tile: 2, q: 0, r: -1 }, // Ice
-  { tile: 1, q: 1, r: -2 }, // Transdim
-  { tile: 3, q: -1, r: 1 }, // Gaia
-];
 const TRACK_LABELS = {
   terraforming: "地形改造",
   navigation: "航行",
@@ -188,14 +174,15 @@ const PHASE_LABELS = {
   run_completed: "训练已完成",
   run_failed: "训练失败"
 };
-const sectorArtworkCache = new Map();
 const mapPieceArtworkCache = new Map();
 let sectorArtworkRenderQueued = false;
 const MAP_PIECE_PATHS = {
+  sectorBackground: "/assets/map-pieces/blankHex.png",
   structures: "/assets/map-pieces/structures.png",
   planets: "/assets/map-pieces/planets.png",
   icons: "/assets/map-pieces/icons.png",
 };
+const BGA_PLANET_COLUMNS = [1, 4, 5, 3, 2, 6, 7, 9, 8, 10];
 const BGA_STRUCTURE_CROPS = {
   mine: [750, 0, 69, 77],
   trading_station: [450, 0, 102, 120],
@@ -504,29 +491,10 @@ function queueSectorArtworkRender() {
     sectorArtworkRenderQueued = false;
     renderSetup(state.manualSetup.preview);
     renderPlanetPositionEditor();
+    renderBoard(latestState());
     renderPlay();
     renderHistory();
   });
-}
-
-function getSectorArtwork(tile, side) {
-  const key = `${tile}-${side}`;
-  if (!sectorArtworkCache.has(key)) {
-    const image = new Image();
-    const entry = { image, loaded: false, failed: false };
-    sectorArtworkCache.set(key, entry);
-    image.addEventListener("load", () => {
-      entry.loaded = true;
-      queueSectorArtworkRender();
-    }, { once: true });
-    image.addEventListener("error", () => {
-      entry.failed = true;
-      queueSectorArtworkRender();
-    }, { once: true });
-    image.src = sectorArtworkPath(tile, side);
-  }
-  const entry = sectorArtworkCache.get(key);
-  return entry.loaded && !entry.failed ? entry.image : null;
 }
 
 function getMapPieceArtwork(kind) {
@@ -2472,15 +2440,6 @@ function drawStarfield(context, width, height, seed) {
   context.restore();
 }
 
-function rotateAxial(q, r, steps) {
-  let rotatedQ = q;
-  let rotatedR = r;
-  for (let step = 0; step < ((steps % 6) + 6) % 6; step += 1) {
-    [rotatedQ, rotatedR] = [-rotatedR, rotatedQ + rotatedR];
-  }
-  return [rotatedQ, rotatedR];
-}
-
 function sectorLocalSpaces() {
   const spaces = [];
   for (let q = -2; q <= 2; q += 1) {
@@ -2506,12 +2465,23 @@ function assembledBoardSpaces(sectors) {
 }
 
 function boardGeometry(width, height, snapshot, showSectors) {
-  const spaces = assembledBoardSpaces(snapshot.setup?.map?.sectors || []);
-  const anchors = showSectors && spaces.length ? spaces : snapshot.planets;
-  const raw = anchors.map((item) => ({
-    rawX: Math.sqrt(3) * (Number(item.q) + Number(item.r) / 2),
-    rawY: 1.5 * Number(item.r),
-  }));
+  const sectors = snapshot.setup?.map?.sectors || [];
+  const spaces = assembledBoardSpaces(sectors);
+  const tileWidthUnits = 5 * Math.sqrt(3);
+  const tileHeightUnits = 8;
+  const raw = showSectors && sectors.length
+    ? sectors.flatMap((sector) => {
+      const rawX = Math.sqrt(3) * (Number(sector.q) + Number(sector.r) / 2);
+      const rawY = 1.5 * Number(sector.r);
+      return [
+        { rawX: rawX - tileWidthUnits / 2, rawY: rawY - tileHeightUnits / 2 },
+        { rawX: rawX + tileWidthUnits / 2, rawY: rawY + tileHeightUnits / 2 },
+      ];
+    })
+    : (showSectors && spaces.length ? spaces : snapshot.planets).map((item) => ({
+      rawX: Math.sqrt(3) * (Number(item.q) + Number(item.r) / 2),
+      rawY: 1.5 * Number(item.r),
+    }));
   const minX = Math.min(...raw.map((point) => point.rawX));
   const maxX = Math.max(...raw.map((point) => point.rawX));
   const minY = Math.min(...raw.map((point) => point.rawY));
@@ -2529,7 +2499,43 @@ function boardGeometry(width, height, snapshot, showSectors) {
     size: Math.max(compactMap ? 8 : 15, Math.min(29, scale * 0.47)),
     offsetX: (width - (maxX - minX) * scale) / 2 - minX * scale,
     offsetY: (height - (maxY - minY) * scale) / 2 - minY * scale,
+    tileWidthUnits,
+    tileHeightUnits,
   };
+}
+
+function drawSectorArtworkBackground(
+  context,
+  sectors,
+  scale,
+  offsetX,
+  offsetY,
+  compactMap,
+  tileWidthUnits = 5 * Math.sqrt(3),
+  tileHeightUnits = 8,
+) {
+  // Keep a transparent border around every BGA sector so adjacent tiles remain
+  // visually distinct instead of merging into one continuous hex field.
+  const artworkScale = compactMap ? 0.89 : 0.92;
+  const imageWidth = tileWidthUnits * scale * artworkScale;
+  const imageHeight = tileHeightUnits * scale * artworkScale;
+  const artwork = getMapPieceArtwork("sectorBackground");
+  for (const sector of sectors) {
+    const rawX = Math.sqrt(3) * (Number(sector.q) + Number(sector.r) / 2);
+    const rawY = 1.5 * Number(sector.r);
+    const x = offsetX + rawX * scale;
+    const y = offsetY + rawY * scale;
+    if (!artwork) {
+      drawSectorHex(context, x, y, Math.min(imageWidth, imageHeight) * 0.48, "#111a2d");
+      continue;
+    }
+    context.save();
+    context.translate(x, y);
+    context.rotate(Math.PI / 2 + Number(sector.rotation || 0) * Math.PI / 180);
+    context.globalAlpha = 0.98;
+    context.drawImage(artwork, -imageHeight / 2, -imageWidth / 2, imageHeight, imageWidth);
+    context.restore();
+  }
 }
 
 function drawAssembledHexGrid(context, sectors, scale, offsetX, offsetY, compactMap) {
@@ -2560,66 +2566,23 @@ function drawAssembledHexGrid(context, sectors, scale, offsetX, offsetY, compact
 }
 
 function drawPlanetArtwork(context, x, y, size, cellScale, planet, snapshot) {
+  void snapshot;
   const terrain = Number(planet.terrain);
-  if (terrain === 9) {
-    const image = getMapPieceArtwork("planets");
-    if (!image) return false;
-    const radius = Math.min(size * 0.76, cellScale * 0.72);
-    context.save();
-    context.beginPath();
-    context.arc(x, y, radius, 0, Math.PI * 2);
-    context.clip();
-    context.drawImage(image, 1320, 0, 132, 132, x - radius, y - radius, radius * 2, radius * 2);
-    context.restore();
-    context.save();
-    context.strokeStyle = "rgba(226, 239, 249, 0.24)";
-    context.lineWidth = Math.max(0.75, size * 0.05);
-    context.beginPath();
-    context.arc(x, y, radius, 0, Math.PI * 2);
-    context.stroke();
-    context.restore();
-    return true;
-  }
-  const bgaRandomMap = snapshot.setup?.map?.method === "bga-import";
-  const terrainSource = bgaRandomMap ? TERRAIN_ARTWORK_SOURCES[terrain] : null;
-  const sector = bgaRandomMap
-    ? null
-    : snapshot.setup?.map?.sectors?.find(
-      (candidate) => Number(candidate.tile) === Number(planet.sector),
-    );
-  if (!terrainSource && !sector) return false;
-  const artworkTile = terrainSource?.tile ?? sector.tile;
-  const image = getSectorArtwork(artworkTile, terrainSource ? "solid" : (sector.side || "solid"));
-  if (!image) return false;
-
-  const [localQ, localR] = terrainSource
-    ? [terrainSource.q, terrainSource.r]
-    : rotateAxial(
-      Number(planet.source_q ?? planet.q) - Number(sector.q),
-      Number(planet.source_r ?? planet.r) - Number(sector.r),
-      -Math.round(Number(sector.rotation) / 60),
-    );
-  const columnStep = image.naturalWidth / 5;
-  const rowStep = image.naturalHeight * 3 / 16;
-  const sourceX = image.naturalWidth / 2 + columnStep * (localQ + localR / 2);
-  const sourceY = image.naturalHeight / 2 + rowStep * localR;
-  const cropRatio = terrain === 7 ? 0.72 : terrain === 5 ? 0.98 : 0.91;
-  const cropSize = columnStep * cropRatio;
-  const terrainScale = terrain === 7 ? 0.76 : 0.84;
+  const column = BGA_PLANET_COLUMNS[terrain];
+  const image = getMapPieceArtwork("planets");
+  if (!image || !Number.isInteger(column)) return false;
+  const terrainScale = terrain === 7 || terrain === 9 ? 0.76 : terrain === 5 ? 0.88 : 0.84;
   const radius = Math.min(size * terrainScale, cellScale * 0.72);
 
   context.save();
   context.imageSmoothingEnabled = true;
   context.imageSmoothingQuality = "high";
-  context.beginPath();
-  context.arc(x, y, radius, 0, Math.PI * 2);
-  context.clip();
   context.drawImage(
     image,
-    sourceX - cropSize / 2,
-    sourceY - cropSize / 2,
-    cropSize,
-    cropSize,
+    column * 132,
+    0,
+    132,
+    132,
     x - radius,
     y - radius,
     radius * 2,
@@ -2653,10 +2616,7 @@ function drawBoard(canvas, snapshot, options = {}) {
   if (!snapshot || !snapshot.planets?.length) return;
   if (options.starfield) drawStarfield(context, width, height, snapshot.setup?.seed || 0);
   const showSectors = options.showSectors ?? Boolean(snapshot.setup?.map?.sectors?.length);
-  if (options.sectorArtwork && snapshot.setup?.map?.sectors?.length) {
-    drawSectorArtworkMap(context, width, height, snapshot);
-    return;
-  }
+  const sectors = snapshot.setup?.map?.sectors || [];
 
   const points = snapshot.planets.map((planet) => ({
     ...planet,
@@ -2664,13 +2624,33 @@ function drawBoard(canvas, snapshot, options = {}) {
     rawY: 1.5 * planet.r
   }));
   const geometry = boardGeometry(width, height, snapshot, showSectors);
-  const { compactMap, scale, size, offsetX, offsetY } = geometry;
+  const {
+    compactMap,
+    scale,
+    size,
+    offsetX,
+    offsetY,
+    tileWidthUnits,
+    tileHeightUnits,
+  } = geometry;
   const legalPlanetIds = new Set((options.legalPlanetIds || []).map(Number));
   const legalSpaceStations = options.legalSpaceStations || [];
 
-  if (showSectors) {
-    const sectors = snapshot.setup?.map?.sectors || [];
-    if (options.starfield) {
+  if (showSectors && sectors.length) {
+    const useSectorArtwork = options.sectorArtwork ?? true;
+    if (useSectorArtwork) {
+      drawSectorArtworkBackground(
+        context,
+        sectors,
+        scale,
+        offsetX,
+        offsetY,
+        compactMap,
+        tileWidthUnits,
+        tileHeightUnits,
+      );
+      drawAssembledHexGrid(context, sectors, scale, offsetX, offsetY, compactMap);
+    } else if (options.starfield) {
       drawAssembledHexGrid(context, sectors, scale, offsetX, offsetY, compactMap);
     } else {
       const sectorSize = Math.max(size * 3.65, scale * 1.9);
@@ -2860,62 +2840,6 @@ function drawBoard(canvas, snapshot, options = {}) {
         context.restore();
       }
     }
-  }
-}
-
-function drawSectorArtworkMap(context, width, height, snapshot) {
-  const sectors = snapshot.setup.map.sectors;
-  const centers = sectors.map((sector) => ({
-    sector,
-    rawX: Math.sqrt(3) * (sector.q + sector.r / 2),
-    rawY: 1.5 * sector.r,
-  }));
-  const tileWidthUnits = 5 * Math.sqrt(3);
-  const tileHeightUnits = 8;
-  const minX = Math.min(...centers.map((item) => item.rawX - tileWidthUnits / 2));
-  const maxX = Math.max(...centers.map((item) => item.rawX + tileWidthUnits / 2));
-  const minY = Math.min(...centers.map((item) => item.rawY - tileHeightUnits / 2));
-  const maxY = Math.max(...centers.map((item) => item.rawY + tileHeightUnits / 2));
-  const padding = width < 500 ? 14 : 26;
-  const scale = Math.min(
-    (width - padding * 2) / Math.max(1, maxX - minX),
-    (height - padding * 2) / Math.max(1, maxY - minY),
-  );
-  const offsetX = (width - (maxX - minX) * scale) / 2 - minX * scale;
-  const offsetY = (height - (maxY - minY) * scale) / 2 - minY * scale;
-  const artworkScale = 0.992;
-  const imageWidth = tileWidthUnits * scale * artworkScale;
-  const imageHeight = tileHeightUnits * scale * artworkScale;
-
-  for (const item of centers) {
-    const sector = item.sector;
-    const side = sector.side || (
-      snapshot.setup.factions?.length === 2 && [5, 6, 7].includes(sector.tile)
-        ? "outlined"
-        : "solid"
-    );
-    const artwork = getSectorArtwork(sector.tile, side);
-    const x = offsetX + item.rawX * scale;
-    const y = offsetY + item.rawY * scale;
-    if (!artwork) {
-      drawSectorHex(context, x, y, 4 * scale, "#111a2d");
-      context.fillStyle = "#dce6f3";
-      context.font = `700 ${Math.max(8, scale * 0.45)}px Segoe UI`;
-      context.textAlign = "center";
-      context.fillText(`S${String(sector.tile).padStart(2, "0")}`, x, y + 3);
-      continue;
-    }
-    context.save();
-    context.translate(x, y);
-    context.rotate(sector.rotation * Math.PI / 180);
-    context.drawImage(
-      artwork,
-      -imageWidth / 2,
-      -imageHeight / 2,
-      imageWidth,
-      imageHeight,
-    );
-    context.restore();
   }
 }
 
