@@ -20,6 +20,16 @@ from urllib.request import (
     build_opener,
 )
 
+from gaiazero.game.gaia_state import (
+    ADVANCED_TECH_TILES,
+    BOOSTER_LABELS,
+    FEDERATION_TILES,
+    FINAL_SCORING_TILES,
+    ROUND_SCORING_TILES,
+    STANDARD_TECH_TILES,
+    TRACK_COUNT,
+    Track,
+)
 from gaiazero.telemetry import write_local_game
 
 
@@ -371,6 +381,11 @@ class BgaClient:
             raise BgaReplayError(
                 "复盘页没有返回结构化行动日志，账号可能无权查看该复盘"
             ) from error
+        try:
+            initial_state = _extract_completesetup_data(replay_html)
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            # Older archive pages may only contain the action log.
+            initial_state = None
         game_name = str(game_data.get("gamename") or "").lower()
         if game_name != "gaiaproject":
             raise BgaReplayError("该地址不是《盖亚计划》复盘")
@@ -387,6 +402,7 @@ class BgaClient:
             game_data=game_data,
             packets=packets,
             review_players=review_parser.players,
+            initial_state=initial_state,
         )
 
     def _request_text(
@@ -505,10 +521,11 @@ def convert_bga_replay(
     game_data: dict[str, Any],
     packets: list[dict[str, Any]],
     review_players: dict[int, dict[str, Any]] | None = None,
+    initial_state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Convert BGA packets into GaiaZero's persisted replay contract."""
 
-    state = _BgaReplayState(table_id, game_data, packets)
+    state = _BgaReplayState(table_id, game_data, packets, initial_state)
     grouped: dict[int, list[dict[str, Any]]] = defaultdict(list)
     raw_packets: list[dict[str, Any]] = []
     for packet in packets:
@@ -688,6 +705,9 @@ def convert_bga_replay(
             "replay_url": replay_url,
             "players": players,
             "downloaded_at": imported_at,
+            "initial_setup_complete": initial_state is not None,
+            "initial_setup": _compact_initial_setup(initial_state),
+            "table_options": copy.deepcopy(game_data.get("tableOptions") or []),
             "log_packets": raw_packets,
         },
     }
@@ -699,6 +719,7 @@ class _BgaReplayState:
         table_id: int,
         game_data: dict[str, Any],
         packets: list[dict[str, Any]],
+        initial_state: dict[str, Any] | None = None,
     ) -> None:
         self.table_id = table_id
         self.notifications = [
@@ -739,10 +760,32 @@ class _BgaReplayState:
         self.terminal = False
         self.current_player = self.placement_order[0] if self.placement_order else 0
         self.first_player = _find_first_player(self.notifications, self.player_index)
-        self.booster_owners: dict[int, int] = {}
-        self.final_scoring = _collect_final_scoring(self.notifications)
+        board = initial_state.get("board") if isinstance(initial_state, dict) else None
+        if not isinstance(board, dict):
+            board = {}
+        self.booster_owners = _initial_boosters(board)
+        self.round_scoring = _initial_round_scoring(board)
+        self.final_scoring = (
+            _initial_final_scoring(board)
+            or _collect_final_scoring(self.notifications)
+        )
+        self.standard_tech = _initial_standard_tech(board)
+        self.advanced_tech = _initial_advanced_tech(board)
+        self.terraforming_federation = _initial_terraforming_federation(board)
+        self.federation_supply = _initial_federation_supply(board)
 
-        first_map, all_planet_coordinates = _collect_map_topology(self.notifications)
+        initial_map = initial_state.get("map") if isinstance(initial_state, dict) else None
+        first_map, all_planet_coordinates = _collect_map_topology(
+            self.notifications,
+            initial_map if isinstance(initial_map, dict) else None,
+        )
+        display_map = _as_int(board.get("displayMap"), 0)
+        self.map_size = (
+            "reduced"
+            if display_map == 2
+            or (display_map == 0 and len(_extract_sectors(first_map)) < 10)
+            else "normal"
+        )
         ordered_coordinates = sorted(all_planet_coordinates, key=lambda item: (item[1], item[0]))
         self.planet_ids = {
             coordinate: index for index, coordinate in enumerate(ordered_coordinates)
@@ -856,8 +899,15 @@ class _BgaReplayState:
             elif tech_id > 9 and tech_id - 10 not in player["advanced_tech_tiles"]:
                 player["advanced_tech_tiles"].append(tech_id - 10)
         elif notice_type == "notifyTakeFedToken" and player is not None:
-            player["federation_tiles"].append(_as_int(args.get("fedTokenId"), 0))
+            federation_tile = _as_int(args.get("fedTokenId"), 0)
+            player["federation_tiles"].append(federation_tile)
             player["federations"] = len(player["federation_tiles"])
+            supply_index = federation_tile - 1
+            if (
+                0 <= supply_index < len(self.federation_supply)
+                and self.federation_supply[supply_index] > 0
+            ):
+                self.federation_supply[supply_index] -= 1
         elif notice_type == "notifyFormFederation" and player is not None:
             self._mark_federation(args, player)
         elif notice_type == "notifyPass" and player is not None:
@@ -921,6 +971,7 @@ class _BgaReplayState:
             "seed": self.table_id,
             "map": {
                 "method": "bga-import",
+                "size": self.map_size,
                 "sector_count": len(self.sectors),
                 "sectors": copy.deepcopy(self.sectors),
                 "planet_sources": [
@@ -936,15 +987,16 @@ class _BgaReplayState:
             },
             "factions": setup_factions,
             "boosters": [
-                {"id": booster, "label": f"BGA 助推 {booster + 1}", "owner": owner}
+                {"id": booster, "label": BOOSTER_LABELS[booster], "owner": owner}
                 for booster, owner in sorted(self.booster_owners.items())
+                if 0 <= booster < len(BOOSTER_LABELS)
             ],
-            "round_scoring": [],
+            "round_scoring": copy.deepcopy(self.round_scoring),
             "final_scoring": copy.deepcopy(self.final_scoring),
-            "standard_tech": [],
-            "advanced_tech": [],
-            "terraforming_federation": None,
-            "federation_supply": [],
+            "standard_tech": copy.deepcopy(self.standard_tech),
+            "advanced_tech": copy.deepcopy(self.advanced_tech),
+            "terraforming_federation": copy.deepcopy(self.terraforming_federation),
+            "federation_supply": list(self.federation_supply),
         }
         return {
             "ruleset": "bga-gaiaproject",
@@ -1012,7 +1064,7 @@ class _BgaReplayState:
             return
         for key, owner in list(self.booster_owners.items()):
             if owner == player["id"]:
-                del self.booster_owners[key]
+                self.booster_owners[key] = -1
         self.booster_owners[booster] = player["id"]
         player["booster"] = booster
 
@@ -1370,9 +1422,14 @@ def _collect_initial_players(
 
 def _collect_map_topology(
     notifications: list[dict[str, Any]],
+    initial_map: dict[str, Any] | None = None,
 ) -> tuple[dict[tuple[int, int], dict[str, Any]], set[tuple[int, int]]]:
-    first_map: dict[tuple[int, int], dict[str, Any]] = {}
-    active_coordinates: set[tuple[int, int]] = set()
+    first_map = _flatten_map(initial_map) if isinstance(initial_map, dict) else {}
+    active_coordinates = {
+        coordinate
+        for coordinate, cell in first_map.items()
+        if _as_int(cell.get("planetType"), 0) > 0
+    }
     for notice in notifications:
         args = notice.get("args") or {}
         map_payload = args.get("map") if isinstance(args, dict) else None
@@ -1458,6 +1515,119 @@ def _collect_final_scoring(
         seen.add(tile["id"])
         tiles.append(copy.deepcopy(tile))
     return tiles
+
+
+def _initial_boosters(board: dict[str, Any]) -> dict[int, int]:
+    values = board.get("availBoosters")
+    if not isinstance(values, list):
+        return {}
+    return {
+        booster - 1: -1
+        for value in values
+        for booster in [_as_int(value, 0)]
+        if 1 <= booster <= len(BOOSTER_LABELS)
+    }
+
+
+def _initial_round_scoring(board: dict[str, Any]) -> list[dict[str, Any]]:
+    values = board.get("roundBonus")
+    if not isinstance(values, list):
+        return []
+    if values and _as_int(values[0], -1) == 0:
+        values = values[1:]
+    result: list[dict[str, Any]] = []
+    for round_index, value in enumerate(values[:6]):
+        tile = _as_int(value, 0) - 1
+        if not 0 <= tile < len(ROUND_SCORING_TILES):
+            continue
+        spec = ROUND_SCORING_TILES[tile]
+        result.append(
+            {
+                "round": round_index + 1,
+                "id": tile,
+                "key": spec.key,
+                "label": spec.label,
+                "points": spec.points,
+            }
+        )
+    return result
+
+
+def _initial_final_scoring(board: dict[str, Any]) -> list[dict[str, Any]]:
+    values = board.get("endGameBonus")
+    if not isinstance(values, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for value in values[:2]:
+        tile = _as_int(value, 0) - 1
+        if not 0 <= tile < len(FINAL_SCORING_TILES):
+            continue
+        spec = FINAL_SCORING_TILES[tile]
+        result.append({"id": tile, "key": spec.key, "label": spec.label})
+    return result
+
+
+def _initial_standard_tech(board: dict[str, Any]) -> list[dict[str, Any]]:
+    values = board.get("techs")
+    if not isinstance(values, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for position, value in enumerate(values[:9]):
+        tile = _as_int(value, 0) - 1
+        if not 0 <= tile < len(STANDARD_TECH_TILES):
+            continue
+        spec = STANDARD_TECH_TILES[tile]
+        result.append(
+            {
+                "space": position,
+                "track": Track(position).name.lower() if position < TRACK_COUNT else None,
+                "id": tile,
+                "key": spec.key,
+                "label": spec.label,
+            }
+        )
+    return result
+
+
+def _initial_advanced_tech(board: dict[str, Any]) -> list[dict[str, Any]]:
+    values = board.get("advTechs")
+    if not isinstance(values, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for position, value in enumerate(values[:TRACK_COUNT]):
+        tile = _as_int(value, 0) - 10
+        if not 0 <= tile < len(ADVANCED_TECH_TILES):
+            continue
+        spec = ADVANCED_TECH_TILES[tile]
+        result.append(
+            {
+                "track": Track(position).name.lower(),
+                "id": tile,
+                "key": spec.key,
+                "label": spec.label,
+            }
+        )
+    return result
+
+
+def _initial_terraforming_federation(
+    board: dict[str, Any],
+) -> dict[str, Any] | None:
+    tile = _as_int(board.get("bonusFedToken"), 0) - 1
+    if not 0 <= tile < len(FEDERATION_TILES):
+        return None
+    spec = FEDERATION_TILES[tile]
+    return {"id": tile, "key": spec.key, "label": spec.label}
+
+
+def _initial_federation_supply(board: dict[str, Any]) -> list[int]:
+    values = board.get("availFedTokens")
+    if not isinstance(values, list):
+        return []
+    return [
+        max(0, _as_int(value, 0))
+        for value in values[1 : 1 + len(FEDERATION_TILES)]
+    ]
 
 
 def _action_label(notifications: list[dict[str, Any]]) -> tuple[str, str]:
@@ -1749,6 +1919,80 @@ def _extract_json_assignment(source: str, name: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise TypeError(f"{name} must be an object")
     return value
+
+
+def _extract_completesetup_data(source: str) -> dict[str, Any]:
+    """Extract the authoritative move-zero state embedded in a BGA archive page."""
+
+    names = ("globalThis.gameui.completesetup", "gameui.completesetup")
+    call_position = -1
+    for name in names:
+        call_position = source.find(name)
+        if call_position >= 0:
+            break
+    if call_position < 0:
+        raise KeyError("gameui.completesetup")
+    position = source.index("(", call_position) + 1
+    quote: str | None = None
+    escaped = False
+    decoder = json.JSONDecoder()
+    while position < len(source):
+        character = source[position]
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == quote:
+                quote = None
+            position += 1
+            continue
+        if character in ('"', "'", "`"):
+            quote = character
+            position += 1
+            continue
+        if character == ")":
+            break
+        if character != "{":
+            position += 1
+            continue
+        try:
+            value, consumed = decoder.raw_decode(source[position:])
+        except json.JSONDecodeError:
+            position += 1
+            continue
+        if (
+            isinstance(value, dict)
+            and isinstance(value.get("board"), dict)
+            and isinstance(value.get("map"), dict)
+        ):
+            return value
+        position += max(1, consumed)
+    raise KeyError("gameui.completesetup initial state")
+
+
+def _compact_initial_setup(
+    initial_state: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not isinstance(initial_state, dict):
+        return None
+    keys = (
+        "board",
+        "map",
+        "players",
+        "playerList",
+        "playerorder",
+        "passOrder",
+        "gamestate",
+    )
+    return {
+        "source": "gameui.completesetup",
+        **{
+            key: copy.deepcopy(initial_state[key])
+            for key in keys
+            if key in initial_state
+        },
+    }
 
 
 def _find_request_token(source: str) -> str | None:

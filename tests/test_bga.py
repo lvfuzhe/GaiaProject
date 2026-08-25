@@ -15,6 +15,7 @@ from gaiazero.bga import (
     BgaReplayError,
     BgaSessionStore,
     _ReplayLinkParser,
+    _extract_completesetup_data,
     _normalize_replay_address,
     convert_bga_replay,
     import_bga_replay,
@@ -169,6 +170,12 @@ def replay_packets() -> list[dict[str, object]]:
                         vp=2,
                         desc="round scoring",
                     ),
+                    notice(
+                        "notifyTakeFedToken",
+                        player_name="Alice",
+                        playerId=PLAYER_ONE,
+                        fedTokenId=2,
+                    ),
                 ],
                 [
                     notice(
@@ -200,6 +207,32 @@ def game_data() -> dict[str, object]:
         "gamename": "gaiaproject",
         "tableId": str(TABLE_ID),
         "players": [{"id": PLAYER_ONE, "no": 1}, {"id": PLAYER_TWO, "no": 2}],
+        "tableOptions": [
+            {"id": 100, "value": 12, "value_displayed": "Random map"},
+            {"id": 101, "value": 2, "value_displayed": "Reduced map"},
+        ],
+    }
+
+
+def initial_setup_payload() -> dict[str, object]:
+    return {
+        "board": {
+            "roundNum": 0,
+            "techs": [5, 6, 2, 8, 3, 7, 9, 1, 4],
+            "advTechs": [17, 18, 19, 23, 12, 11],
+            "roundBonus": [0, 9, 8, 1, 10, 5, 3],
+            "endGameBonus": [2, 6],
+            "availFedTokens": [0, 3, 2, 3, 3, 3, 3, 0],
+            "availBoosters": [1, 2, 3, 8, 9],
+            "bonusFedToken": 2,
+            "displayMap": 2,
+        },
+        "map": map_payload(),
+        "players": {},
+        "playerList": [PLAYER_ONE, PLAYER_TWO],
+        "playerorder": [PLAYER_ONE, PLAYER_TWO],
+        "passOrder": [],
+        "gamestate": {"id": 1, "name": "gameSetup"},
     }
 
 
@@ -221,7 +254,10 @@ def review_html() -> str:
 def replay_html() -> str:
     logs = {"status": 1, "data": {"valid": 1, "data": replay_packets()}}
     return (
-        f"<script>globalThis.bgaGameData = {json.dumps(game_data())};\n"
+        "<script>globalThis.gameui.completesetup("
+        "'gaiaproject', 'Gaia {Project}', 1, 2, 0, '0', '', "
+        f"{json.dumps(initial_setup_payload())}, null);\n"
+        f"globalThis.bgaGameData = {json.dumps(game_data())};\n"
         f"globalThis.g_gamelogs = {json.dumps(logs)};</script>"
     )
 
@@ -290,6 +326,12 @@ class BgaImportTests(unittest.TestCase):
         with self.assertRaises(BgaReplayError):
             _normalize_replay_address("https://boardgamearena.com/player?id=1")
 
+    def test_archive_completesetup_parser_recovers_move_zero_state(self) -> None:
+        initial = _extract_completesetup_data(replay_html())
+
+        self.assertEqual(initial["board"], initial_setup_payload()["board"])
+        self.assertEqual(initial["map"], map_payload())
+
     def test_short_lived_client_logs_in_and_converts_a_review(self) -> None:
         client = StubBgaClient()
         client.login("alice", "secret")
@@ -304,6 +346,33 @@ class BgaImportTests(unittest.TestCase):
         self.assertEqual(record["trace"]["summary"]["scores"], [123, 98])
         self.assertEqual(record["trace"]["summary"]["moves"], 6)
         self.assertTrue(record["trace"]["steps"][-1]["state"]["terminal"])
+        self.assertTrue(record["bga"]["initial_setup_complete"])
+        self.assertEqual(record["bga"]["table_options"], game_data()["tableOptions"])
+        self.assertEqual(record["bga"]["initial_setup"]["map"], map_payload())
+
+        setup = record["trace"]["steps"][0]["state"]["setup"]
+        self.assertEqual(setup["map"]["size"], "reduced")
+        self.assertEqual([tile["id"] for tile in setup["boosters"]], [0, 1, 2, 7, 8])
+        self.assertTrue(all(tile["owner"] == -1 for tile in setup["boosters"]))
+        self.assertEqual(
+            [tile["id"] for tile in setup["round_scoring"]],
+            [8, 7, 0, 9, 4, 2],
+        )
+        self.assertEqual([tile["id"] for tile in setup["final_scoring"]], [1, 5])
+        self.assertEqual(
+            [tile["id"] for tile in setup["standard_tech"]],
+            [4, 5, 1, 7, 2, 6, 8, 0, 3],
+        )
+        self.assertEqual(
+            [tile["id"] for tile in setup["advanced_tech"]],
+            [7, 8, 9, 13, 2, 1],
+        )
+        self.assertEqual(setup["terraforming_federation"]["id"], 1)
+        self.assertEqual(setup["federation_supply"], [3, 2, 3, 3, 3, 3])
+        self.assertEqual(
+            record["trace"]["steps"][-1]["state"]["setup"]["federation_supply"],
+            [3, 1, 3, 3, 3, 3],
+        )
 
     def test_client_requests_and_decodes_gzip_responses(self) -> None:
         class ResponseHeaders(dict[str, str]):
@@ -370,6 +439,8 @@ class BgaImportTests(unittest.TestCase):
             packets=packets,
         )
 
+        self.assertFalse(record["bga"]["initial_setup_complete"])
+        self.assertIsNone(record["bga"]["initial_setup"])
         final_step = record["trace"]["steps"][-1]
         self.assertEqual(
             [tile["id"] for tile in final_step["state"]["setup"]["final_scoring"]],
