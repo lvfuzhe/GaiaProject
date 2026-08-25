@@ -357,8 +357,8 @@ FEDERATION_TILES: tuple[TileSpec, ...] = (
     TileSpec("vp-knowledge", "6 VP + 2 knowledge"),
     TileSpec("vp-ore", "7 VP + 2 ore"),
     TileSpec("vp-qic", "8 VP + 1 Q.I.C."),
-    TileSpec("vp-power", "7 VP + power"),
-    TileSpec("credits", "Credits + VP"),
+    TileSpec("vp-power", "8 VP + 2 power tokens"),
+    TileSpec("credits", "7 VP + 6 credits"),
     TileSpec("twelve-vp", "12 VP"),
 )
 
@@ -441,7 +441,14 @@ LOST_PLANET_OFFSET = NEVLAS_KNOWLEDGE_ACTION + 1
 LOST_PLANET_LIMIT = LOST_PLANET_OFFSET + MAX_BOARD_SPACES
 PASSIVE_CHARGE_ACCEPT_ACTION = LOST_PLANET_LIMIT
 PASSIVE_CHARGE_DECLINE_ACTION = PASSIVE_CHARGE_ACCEPT_ACTION + 1
-ACTION_SIZE = PASSIVE_CHARGE_DECLINE_ACTION + 1
+POWER_TO_CREDIT_ACTION = PASSIVE_CHARGE_DECLINE_ACTION + 1
+POWER_TO_ORE_ACTION = POWER_TO_CREDIT_ACTION + 1
+POWER_TO_KNOWLEDGE_ACTION = POWER_TO_ORE_ACTION + 1
+POWER_TO_QIC_ACTION = POWER_TO_KNOWLEDGE_ACTION + 1
+QIC_TO_ORE_ACTION = POWER_TO_QIC_ACTION + 1
+ORE_TO_CREDIT_ACTION = QIC_TO_ORE_ACTION + 1
+KNOWLEDGE_TO_CREDIT_ACTION = ORE_TO_CREDIT_ACTION + 1
+ACTION_SIZE = KNOWLEDGE_TO_CREDIT_ACTION + 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -931,6 +938,7 @@ class GaiaState:
                         and has_target
                     ):
                         actions.append(self.power_action(power_action))
+                actions.extend(self._standard_free_actions(player, use_brainstone=True))
             return tuple(actions)
 
         actions: list[int] = []
@@ -1108,6 +1116,7 @@ class GaiaState:
         if faction.name == "Itars" and info.bowl_two >= 2:
             actions.append(ITARS_BURN_POWER_ACTION)
         actions.extend(self._nevlas_free_actions(player))
+        actions.extend(self._standard_free_actions(player))
         return tuple(actions)
 
     def legal_action_mask(self) -> BoolArray:
@@ -1141,6 +1150,11 @@ class GaiaState:
             return self._apply_itars_burn_power()
         if action in self._nevlas_free_actions(self.player_to_move):
             return self._apply_nevlas_free_action(action)
+        if action in self._standard_free_actions(
+            self.player_to_move,
+            use_brainstone=self.brainstone_selected,
+        ):
+            return self._apply_standard_free_action(action)
         if self.pending_advanced_tech >= 0:
             return self._apply_advanced_tech_cover(action - TECH_OFFSET)._advance_turn()
         if self.pending_research_player >= 0:
@@ -2323,6 +2337,83 @@ class GaiaState:
             info = self._gain_qic(info.spend(credits=4), 1)
         return replace(self, players=self._replace_player(player, info))
 
+    def _standard_free_actions(
+        self,
+        player: int,
+        *,
+        use_brainstone: bool = False,
+    ) -> tuple[int, ...]:
+        info = self.players[player]
+        if use_brainstone:
+            if not self._can_spend_selected_brainstone(player):
+                return ()
+            actions: list[int] = []
+            if info.credits <= 27:
+                actions.append(POWER_TO_CREDIT_ACTION)
+            if info.ore < 15:
+                actions.append(POWER_TO_ORE_ACTION)
+            if self._can_spend_power(info, 4, use_brainstone=True):
+                if info.knowledge < 15:
+                    actions.append(POWER_TO_KNOWLEDGE_ACTION)
+                actions.append(POWER_TO_QIC_ACTION)
+            return tuple(actions)
+
+        ordinary_power = info.bowl_three - int(info.brainstone_bowl == 3)
+        actions = []
+        if ordinary_power >= 1 and info.credits < 30:
+            actions.append(POWER_TO_CREDIT_ACTION)
+        if ordinary_power >= 3 and info.ore < 15:
+            actions.append(POWER_TO_ORE_ACTION)
+        if ordinary_power >= 4 and info.knowledge < 15:
+            actions.append(POWER_TO_KNOWLEDGE_ACTION)
+        if ordinary_power >= 4:
+            actions.append(POWER_TO_QIC_ACTION)
+        if info.qic >= 1 and info.ore < 15:
+            actions.append(QIC_TO_ORE_ACTION)
+        if info.ore >= 1 and info.credits < 30:
+            actions.append(ORE_TO_CREDIT_ACTION)
+        if info.knowledge >= 1 and info.credits < 30:
+            actions.append(KNOWLEDGE_TO_CREDIT_ACTION)
+        return tuple(actions)
+
+    def _apply_standard_free_action(self, action: int) -> GaiaState:
+        player = self.player_to_move
+        use_brainstone = self.brainstone_selected
+        if action not in self._standard_free_actions(
+            player,
+            use_brainstone=use_brainstone,
+        ):
+            raise ValueError("standard free conversion is unavailable")
+        info = self.players[player]
+        if action == POWER_TO_CREDIT_ACTION:
+            cost = 3 if use_brainstone else 1
+            info = self._spend_power(info, cost, use_brainstone=use_brainstone)
+            info = replace(info, credits=min(30, info.credits + cost))
+        elif action == POWER_TO_ORE_ACTION:
+            info = self._spend_power(info, 3, use_brainstone=use_brainstone)
+            info = replace(info, ore=min(15, info.ore + 1))
+        elif action == POWER_TO_KNOWLEDGE_ACTION:
+            info = self._spend_power(info, 4, use_brainstone=use_brainstone)
+            info = replace(info, knowledge=min(15, info.knowledge + 1))
+        elif action == POWER_TO_QIC_ACTION:
+            info = self._spend_power(info, 4, use_brainstone=use_brainstone)
+            info = self._gain_qic(info, 1)
+        elif action == QIC_TO_ORE_ACTION:
+            info = replace(info, qic=info.qic - 1, ore=info.ore + 1)
+        elif action == ORE_TO_CREDIT_ACTION:
+            info = replace(info, ore=info.ore - 1, credits=info.credits + 1)
+        else:
+            info = replace(
+                info,
+                knowledge=info.knowledge - 1,
+                credits=info.credits + 1,
+            )
+        return replace(
+            self,
+            players=self._replace_player(player, info),
+            brainstone_selected=False,
+        )
+
     def _apply_bal_taks_gaiaformer_qic_action(self) -> GaiaState:
         player = self.player_to_move
         info = self.players[player]
@@ -2561,7 +2652,7 @@ class GaiaState:
         return replace(info, qic=info.qic + amount)
 
     def _gain_federation_reward(self, info: PlayerState, tile: int) -> PlayerState:
-        victory_points = (6, 7, 8, 7, 7, 12)[tile]
+        victory_points = (6, 7, 8, 8, 7, 12)[tile]
         info = replace(info, vp=info.vp + victory_points)
         if tile == 0:
             return replace(info, knowledge=min(15, info.knowledge + 2))
@@ -2663,10 +2754,11 @@ class GaiaState:
 
     def _brainstone_action_available(self, player: int) -> bool:
         info = self.players[player]
-        return (
-            FACTIONS[info.faction].has_brainstone
-            and info.brainstone_bowl == 3
-            and any(
+        if not FACTIONS[info.faction].has_brainstone or info.brainstone_bowl != 3:
+            return False
+        return bool(
+            self._standard_free_actions(player, use_brainstone=True)
+            or any(
                 self._can_spend_power(
                     info,
                     self._power_action_cost(player, power_action),
@@ -3884,7 +3976,7 @@ class GaiaState:
         base: list[float] = []
         for player, info in enumerate(self.players):
             research_points = sum(max(0, level - 2) * 4 for level in info.tracks)
-            resources = (info.credits + info.ore + info.knowledge) // 3
+            resources = self._final_resource_points(player)
             base.append(float(info.vp + research_points + resources))
         awards = [0.0] * self.num_players
         for tile in self.final_scoring_tiles:
@@ -3895,6 +3987,22 @@ class GaiaState:
             for player, points in enumerate(ranking):
                 awards[player] += points
         return tuple(base[player] + awards[player] for player in range(self.num_players))
+
+    def _final_resource_points(self, player: int) -> int:
+        info = self.players[player]
+        ordinary_power = info.bowl_three - int(info.brainstone_bowl == 3)
+        if FACTIONS[info.faction].name == "Nevlas" and self._has_pi(player):
+            ordinary_power *= 2
+        brainstone_power = 3 if info.brainstone_bowl == 3 else 0
+        convertible = (
+            info.credits
+            + info.ore
+            + info.knowledge
+            + info.qic
+            + ordinary_power
+            + brainstone_power
+        )
+        return convertible // 3
 
     def _final_scoring_metric(self, player: int, tile: int) -> float:
         if tile == 0:
@@ -4260,6 +4368,24 @@ class GaiaState:
             return "accept passive power charge"
         if action == PASSIVE_CHARGE_DECLINE_ACTION:
             return "decline passive power charge"
+        if action == POWER_TO_CREDIT_ACTION:
+            return (
+                "Taklons free action: spend the selected Brainstone for 3 credits"
+                if self.brainstone_selected
+                else "free action: 1 power for 1 credit"
+            )
+        if action == POWER_TO_ORE_ACTION:
+            return "free action: 3 power for 1 ore"
+        if action == POWER_TO_KNOWLEDGE_ACTION:
+            return "free action: 4 power for 1 knowledge"
+        if action == POWER_TO_QIC_ACTION:
+            return "free action: 4 power for 1 Q.I.C."
+        if action == QIC_TO_ORE_ACTION:
+            return "free action: 1 Q.I.C. for 1 ore"
+        if action == ORE_TO_CREDIT_ACTION:
+            return "free action: 1 ore for 1 credit"
+        if action == KNOWLEDGE_TO_CREDIT_ACTION:
+            return "free action: 1 knowledge for 1 credit"
         if action == TAKLONS_PASSIVE_BEFORE_ACTION:
             return "Taklons PI: gain 1 power token before passive charge"
         if action == TAKLONS_PASSIVE_AFTER_ACTION:

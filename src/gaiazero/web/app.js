@@ -62,7 +62,7 @@ const ADVANCED_TECH_NAMES = [
 ];
 const FEDERATION_NAMES = [
   "6 VP + 2 知识", "7 VP + 2 矿石", "8 VP + 1 Q.I.C.",
-  "7 VP + 能量", "信用点 + VP", "12 VP"
+  "8 VP + 2 能量片", "7 VP + 6 信用点", "12 VP"
 ];
 const SETUP_LABELS = {
   "terraform-2": "每个地形改造步数 +2 VP",
@@ -582,8 +582,12 @@ function setupLabel(tile) {
 }
 
 function tileAsset(kind, id) {
+  const federationAssetOrder = [6, 4, 2, 3, 5, 1];
   const number = Number(id) + 1;
-  if (!Number.isInteger(number) || number < 1) return "";
+  const assetNumber = kind === "federation"
+    ? federationAssetOrder[Number(id)]
+    : number;
+  if (!Number.isInteger(assetNumber) || assetNumber < 1) return "";
   const assets = {
     standard: ["tech-standard", "jpg"],
     advanced: ["tech-advanced", "jpg"],
@@ -593,7 +597,7 @@ function tileAsset(kind, id) {
     federation: ["federation", "png"],
   };
   const [prefix, extension] = assets[kind] || [];
-  return prefix ? `/assets/tiles/${prefix}-${String(number).padStart(2, "0")}.${extension}` : "";
+  return prefix ? `/assets/tiles/${prefix}-${String(assetNumber).padStart(2, "0")}.${extension}` : "";
 }
 
 function factionPlayerBoardAsset(id) {
@@ -3467,16 +3471,28 @@ function renderPlayActionEntry(item) {
 function renderHistoryVpChanges(vp = {}) {
   const before = Array.isArray(vp.before) ? vp.before : [];
   const after = Array.isArray(vp.after) ? vp.after : [];
+  const events = Array.isArray(vp.events) ? vp.events : [];
   const changes = after.map((value, player) => ({
     player,
     before: Number(before[player]),
     after: Number(value),
   })).filter((item) => Number.isFinite(item.before) && item.after !== item.before);
-  if (!changes.length) return "";
-  return `<div class="history-log-vp">${changes.map((item) => {
+  if (!changes.length && !events.length) return "";
+  const totals = changes.map((item) => {
     const delta = item.after - item.before;
     return `<span><i class="player-color p${item.player}"></i>P${item.player} VP ${formatNumber(item.before, 1)} → ${formatNumber(item.after, 1)} <b>${delta >= 0 ? "+" : ""}${formatNumber(delta, 1)}</b></span>`;
-  }).join("")}</div>`;
+  }).join("");
+  const details = events.map((event) => {
+    const delta = Number(event.delta || 0);
+    const source = event.source ? ` · ${event.source}` : "";
+    return `<span class="history-vp-event"><i class="player-color p${Number(event.player)}"></i>P${Number(event.player)} ${escapeHtml(event.reason || "BGA 计分")}<small>${escapeHtml(source)}</small><b>${delta >= 0 ? "+" : ""}${formatNumber(delta, 1)} VP</b></span>`;
+  }).join("");
+  const auditFailed = vp.audit && vp.audit.matches_state === false;
+  return `<div class="history-log-vp">
+    ${totals}
+    ${details ? `<div class="history-vp-events">${details}</div>` : ""}
+    ${auditFailed ? '<em class="history-vp-audit-error">VP 明细与局面变化不一致</em>' : ""}
+  </div>`;
 }
 
 function renderHistoryActionEntry(step, previousStep, index, currentStep) {

@@ -57,10 +57,24 @@ BGA_BUILDINGS = {
     4: "mine",
     5: "trading_station",
     6: "research_lab",
-    7: "planetary_institute",
+    7: "academy",
     8: "academy",
-    9: "academy",
+    9: "planetary_institute",
 }
+# BGA orders federation tokens by its image/token ids. GaiaZero keeps the
+# canonical rules-engine order used by FEDERATION_TILES.
+BGA_FEDERATION_TO_LOCAL = {
+    1: 5,  # 12 VP
+    2: 2,  # 8 VP + 1 Q.I.C.
+    3: 3,  # 8 VP + 2 power tokens
+    4: 1,  # 7 VP + 2 ore
+    5: 4,  # 7 VP + 6 credits
+    6: 0,  # 6 VP + 2 knowledge
+}
+LOCAL_FEDERATION_TO_BGA = tuple(
+    next(bga_id for bga_id, local_id in BGA_FEDERATION_TO_LOCAL.items() if local_id == tile)
+    for tile in range(len(FEDERATION_TILES))
+)
 BUILDING_TOTALS = {
     "mine": 8,
     "trading_station": 4,
@@ -125,6 +139,39 @@ BGA_FINAL_SCORING = {
         "key": "satellites",
         "label": "Placed satellites and space stations",
     },
+}
+
+BGA_NOTIFICATION_FUNCTIONS: dict[str, tuple[str, str]] = {
+    "gameStateChange": ("状态机切换", "更新当前阶段、行动玩家和可选操作"),
+    "gameStateMultipleActiveUpdate": ("并行行动玩家更新", "更新同时需要作出选择的玩家集合"),
+    "notifyAction": ("公共或特殊行动", "标记行动工位或板块行动已使用"),
+    "notifyAddRaceDraft": ("加入种族竞选池", "把种族加入本局竞选候选"),
+    "notifyBanRaceDraft": ("禁用竞选种族", "从本局种族竞选中移除一个种族"),
+    "notifyBuild": ("建造", "更新星球、建筑、资源和建筑供应"),
+    "notifyChargePower": ("充能", "按 BGA 权威能量状态更新能量碗和脑石"),
+    "notifyChooseBoosterTile": ("选择助推板块", "更新助推板块归属"),
+    "notifyChooseRace": ("选择种族", "确定种族并载入初始资源、科研和 VP"),
+    "notifyConvert": ("自由兑换", "更新自由兑换或盖亚区兑换后的资源"),
+    "notifyFormFederation": ("组建联邦", "标记联邦建筑并放置卫星"),
+    "notifyGaiaDone": ("盖亚阶段结束", "结算盖亚阶段并进入收入或行动阶段"),
+    "notifyGaiaformed": ("盖亚化完成", "把对应的超空间星球翻为盖亚星球"),
+    "notifyGainResource": ("获得或支付资源", "应用资源及可能包含的即时 VP 变化"),
+    "notifyGainTech": ("获得科技板块", "获得基础或高级科技、覆盖基础科技并翻灰联邦钥匙"),
+    "notifyGeneric": ("规则消息", "记录竞拍、全局补分或不属于专用通知的规则结果"),
+    "notifyIncome": ("回合收入", "更新当前建筑与科技产生的回合收入明细"),
+    "notifyPass": ("过轮", "结算助推/高级科技过轮 VP，选择下轮助推并更新顺位"),
+    "notifyPlaceStartingBldg": ("放置起始建筑", "更新蛇形起始建筑摆放"),
+    "notifyPlayerOrder": ("玩家顺位", "更新首家与行动顺序"),
+    "notifyRace6Swap": ("Ambas 建筑交换", "交换一个矿场与行星研究院的位置"),
+    "notifyResearch": ("推进科研", "更新科研轨、知识开销和联邦钥匙"),
+    "notifyRoundEnd": ("大轮结束", "推进轮次或进入终局结算"),
+    "notifyScore": ("计分", "应用轮次、科技、种族、被动充能或终局 VP"),
+    "notifySetOptions": ("玩家选项", "更新 BGA 自动确认等玩家偏好，不改变规则资源"),
+    "notifyStartGaia": ("启动盖亚计划", "放置盖亚塑形者并结算航程 QIC 与盖亚能量"),
+    "notifyTakeFedToken": ("获得联邦板块", "更新玩家联邦板块与公共供应"),
+    "notifyUpgrade": ("升级建筑", "替换建筑并应用信用点、矿石开销"),
+    "simpleNode": ("流程标记", "标记复盘流程节点，包括游戏结束"),
+    "updateReflexionTime": ("计时器更新", "仅更新 BGA 思考时间，不改变游戏规则状态"),
 }
 
 
@@ -565,10 +612,22 @@ def convert_bga_replay(
         actor = state.actor_for(notifications)
         label, kind = _action_label(notifications)
         vp_before = [player["vp"] for player in state.players]
-        vp_events = _vp_events(notifications, state.player_index)
+        vp_transitions: list[tuple[list[int], list[int]]] = []
         for notice in notifications:
+            notice_before = [player["vp"] for player in state.players]
             state.apply_notification(notice)
+            notice_after = [player["vp"] for player in state.players]
+            vp_transitions.append((notice_before, notice_after))
+        vp_events = _vp_events(
+            notifications,
+            state.player_index,
+            transitions=vp_transitions,
+        )
         vp_after = [player["vp"] for player in state.players]
+        event_deltas = [0] * len(state.players)
+        for event in vp_events:
+            event_deltas[event["player"]] += event["delta"]
+        state_deltas = [after - before for before, after in zip(vp_before, vp_after, strict=True)]
         vp_changes = [
             {
                 "player": player,
@@ -593,6 +652,11 @@ def convert_bga_replay(
                 "changes": vp_changes,
                 "after": vp_after,
                 "events": vp_events,
+                "audit": {
+                    "event_deltas": event_deltas,
+                    "state_deltas": state_deltas,
+                    "matches_state": event_deltas == state_deltas,
+                },
             },
             "bga": {
                 "packet_ids": [packet.get("packet_id") for packet in move_packets],
@@ -666,6 +730,14 @@ def convert_bga_replay(
         for player in final_snapshot["players"]
     ]
     replay_complete = bool(final_snapshot["terminal"])
+    observed_notification_types = sorted(
+        {
+            str(notice.get("type") or "")
+            for packet in raw_packets
+            for notice in packet.get("data", [])
+            if isinstance(notice, dict) and notice.get("type")
+        }
+    )
     return {
         "run_id": f"bga-{table_id}",
         "source": "bga",
@@ -708,6 +780,22 @@ def convert_bga_replay(
             "initial_setup_complete": initial_state is not None,
             "initial_setup": _compact_initial_setup(initial_state),
             "table_options": copy.deepcopy(game_data.get("tableOptions") or []),
+            "notification_catalog": [
+                {
+                    "code": code,
+                    "function": function,
+                    "state_effect": state_effect,
+                }
+                for code, (function, state_effect) in BGA_NOTIFICATION_FUNCTIONS.items()
+            ],
+            "notification_coverage": {
+                "observed": observed_notification_types,
+                "unknown": [
+                    code
+                    for code in observed_notification_types
+                    if code not in BGA_NOTIFICATION_FUNCTIONS
+                ],
+            },
             "log_packets": raw_packets,
         },
     }
@@ -739,6 +827,11 @@ class _BgaReplayState:
         for player_id, payload in initial_players.items():
             if player_id in self.player_index:
                 _apply_player_payload(self.players[self.player_index[player_id]], payload)
+        # Future choose-race payloads are used to recover faction/resources, but
+        # their score already contains the auction result. Start the replay at
+        # the rules-defined 10 VP so the auction settlement remains visible.
+        for player in self.players:
+            player["vp"] = 10
 
         self.placement_order = [
             self.player_index[player_id]
@@ -905,18 +998,25 @@ class _BgaReplayState:
                 player["tech_tiles"].append(tech_id - 1)
             elif tech_id > 9 and tech_id - 10 not in player["advanced_tech_tiles"]:
                 player["advanced_tech_tiles"].append(tech_id - 10)
+            covered = _as_int(args.get("coverupTechId"), 0) - 1
+            if 0 <= covered < 9 and covered not in player["covered_tech_tiles"]:
+                player["covered_tech_tiles"].append(covered)
+            player["qic"] = max(0, player["qic"] - _as_int(args.get("qicCost"), 0))
         elif notice_type == "notifyTakeFedToken" and player is not None:
-            federation_tile = _as_int(args.get("fedTokenId"), 0)
+            federation_tile = _local_federation_tile(args.get("fedTokenId"))
+            if federation_tile < 0:
+                return
             player["federation_tiles"].append(federation_tile)
             player["federations"] = len(player["federation_tiles"])
-            supply_index = federation_tile - 1
             if (
-                0 <= supply_index < len(self.federation_supply)
-                and self.federation_supply[supply_index] > 0
+                federation_tile < len(self.federation_supply)
+                and self.federation_supply[federation_tile] > 0
             ):
-                self.federation_supply[supply_index] -= 1
+                self.federation_supply[federation_tile] -= 1
         elif notice_type == "notifyFormFederation" and player is not None:
             self._mark_federation(args, player)
+        elif notice_type == "notifyRace6Swap" and player is not None:
+            self._swap_ambas_buildings(args, player)
         elif notice_type == "notifyPass" and player is not None:
             player["vp"] += _as_int(args.get("vp"), 0)
             player["passed"] = True
@@ -1226,6 +1326,22 @@ class _BgaReplayState:
             coordinate = (_as_int(item.get("q"), 0), _as_int(item.get("r"), 0))
             self._set_satellite(coordinate, player["id"])
 
+    def _swap_ambas_buildings(
+        self,
+        args: dict[str, Any],
+        player: dict[str, Any],
+    ) -> None:
+        mine = self.planets.get((_as_int(args.get("mineQ"), 0), _as_int(args.get("mineR"), 0)))
+        institute = self.planets.get((_as_int(args.get("piQ"), 0), _as_int(args.get("piR"), 0)))
+        if mine is None or institute is None:
+            return
+        if mine.get("owner") != player["id"] or institute.get("owner") != player["id"]:
+            return
+        mine["building"] = "planetary_institute"
+        mine["building_id"] = 9
+        institute["building"] = "mine"
+        institute["building_id"] = 4
+
     def _set_satellite(self, coordinate: tuple[int, int], owner: int) -> None:
         if coordinate not in self.board_space_ids:
             self.board_space_ids[coordinate] = len(self.board_space_ids)
@@ -1241,9 +1357,9 @@ class _BgaReplayState:
             if 0 <= owner < len(self.players) and planet.get("building") != "empty":
                 counts[owner][planet["building"]] += 1
                 colonized[owner].add(planet["terrain"])
-                if planet.get("building_id") == 8:
+                if planet.get("building_id") == 7:
                     academy_types[owner][0] += 1
-                elif planet.get("building_id") == 9:
+                elif planet.get("building_id") == 8:
                     academy_types[owner][1] += 1
             coexist = _as_int(planet.get("coexisting_mine_owner"), -1)
             if 0 <= coexist < len(self.players):
@@ -1381,9 +1497,11 @@ def _apply_player_payload(player: dict[str, Any], payload: dict[str, Any]) -> No
     federation_tiles = payload.get("fedTiles")
     if isinstance(federation_tiles, list):
         player["federation_tiles"] = [
-            _as_int(tile.get("fedTokenId"), 0)
+            local_tile
             for tile in federation_tiles
             if isinstance(tile, dict)
+            for local_tile in [_local_federation_tile(tile.get("fedTokenId"))]
+            if local_tile >= 0
         ]
         player["federations"] = len(player["federation_tiles"])
 
@@ -1638,7 +1756,7 @@ def _initial_advanced_tech(board: dict[str, Any]) -> list[dict[str, Any]]:
 def _initial_terraforming_federation(
     board: dict[str, Any],
 ) -> dict[str, Any] | None:
-    tile = _as_int(board.get("bonusFedToken"), 0) - 1
+    tile = _local_federation_tile(board.get("bonusFedToken"))
     if not 0 <= tile < len(FEDERATION_TILES):
         return None
     spec = FEDERATION_TILES[tile]
@@ -1649,10 +1767,12 @@ def _initial_federation_supply(board: dict[str, Any]) -> list[int]:
     values = board.get("availFedTokens")
     if not isinstance(values, list):
         return []
-    return [
-        max(0, _as_int(value, 0))
-        for value in values[1 : 1 + len(FEDERATION_TILES)]
-    ]
+    supply = [0] * len(FEDERATION_TILES)
+    for bga_id in range(1, len(FEDERATION_TILES) + 1):
+        local_id = _local_federation_tile(bga_id)
+        if local_id >= 0 and bga_id < len(values):
+            supply[local_id] = max(0, _as_int(values[bga_id], 0))
+    return supply
 
 
 def _action_label(notifications: list[dict[str, Any]]) -> tuple[str, str]:
@@ -1662,6 +1782,7 @@ def _action_label(notifications: list[dict[str, Any]]) -> tuple[str, str]:
         "notifyBuild",
         "notifyStartGaia",
         "notifyUpgrade",
+        "notifyRace6Swap",
         "notifyFormFederation",
         "notifyResearch",
         "notifyGainTech",
@@ -1672,8 +1793,17 @@ def _action_label(notifications: list[dict[str, Any]]) -> tuple[str, str]:
         "notifyTakeFedToken",
         "notifyRoundEnd",
         "notifyGaiaDone",
+        "notifyGaiaformed",
+        "notifyGainResource",
+        "notifyChargePower",
         "notifyIncome",
         "notifyScore",
+        "notifyBanRaceDraft",
+        "notifyAddRaceDraft",
+        "notifyPlayerOrder",
+        "notifyGeneric",
+        "notifySetOptions",
+        "simpleNode",
     )
     by_type = {str(notice.get("type")): notice for notice in notifications}
     notice = next((by_type[item] for item in priorities if item in by_type), None)
@@ -1690,9 +1820,9 @@ def _action_label(notifications: list[dict[str, Any]]) -> tuple[str, str]:
         4: "矿场",
         5: "贸易站",
         6: "研究所",
-        7: "行星研究院",
-        8: "知识学院",
-        9: "Q.I.C. 学院",
+        7: "知识学院",
+        8: "Q.I.C. 学院",
+        9: "行星研究院",
     }
     pay = _resource_tags(str(args.get("payStr") or ""))
     gain = _resource_tags(str(args.get("gainStr") or ""))
@@ -1707,6 +1837,7 @@ def _action_label(notifications: list[dict[str, Any]]) -> tuple[str, str]:
         "notifyBuild": (f"建造{building_names.get(building_id, '建筑')}{suffix}", "build"),
         "notifyStartGaia": (f"启动盖亚计划{suffix}", "start_gaia"),
         "notifyUpgrade": (f"升级为{building_names.get(building_id, '建筑')}{suffix}", "upgrade"),
+        "notifyRace6Swap": ("交换矿场与行星研究院", "faction_action"),
         "notifyFormFederation": (f"组建联邦{suffix}", "federation"),
         "notifyResearch": (
             f"推进{_track_label(args.get('whichResearch'))}科研",
@@ -1720,10 +1851,31 @@ def _action_label(notifications: list[dict[str, Any]]) -> tuple[str, str]:
         "notifyTakeFedToken": (f"获得联邦板块 #{_as_int(args.get('fedTokenId'), 0)}", "federation_tile"),
         "notifyRoundEnd": (f"第 {_as_int(args.get('roundNum'), 0)} 轮结束", "round_end"),
         "notifyGaiaDone": ("盖亚阶段完成", "gaia_phase"),
+        "notifyGaiaformed": ("完成盖亚化", "gaia_phase"),
+        "notifyGainResource": (
+            (f"资源结算{suffix}" if suffix else "资源结算"),
+            "resource",
+        ),
+        "notifyChargePower": ("充能并更新能量碗", "power"),
         "notifyIncome": ("更新回合收入", "income"),
         "notifyScore": (f"计分 {_signed(_as_int(args.get('vp'), 0))} VP", "score"),
+        "notifyBanRaceDraft": (f"禁用{_faction_label(args.get('raceId'))}", "faction_draft"),
+        "notifyAddRaceDraft": (f"加入{_faction_label(args.get('raceId'))}竞选", "faction_draft"),
+        "notifyPlayerOrder": ("更新玩家顺位", "turn_order"),
+        "notifyGeneric": ("规则消息", "bga_rule"),
+        "notifySetOptions": ("更新玩家选项", "bga_option"),
+        "simpleNode": ("流程节点", "bga_state"),
     }
-    label, kind = labels[notice_type]
+    label, kind = labels.get(
+        notice_type,
+        (
+            BGA_NOTIFICATION_FUNCTIONS.get(
+                notice_type,
+                (f"未识别通知 {notice_type}", "没有对应的本地复盘语义"),
+            )[0],
+            "bga_state",
+        ),
+    )
     return prefix + label, kind
 
 
@@ -1742,44 +1894,164 @@ def _notification_components(notifications: list[dict[str, Any]]) -> list[dict[s
 def _vp_events(
     notifications: list[dict[str, Any]],
     player_index: dict[int, int],
+    *,
+    transitions: list[tuple[list[int], list[int]]] | None = None,
 ) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     final_scoring_started = False
     unlabeled_final_scores: dict[int, int] = defaultdict(int)
-    for notice in notifications:
+    transitions = transitions or [([], []) for _notice in notifications]
+    name_to_player = {
+        str(args.get("player_name")): player_index[player_id]
+        for notice in notifications
+        for args in [notice.get("args") or {}]
+        if isinstance(args, dict)
+        for player_id in [_player_id(args.get("playerId"))]
+        if player_id in player_index and args.get("player_name")
+    }
+    has_auction_settlement = any(
+        notice.get("type") == "notifyGeneric"
+        and (
+            "wins the auction" in str(notice.get("log") or "").lower()
+            or "all players receive" in str(notice.get("log") or "").lower()
+        )
+        for notice in notifications
+    )
+    for notice_index, notice in enumerate(notifications):
         notice_type = str(notice.get("type") or "")
-        if notice_type not in ("notifyScore", "notifyPass"):
-            continue
         args = notice.get("args") or {}
-        if not isinstance(args, dict) or "vp" not in args:
-            continue
-        bga_player_id = _player_id(args.get("playerId"))
-        if bga_player_id not in player_index:
+        if not isinstance(args, dict):
             continue
         description = str(args.get("desc") or "").strip()
         normalized_description = re.sub(r"\s+", " ", description.lower())
         if normalized_description in BGA_FINAL_SCORING:
             final_scoring_started = True
-        if description:
-            reason = description
-        elif notice_type == "notifyPass":
-            reason = "过轮计分"
-        elif final_scoring_started:
-            occurrence = unlabeled_final_scores[bga_player_id]
-            reason = "科研轨终局计分" if occurrence == 0 else "剩余资源计分"
-            unlabeled_final_scores[bga_player_id] += 1
-        else:
-            reason = "BGA 计分"
-        events.append(
-            {
-                "player": player_index[bga_player_id],
-                "bga_player_id": bga_player_id,
-                "delta": _as_int(args.get("vp"), 0),
-                "source": notice_type,
-                "reason": reason,
-            }
-        )
+        before, after = transitions[notice_index]
+        changed_players = [
+            player
+            for player in range(min(len(before), len(after)))
+            if before[player] != after[player]
+        ]
+        explicit_player_id = _player_id(args.get("playerId"))
+        explicit_player = player_index.get(explicit_player_id)
+        if notice_type == "notifyChooseRace" and has_auction_settlement:
+            changed_players = []
+        explicit_vp = notice_type in ("notifyScore", "notifyPass") and "vp" in args
+        if explicit_vp and explicit_player is not None and explicit_player not in changed_players:
+            changed_players.append(explicit_player)
+        for player in changed_players:
+            bga_player_id = next(
+                source_id
+                for source_id, target_player in player_index.items()
+                if target_player == player
+            )
+            if before and after and before[player] != after[player]:
+                delta = after[player] - before[player]
+                event_before = before[player]
+                event_after = after[player]
+            else:
+                delta = _as_int(args.get("vp"), 0)
+                event_before = before[player] if before else None
+                event_after = event_before + delta if event_before is not None else None
+            if description:
+                tile = BGA_FINAL_SCORING.get(normalized_description)
+                reason = (
+                    f"终局计分：{tile['label']}"
+                    if tile is not None
+                    else description
+                )
+            elif notice_type == "notifyPass":
+                reason = "过轮计分（助推板块/高级科技）"
+            elif final_scoring_started and notice_type == "notifyScore":
+                occurrence = unlabeled_final_scores[bga_player_id]
+                reason = "科研轨终局计分" if occurrence == 0 else "剩余资源计分"
+                unlabeled_final_scores[bga_player_id] += 1
+            else:
+                reason = _vp_reason(notice, notifications, notice_index)
+            events.append(
+                {
+                    "player": player,
+                    "bga_player_id": bga_player_id,
+                    "delta": delta,
+                    "before": event_before,
+                    "after": event_after,
+                    "source": notice_type,
+                    "reason": reason,
+                }
+            )
+        if notice_type == "notifyGeneric" and "wins the auction" in str(notice.get("log") or "").lower():
+            player = name_to_player.get(str(args.get("player_name") or ""))
+            spent = _as_int(args.get("vp"), 0)
+            if player is not None and spent:
+                bga_player_id = next(
+                    source_id
+                    for source_id, target_player in player_index.items()
+                    if target_player == player
+                )
+                events.append(
+                    {
+                        "player": player,
+                        "bga_player_id": bga_player_id,
+                        "delta": -spent,
+                        "before": None,
+                        "after": None,
+                        "source": notice_type,
+                        "reason": "种族竞拍获胜支付",
+                    }
+                )
+        elif notice_type == "notifyGeneric" and "all players receive" in str(notice.get("log") or "").lower():
+            gained = _as_int(args.get("vp"), 0)
+            for bga_player_id, player in player_index.items():
+                events.append(
+                    {
+                        "player": player,
+                        "bga_player_id": bga_player_id,
+                        "delta": gained,
+                        "before": None,
+                        "after": None,
+                        "source": notice_type,
+                        "reason": "种族竞拍起始 VP 补偿",
+                    }
+                )
     return events
+
+
+def _vp_reason(
+    notice: dict[str, Any],
+    notifications: list[dict[str, Any]],
+    notice_index: int,
+) -> str:
+    notice_type = str(notice.get("type") or "")
+    log = str(notice.get("log") or "").lower()
+    args = notice.get("args") or {}
+    if notice_type == "notifyChooseRace":
+        return "种族竞拍与起始 VP 净结算"
+    if notice_type == "notifyScore":
+        if " loses " in f" {log} ":
+            return "接受被动充能扣分"
+        if "round bonus" in log:
+            return "轮次计分板块"
+        if "faction bonus" in log:
+            return "种族能力计分"
+        if "technology" in log:
+            return "科技板块计分"
+        if "research" in log:
+            return "科研轨终局计分"
+        if "resources/power" in log:
+            return "剩余资源终局计分"
+        return "BGA 显式计分"
+    if notice_type == "notifyGainResource":
+        if "federation token" in log:
+            return "联邦板块即时收益"
+        if _as_int(args.get("actionId"), 0) == 6:
+            return "Q.I.C. 行星种类公共行动"
+        preceding = notifications[: notice_index + 1]
+        if any(item.get("type") == "notifyGainTech" for item in preceding):
+            return "科技板块即时计分"
+        if any(item.get("type") == "notifyResearch" for item in preceding):
+            return "科研轨顶即时收益"
+        return "资源通知中的 VP 收益"
+    return BGA_NOTIFICATION_FUNCTIONS.get(notice_type, ("BGA 状态变化", ""))[0]
 
 
 def _compact_notification(notice: dict[str, Any]) -> dict[str, Any]:
@@ -2064,6 +2336,10 @@ def _as_int(value: Any, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _local_federation_tile(value: Any) -> int:
+    return BGA_FEDERATION_TO_LOCAL.get(_as_int(value, 0), -1)
 
 
 def _local_to_bga_terrain(terrain: int) -> int:

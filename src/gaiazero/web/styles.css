@@ -2449,6 +2449,31 @@ main {
   color: var(--ink);
 }
 
+.history-vp-events {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.history-vp-event {
+  display: grid !important;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.history-vp-event small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.history-vp-audit-error {
+  color: var(--danger);
+  font-style: normal;
+  font-weight: 700;
+}
+
 .history-log-notifications span {
   color: #4c6680;
   border-color: #dce7ef;

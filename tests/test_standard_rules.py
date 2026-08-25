@@ -19,6 +19,7 @@ from gaiazero.game.gaia_state import (
     FACTIONS,
     FINAL_SCORING_TILES,
     IVITS_SPACE_STATION_OFFSET,
+    IVITS_SPACE_STATION_LIMIT,
     ITARS_BURN_POWER_ACTION,
     ITARS_GAIA_FINISH_ACTION,
     ITARS_GAIA_TECH_ACTION,
@@ -35,6 +36,13 @@ from gaiazero.game.gaia_state import (
     PASS_FINAL_ACTION,
     PASSIVE_CHARGE_ACCEPT_ACTION,
     PASSIVE_CHARGE_DECLINE_ACTION,
+    POWER_TO_CREDIT_ACTION,
+    POWER_TO_KNOWLEDGE_ACTION,
+    POWER_TO_ORE_ACTION,
+    POWER_TO_QIC_ACTION,
+    QIC_TO_ORE_ACTION,
+    ORE_TO_CREDIT_ACTION,
+    KNOWLEDGE_TO_CREDIT_ACTION,
     ROUND_SCORING_TILES,
     SKIP_TECH_RESEARCH_ACTION,
     STANDARD_TECH_TILES,
@@ -418,6 +426,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertTrue(selected.brainstone_selected)
         self.assertNotIn(BRAINSTONE_ACTION, selected.legal_actions())
         self.assertIn(ore_action, selected.legal_actions())
+        self.assertIn(POWER_TO_CREDIT_ACTION, selected.legal_actions())
 
         after = selected.apply(ore_action)
         taklons = after.players[0]
@@ -428,6 +437,11 @@ class StandardGaiaRulesTests(unittest.TestCase):
             (2, 0, 0),
         )
         self.assertEqual(taklons.brainstone_bowl, 1)
+
+        converted = selected.apply(POWER_TO_CREDIT_ACTION)
+        self.assertEqual(converted.player_to_move, 0)
+        self.assertEqual(converted.players[0].credits, state.players[0].credits + 3)
+        self.assertEqual(converted.players[0].brainstone_bowl, 1)
 
     def test_taklons_pi_keeps_normal_token_income(self) -> None:
         state = finish_starting_placement(
@@ -622,7 +636,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         actions = tuple(
             action
             for action in state.legal_actions()
-            if action >= IVITS_SPACE_STATION_OFFSET
+            if IVITS_SPACE_STATION_OFFSET <= action < IVITS_SPACE_STATION_LIMIT
         )
         self.assertTrue(actions)
 
@@ -658,7 +672,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertTrue(placed._is_reachable(0, int(extended_planet)))
         self.assertTrue(placed.players[0].used_ivits_space_station_action)
         self.assertFalse(any(
-            action >= IVITS_SPACE_STATION_OFFSET
+            IVITS_SPACE_STATION_OFFSET <= action < IVITS_SPACE_STATION_LIMIT
             for action in replace(placed, player_to_move=0).legal_actions()
         ))
         self.assertEqual(
@@ -4114,20 +4128,61 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(state._ranking_awards([9, 8], 10), [12.0, 6.0])
         self.assertEqual(state._ranking_awards([10, 5], 10), [15.0, 6.0])
 
-    def test_final_resource_scoring_excludes_qic(self) -> None:
+    def test_final_resource_scoring_matches_bga_automatic_free_conversions(self) -> None:
         state = GaiaState.initial(2, seed=53)
         players = list(state.players)
-        players[0] = replace(players[0], credits=0, ore=0, knowledge=0, qic=0)
+        players[0] = replace(
+            players[0],
+            credits=0,
+            ore=0,
+            knowledge=0,
+            qic=0,
+            bowl_three=0,
+        )
         empty = replace(state, players=tuple(players))
         base_score = empty.final_scores()[0]
 
-        players[0] = replace(players[0], qic=9)
-        qic_only = replace(state, players=tuple(players))
-        self.assertEqual(qic_only.final_scores()[0], base_score)
+        players[0] = replace(players[0], qic=2, bowl_three=1)
+        convertible = replace(state, players=tuple(players))
+        self.assertEqual(convertible.final_scores()[0], base_score + 1)
 
         players[0] = replace(players[0], credits=2, ore=1, knowledge=0, qic=0)
         resources = replace(state, players=tuple(players))
         self.assertEqual(resources.final_scores()[0], base_score + 1)
+
+    def test_standard_free_conversions_do_not_end_the_turn(self) -> None:
+        state = finish_starting_placement(
+            GaiaState.initial(2, faction_indices=(0, 2), seed=53)
+        )
+        players = list(state.players)
+        players[0] = replace(
+            players[0],
+            credits=0,
+            ore=2,
+            knowledge=2,
+            qic=1,
+            bowl_one=0,
+            bowl_two=0,
+            bowl_three=12,
+        )
+        state = replace(state, player_to_move=0, players=tuple(players))
+        expected = {
+            POWER_TO_CREDIT_ACTION,
+            POWER_TO_ORE_ACTION,
+            POWER_TO_KNOWLEDGE_ACTION,
+            POWER_TO_QIC_ACTION,
+            QIC_TO_ORE_ACTION,
+            ORE_TO_CREDIT_ACTION,
+            KNOWLEDGE_TO_CREDIT_ACTION,
+        }
+        self.assertTrue(expected.issubset(state.legal_actions()))
+
+        converted = state.apply(POWER_TO_ORE_ACTION)
+        self.assertEqual(converted.player_to_move, 0)
+        self.assertEqual(converted.players[0].ore, 3)
+        self.assertEqual(converted.players[0].bowl_three, 9)
+        converted = converted.apply(QIC_TO_ORE_ACTION)
+        self.assertEqual((converted.players[0].qic, converted.players[0].ore), (0, 4))
 
     def test_canonical_federation_awards_token(self) -> None:
         state = finish_starting_placement(GaiaState.initial(2))

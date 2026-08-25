@@ -432,6 +432,12 @@ def read_local_game_trace(
         roles=record.get("roles") or [],
         engine=record.get("engine"),
     )
+    if record_source == "bga":
+        bga = record.get("bga") or {}
+        trace["bga_audit"] = {
+            "notification_catalog": bga.get("notification_catalog") or [],
+            "notification_coverage": bga.get("notification_coverage") or {},
+        }
     return trace
 
 

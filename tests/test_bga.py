@@ -11,6 +11,7 @@ from unittest.mock import patch
 from urllib.request import Request, urlopen
 
 from gaiazero.bga import (
+    BGA_NOTIFICATION_FUNCTIONS,
     BgaClient,
     BgaReplayError,
     BgaSessionStore,
@@ -396,8 +397,8 @@ class BgaImportTests(unittest.TestCase):
             [tile["id"] for tile in setup["advanced_tech"]],
             [7, 8, 9, 13, 2, 1],
         )
-        self.assertEqual(setup["terraforming_federation"]["id"], 1)
-        self.assertEqual(setup["federation_supply"], [3, 2, 3, 3, 3, 3])
+        self.assertEqual(setup["terraforming_federation"]["id"], 2)
+        self.assertEqual(setup["federation_supply"], [3, 3, 2, 3, 3, 3])
         federation_step = record["trace"]["steps"][5]["state"]
         self.assertEqual(
             federation_step["satellites"],
@@ -415,7 +416,111 @@ class BgaImportTests(unittest.TestCase):
         )
         self.assertEqual(
             record["trace"]["steps"][-1]["state"]["setup"]["federation_supply"],
-            [3, 1, 3, 3, 3, 3],
+            [3, 3, 1, 3, 3, 3],
+        )
+        self.assertEqual(federation_step["players"][0]["federation_tiles"], [2])
+        self.assertEqual(record["bga"]["notification_coverage"]["unknown"], [])
+        self.assertEqual(
+            set(record["bga"]["notification_coverage"]["observed"])
+            - set(BGA_NOTIFICATION_FUNCTIONS),
+            set(),
+        )
+
+    def test_non_score_notification_vp_is_audited_and_advanced_tech_is_covered(self) -> None:
+        packets = replay_packets()
+        upgraded = {
+            **player_payload(1, score=20),
+            "techs": [
+                {"techId": 1, "isCovered": 1},
+                {"techId": 17, "isCovered": 0},
+            ],
+        }
+        packets[4]["data"].extend(
+            [
+                notice(
+                    "notifyGainTech",
+                    player_name="Alice",
+                    techId=17,
+                    coverupTechId=1,
+                    fedTokenId=2,
+                    qicCost=0,
+                    playerId=PLAYER_ONE,
+                ),
+                {
+                    "type": "notifyGainResource",
+                    "log": "${player_name} gains ${gainStr}",
+                    "args": {
+                        "player_name": "Alice",
+                        "gainStr": "[VP8]",
+                        "player": upgraded,
+                        "actionId": 0,
+                        "playerId": PLAYER_ONE,
+                    },
+                },
+            ]
+        )
+
+        record = convert_bga_replay(
+            table_id=TABLE_ID,
+            source_url=f"https://boardgamearena.com/gamereview?table={TABLE_ID}",
+            replay_url=f"https://boardgamearena.com/archive/replay/test/?table={TABLE_ID}",
+            game_data=game_data(),
+            packets=packets,
+        )
+
+        step = record["trace"]["steps"][5]
+        self.assertIn(0, step["state"]["players"][0]["covered_tech_tiles"])
+        self.assertIn(7, step["state"]["players"][0]["advanced_tech_tiles"])
+        self.assertTrue(step["record"]["vp"]["audit"]["matches_state"])
+        self.assertEqual(
+            [event["reason"] for event in step["record"]["vp"]["events"]],
+            ["round scoring", "科技板块即时计分"],
+        )
+        self.assertEqual(
+            [event["delta"] for event in step["record"]["vp"]["events"]],
+            [2, 8],
+        )
+
+    def test_auction_payment_and_starting_vp_compensation_are_separate_events(self) -> None:
+        packets = replay_packets()
+        choose_two = packets[0]["data"][1]
+        choose_two["args"]["player"] = player_payload(3, score=12)
+        packets[0]["data"].extend(
+            [
+                {
+                    "type": "notifyGeneric",
+                    "log": "${player_name} wins the auction, spending [VP${vp}]",
+                    "args": {"player_name": "Alice", "vp": 2},
+                },
+                {
+                    "type": "notifyGeneric",
+                    "log": "All players receive [VP${vp}] to ensure every player starts with at least 10 VP",
+                    "args": {"vp": 2},
+                },
+            ]
+        )
+
+        record = convert_bga_replay(
+            table_id=TABLE_ID,
+            source_url=f"https://boardgamearena.com/gamereview?table={TABLE_ID}",
+            replay_url=f"https://boardgamearena.com/archive/replay/test/?table={TABLE_ID}",
+            game_data=game_data(),
+            packets=packets,
+        )
+
+        ledger = record["trace"]["steps"][1]["record"]["vp"]
+        self.assertTrue(ledger["audit"]["matches_state"])
+        self.assertEqual(
+            ledger["audit"]["state_deltas"],
+            ledger["audit"]["event_deltas"],
+        )
+        self.assertEqual(
+            [(event["player"], event["delta"], event["reason"]) for event in ledger["events"]],
+            [
+                (0, -2, "种族竞拍获胜支付"),
+                (0, 2, "种族竞拍起始 VP 补偿"),
+                (1, 2, "种族竞拍起始 VP 补偿"),
+            ],
         )
 
     def test_client_requests_and_decodes_gzip_responses(self) -> None:

@@ -415,7 +415,7 @@ class ScoringTileRulesTests(unittest.TestCase):
         )
         scored = replace(state, players=tuple(players)).final_scores()[0]
 
-        self.assertEqual(scored - baseline, 27)
+        self.assertEqual(scored - baseline, 30)
 
 
 if __name__ == "__main__":
