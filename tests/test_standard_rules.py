@@ -121,6 +121,36 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(sum(owner != -2 for owner in first.booster_owner), first.num_players + 3)
         self.assertEqual(len(first.booster_owner), BOOSTER_COUNT)
 
+    def test_three_player_reduced_map_matches_bga_sector_rules(self) -> None:
+        reduced = GaiaState.initial(3, seed=19, map_size="reduced")
+        normal = GaiaState.initial(3, seed=19, map_size="normal")
+
+        self.assertEqual(reduced.map_size, "reduced")
+        self.assertEqual(len(reduced.sector_tiles), 8)
+        self.assertEqual(set(reduced.sector_tiles), set(range(8)))
+        self.assertEqual(
+            reduced.sector_centers,
+            (
+                (-4, -2), (1, -4), (6, -6), (-2, 1),
+                (3, -1), (-5, 6), (0, 4), (5, 2),
+            ),
+        )
+        self.assertEqual(sum(reduced.active_planets), 49)
+        self.assertEqual(reduced.snapshot()["setup"]["map"]["size"], "reduced")
+        self.assertTrue(all(
+            sector["side"] == "solid"
+            for sector in reduced.snapshot()["setup"]["map"]["sectors"]
+        ))
+        self.assertEqual(normal.map_size, "normal")
+        self.assertEqual(len(normal.sector_tiles), 10)
+        self.assertEqual(sum(normal.active_planets), 61)
+
+    def test_map_size_is_restricted_by_player_count(self) -> None:
+        with self.assertRaisesRegex(ValueError, "two-player games"):
+            GaiaState.initial(2, map_size="normal")
+        with self.assertRaisesRegex(ValueError, "four-player games"):
+            GaiaState.initial(4, map_size="reduced")
+
     def test_faction_starting_qic_matches_initial_setup_rules(self) -> None:
         state = GaiaState.initial(
             2,

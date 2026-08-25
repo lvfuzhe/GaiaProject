@@ -13,6 +13,7 @@ from gaiazero.game.gaia_setup import (
     BOOSTER_COUNT,
     MAX_BOARD_SPACES,
     MAX_PLANETS,
+    MAX_SECTORS,
     assembled_board_spaces,
     generate_setup,
     hex_distance,
@@ -597,6 +598,7 @@ class GaiaState:
         advanced_tech_tiles: tuple[int, ...] | None = None,
         terraforming_federation_tile: int | None = None,
         map_mode: str = "bga-random",
+        map_size: str | None = None,
     ) -> GaiaState:
         if not 2 <= num_players <= 4:
             raise ValueError("GaiaState supports two to four players")
@@ -622,6 +624,7 @@ class GaiaState:
             advanced_tech_tiles=advanced_tech_tiles,
             terraforming_federation_tile=terraforming_federation_tile,
             map_mode=map_mode,
+            map_size=map_size,
         )
         owners = [-1] * N
         buildings = [Building.EMPTY] * N
@@ -717,6 +720,10 @@ class GaiaState:
     @property
     def current_player(self) -> int:
         return self.player_to_move
+
+    @property
+    def map_size(self) -> str:
+        return "normal" if len(self.sector_tiles) == MAX_SECTORS else "reduced"
 
     @property
     def action_size(self) -> int:
@@ -4706,6 +4713,7 @@ class GaiaState:
                 "seed": self.setup_seed,
                 "map": {
                     "method": self.map_mode,
+                    "size": self.map_size,
                     "sector_count": len(self.sector_tiles),
                     "sectors": [
                         {

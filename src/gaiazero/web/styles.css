@@ -420,6 +420,12 @@ main {
   outline-offset: 0;
 }
 
+.setup-editor-fields select:disabled {
+  color: var(--muted);
+  background: var(--surface-soft);
+  cursor: not-allowed;
+}
+
 .setup-editor-subheading {
   margin-top: 16px;
   padding-top: 12px;

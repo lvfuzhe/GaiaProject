@@ -726,6 +726,7 @@ def _normalize_random_setup(value: object) -> dict[str, Any] | None:
         "planet_layout",
         "terraforming_federation_tile",
         "map_mode",
+        "map_size",
     }
     unknown = set(value) - allowed_fields
     if unknown:
@@ -784,6 +785,11 @@ def _normalize_random_setup(value: object) -> dict[str, Any] | None:
         if map_mode not in ("bga-random", "manual"):
             raise ValueError("random_setup.map_mode must be 'bga-random' or 'manual'")
         normalized["map_mode"] = map_mode
+    if "map_size" in value:
+        map_size = str(value["map_size"])
+        if map_size not in ("normal", "reduced"):
+            raise ValueError("random_setup.map_size must be 'normal' or 'reduced'")
+        normalized["map_size"] = map_size
     if ("sector_tiles" in normalized) != ("sector_rotations" in normalized):
         raise ValueError("sector tiles and rotations must be provided together")
     return normalized
@@ -811,6 +817,8 @@ def _manual_initial_state(config: dict[str, Any]) -> GaiaState:
         ]
     if "map_mode" in random_setup:
         overrides["map_mode"] = random_setup["map_mode"]
+    if "map_size" in random_setup:
+        overrides["map_size"] = random_setup["map_size"]
     if "planet_positions" in random_setup:
         overrides["planet_positions"] = tuple(
             (position["id"], position["q"], position["r"])
@@ -838,6 +846,7 @@ def _resolved_random_setup(state: GaiaState) -> dict[str, Any]:
     ]
     resolved = {
         "map_mode": state.map_mode,
+        "map_size": state.map_size,
         "sector_tiles": list(state.sector_tiles),
         "sector_rotations": list(state.sector_rotations),
         "booster_tiles": available_boosters,

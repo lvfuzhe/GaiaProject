@@ -682,6 +682,8 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("setup-editor-standard-tech", page)
             self.assertIn("setup-editor-boosters", page)
             self.assertIn("setup-editor-map-mode", page)
+            self.assertIn("setup-editor-map-size", page)
+            self.assertIn("小地图 · BGA 3 人推荐", page)
             self.assertIn("play-config-form", page)
             self.assertIn("play-board-canvas", page)
             self.assertIn("play-live-roles", page)
@@ -703,6 +705,7 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("function drawStarfield", app_script)
             self.assertIn("function drawPlanetArtwork", app_script)
             self.assertIn("function drawStarMapBoard", app_script)
+            self.assertIn("function setupSectorCount", app_script)
             self.assertIn(
                 'drawStarMapBoard(byId("history-board-canvas"), snapshot, true, {',
                 app_script,
@@ -811,6 +814,7 @@ class DashboardTests(unittest.TestCase):
                 self.assertEqual(preview["config"][key], value)
             random_setup = preview["config"]["random_setup"]
             self.assertEqual(random_setup["map_mode"], "bga-random")
+            self.assertEqual(random_setup["map_size"], "reduced")
             self.assertEqual(len(random_setup["sector_tiles"]), 7)
             self.assertEqual(len(random_setup["sector_rotations"]), 7)
             self.assertEqual(len(random_setup["booster_tiles"]), 5)
@@ -842,6 +846,27 @@ class DashboardTests(unittest.TestCase):
                 and all(item["built"] == 0 for item in player["structures"].values())
                 for player in preview["state"]["players"]
             ))
+
+            three_player_payload = {
+                "players": 3,
+                "seed": 23,
+                "first_player": 1,
+                "factions": [0, 2, 4],
+                "simulations": 1,
+                "random_setup": {"map_size": "reduced"},
+            }
+            _, three_player_preview = self.post_json(
+                f"{base}/api/setup/preview",
+                three_player_payload,
+            )
+            three_player_setup = three_player_preview["config"]["random_setup"]
+            self.assertEqual(three_player_setup["map_size"], "reduced")
+            self.assertEqual(len(three_player_setup["sector_tiles"]), 8)
+            self.assertEqual(len(three_player_preview["state"]["planets"]), 49)
+            self.assertEqual(
+                three_player_preview["state"]["setup"]["map"]["size"],
+                "reduced",
+            )
 
             customized = {
                 **payload,

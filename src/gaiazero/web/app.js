@@ -150,6 +150,10 @@ const DEFAULT_RANDOM_SETUPS = {
     terraforming_federation_tile: 1,
   },
 };
+const DEFAULT_REDUCED_3P_MAP = {
+  sector_tiles: [2, 4, 3, 6, 5, 0, 1, 7],
+  sector_rotations: [1, 4, 3, 5, 3, 3, 5, 4],
+};
 const BUILDING_SPECS = [
   { key: "mine", label: "矿场", short: "M", total: 8 },
   { key: "trading_station", label: "贸易站", short: "TS", total: 4 },
@@ -639,7 +643,9 @@ function renderSetup(snapshot) {
 
   const map = setup.map;
   byId("setup-seed").textContent = setup.seed;
-  byId("setup-map-summary").textContent = `${snapshot.planets.length} 个星球 · ${map.sector_count} 个来源星区`;
+  const reducedMap = map.size === "reduced" || (!map.size && map.sector_count < 10);
+  const mapSizeLabel = reducedMap ? "小地图" : "标准地图";
+  byId("setup-map-summary").textContent = `${mapSizeLabel} · ${snapshot.planets.length} 个星球 · ${map.sector_count} 个来源星区`;
   const initialFirstPlayer = snapshot.first_player;
   byId("setup-first-player").textContent = `P${initialFirstPlayer}`;
   byId("setup-ruleset").textContent = snapshot.ruleset || "--";
@@ -873,22 +879,44 @@ function renderSetupEditorSeats(preferredFirstPlayer = null) {
   ).join("");
 }
 
-function defaultRandomElements(players) {
+function normalizedMapSize(players, requested) {
+  if (players === 2) return "reduced";
+  if (players === 4) return "normal";
+  return requested === "reduced" ? "reduced" : "normal";
+}
+
+function setupSectorCount(players, mapSize) {
+  if (players === 2) return 7;
+  return players === 3 && mapSize === "reduced" ? 8 : 10;
+}
+
+function defaultRandomElements(players, mapSize = null) {
   const source = DEFAULT_RANDOM_SETUPS[players] || DEFAULT_RANDOM_SETUPS[2];
-  return {
+  const selectedMapSize = normalizedMapSize(players, mapSize);
+  const defaults = {
     map_mode: state.manualSetup.mapMode,
+    map_size: selectedMapSize,
     ...Object.fromEntries(Object.entries(source).map(([key, value]) => [
     key,
     Array.isArray(value) ? [...value] : value,
     ])),
   };
+  if (players === 3 && selectedMapSize === "reduced") {
+    defaults.sector_tiles = [...DEFAULT_REDUCED_3P_MAP.sector_tiles];
+    defaults.sector_rotations = [...DEFAULT_REDUCED_3P_MAP.sector_rotations];
+  }
+  return defaults;
 }
 
 function normalizedRandomElements(players, values = {}) {
-  const defaults = defaultRandomElements(players);
+  const inferredMapSize = values.map_size
+    ?? (players === 3 && values.sector_tiles?.length === 8 ? "reduced" : null);
+  const mapSize = normalizedMapSize(players, inferredMapSize);
+  const defaults = defaultRandomElements(players, mapSize);
+  const sectorCount = setupSectorCount(players, mapSize);
   const expectedLengths = {
-    sector_tiles: players === 2 ? 7 : 10,
-    sector_rotations: players === 2 ? 7 : 10,
+    sector_tiles: sectorCount,
+    sector_rotations: sectorCount,
     booster_tiles: players + 3,
     round_scoring_tiles: 6,
     final_scoring_tiles: 2,
@@ -918,6 +946,7 @@ function normalizedRandomElements(players, values = {}) {
     defaults.terraforming_federation_tile = federation;
   }
   defaults.map_mode = values.map_mode === "manual" ? "manual" : "bga-random";
+  defaults.map_size = mapSize;
   state.manualSetup.mapMode = defaults.map_mode;
   return defaults;
 }
@@ -944,6 +973,7 @@ function randomElementsFromSnapshot(snapshot, config, players, _firstPlayer) {
   if (!setup) return defaultRandomElements(players);
   return normalizedRandomElements(players, {
     map_mode: setup.map?.method,
+    map_size: setup.map?.size,
     sector_tiles: setup.map?.sectors?.map((sector) => Number(sector.tile) - 1),
     sector_rotations: setup.map?.sectors?.map((sector) => Number(sector.rotation) / 60),
     planet_layout: snapshot.planets?.map((planet) => ({
@@ -981,6 +1011,20 @@ function renderRandomElementEditor() {
   const elements = normalizedRandomElements(players, state.manualSetup.randomElements || {});
   state.manualSetup.randomElements = elements;
   state.manualSetup.mapMode = elements.map_mode;
+  const mapSizeSelect = byId("setup-editor-map-size");
+  mapSizeSelect.querySelector('option[value="normal"]').textContent = players === 4
+    ? "标准地图 · 10 星区（固定）"
+    : "标准地图 · 10 星区";
+  mapSizeSelect.querySelector('option[value="reduced"]').textContent = players === 2
+    ? "小地图 · 7 星区（固定）"
+    : "小地图 · 8 星区（BGA 推荐）";
+  mapSizeSelect.value = elements.map_size;
+  mapSizeSelect.disabled = players !== 3;
+  mapSizeSelect.title = players === 2
+    ? "两人局固定使用 7 星区小地图"
+    : players === 4
+      ? "四人局固定使用 10 星区标准地图"
+      : "BGA 建议三人局使用 8 星区小地图";
   document.querySelectorAll("[data-map-mode]").forEach((button) => {
     const active = button.dataset.mapMode === elements.map_mode;
     button.classList.toggle("active", active);
@@ -988,7 +1032,7 @@ function renderRandomElementEditor() {
   });
   byId("setup-manual-sector-editor").hidden = elements.map_mode !== "manual";
   byId("setup-config-map").classList.toggle("compact", elements.map_mode !== "manual");
-  const sectorCount = players === 2 ? 7 : 10;
+  const sectorCount = setupSectorCount(players, elements.map_size);
   byId("setup-editor-sectors").innerHTML = Array.from({ length: sectorCount }, (_, index) => {
     const selected = elements.sector_tiles[index];
     const side = players === 2 && selected >= 4 && selected <= 6 ? "outlined" : "solid";
@@ -1310,7 +1354,11 @@ function resetPlanetLayout() {
 }
 
 function captureRandomElements() {
-  const result = { map_mode: state.manualSetup.mapMode };
+  const players = Number(byId("setup-editor-players").value || 2);
+  const result = {
+    map_mode: state.manualSetup.mapMode,
+    map_size: normalizedMapSize(players, byId("setup-editor-map-size").value),
+  };
   const planetLayout = state.manualSetup.randomElements?.planet_layout;
   document.querySelectorAll("[data-random-field]").forEach((select) => {
     const field = select.dataset.randomField;
@@ -1392,7 +1440,7 @@ function manualSetupPayload({ includeRandom = true } = {}) {
   };
   if (!includeRandom) return config;
   const randomSetup = captureRandomElements();
-  const sectorCount = players === 2 ? 7 : 10;
+  const sectorCount = setupSectorCount(players, randomSetup.map_size);
   if (randomSetup.map_mode === "manual") {
     validateTileSelection(randomSetup.sector_tiles, sectorCount, sectorCount, "星区板块", true);
     if (randomSetup.sector_rotations?.length !== sectorCount) {
@@ -1484,6 +1532,9 @@ async function randomizeManualSetup() {
   setSetupEditorMessage("正在随机生成全部初始板块", "running");
   try {
     const config = manualSetupPayload({ includeRandom: false });
+    config.random_setup = {
+      map_size: normalizedMapSize(players, byId("setup-editor-map-size").value),
+    };
     const response = await fetch("/api/setup/preview", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -4086,6 +4137,32 @@ byId("setup-editor-players").addEventListener("change", () => {
   );
   renderRandomElementEditor();
   setSetupEditorMessage("玩家人数已修改，随机元素已按合法模板重置", "ready");
+  renderPlayConfig();
+});
+byId("setup-editor-map-size").addEventListener("change", () => {
+  const players = Number(byId("setup-editor-players").value);
+  const mapSize = normalizedMapSize(players, byId("setup-editor-map-size").value);
+  const previous = captureRandomElements();
+  const mapDefaults = defaultRandomElements(players, mapSize);
+  state.manualSetup.randomElements = normalizedRandomElements(players, {
+    ...previous,
+    map_size: mapSize,
+    sector_tiles: mapDefaults.sector_tiles,
+    sector_rotations: mapDefaults.sector_rotations,
+    planet_layout: undefined,
+  });
+  state.manualSetup.preview = null;
+  state.manualSetup.selectedPlanetId = null;
+  state.manualSetup.planetEditorError = null;
+  state.manualSetup.planetEditorMode = "move";
+  state.manualSetup.edited = true;
+  renderRandomElementEditor();
+  setSetupEditorMessage(
+    mapSize === "reduced"
+      ? "已切换为 BGA 三人小地图（8 星区）"
+      : "已切换为标准地图（10 星区）",
+    "ready",
+  );
   renderPlayConfig();
 });
 byId("setup-editor-first-player").addEventListener("change", () => {

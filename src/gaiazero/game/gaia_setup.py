@@ -65,6 +65,19 @@ SECTOR_CENTERS_34P: tuple[tuple[int, int], ...] = (
     (5, 2),
 )
 
+# BGA's reduced three-player map keeps eight solid sectors.  It is the
+# standard ten-sector layout with the two outer side positions removed.
+SECTOR_CENTERS_3P_REDUCED: tuple[tuple[int, int], ...] = (
+    SECTOR_CENTERS_34P[0],
+    SECTOR_CENTERS_34P[1],
+    SECTOR_CENTERS_34P[2],
+    SECTOR_CENTERS_34P[4],
+    SECTOR_CENTERS_34P[5],
+    SECTOR_CENTERS_34P[7],
+    SECTOR_CENTERS_34P[8],
+    SECTOR_CENTERS_34P[9],
+)
+
 
 def assembled_board_spaces(
     centers: tuple[tuple[int, int], ...],
@@ -126,14 +139,34 @@ def generate_setup(
     advanced_tech_tiles: tuple[int, ...] | None = None,
     terraforming_federation_tile: int | None = None,
     map_mode: str = "bga-random",
+    map_size: str | None = None,
 ) -> GaiaSetup:
     if not 2 <= num_players <= 4:
         raise ValueError("num_players must be between two and four")
     rng = np.random.default_rng(seed)
     if map_mode not in ("bga-random", "manual"):
         raise ValueError("map_mode must be 'bga-random' or 'manual'")
-    centers = SECTOR_CENTERS_2P if num_players == 2 else SECTOR_CENTERS_34P
-    tile_pool = np.arange(7 if num_players == 2 else MAX_SECTORS)
+    selected_map_size = (
+        "reduced" if num_players == 2 and map_size is None
+        else "normal" if map_size is None
+        else map_size
+    )
+    if selected_map_size not in ("normal", "reduced"):
+        raise ValueError("map_size must be 'normal' or 'reduced'")
+    if num_players == 2 and selected_map_size != "reduced":
+        raise ValueError("two-player games must use the reduced map")
+    if num_players == 4 and selected_map_size != "normal":
+        raise ValueError("four-player games must use the normal map")
+    if num_players == 2:
+        centers = SECTOR_CENTERS_2P
+        tile_count = 7
+    elif selected_map_size == "reduced":
+        centers = SECTOR_CENTERS_3P_REDUCED
+        tile_count = 8
+    else:
+        centers = SECTOR_CENTERS_34P
+        tile_count = MAX_SECTORS
+    tile_pool = np.arange(tile_count)
     outlined = num_players == 2
     random_map = _random_map(rng, tile_pool, centers, outlined=outlined)
     if (sector_tiles is None) != (sector_rotations is None):
