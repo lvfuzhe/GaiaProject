@@ -447,6 +447,7 @@
                 <div id="play-research-stage" class="research-board-stage">
                   <img class="research-board-art" src="/assets/boards/research-board.png?source=bga-260630-1810" alt="盖亚计划科研背景板">
                   <div id="play-research-tech" class="research-board-tech" aria-label="本局科技板块"></div>
+                  <div id="play-research-federation" class="research-board-federation" aria-label="改造轨顶联邦板块"></div>
                   <div id="play-research-markers" class="research-board-markers" aria-label="玩家科研轨位置"></div>
                 </div>
               </div>
@@ -732,6 +733,34 @@
           <div id="history-delta" class="history-delta">等待状态变化</div>
         </section>
 
+        <section class="panel content-band history-components-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Configured components</p>
+              <h3>本局公共板块</h3>
+            </div>
+            <span id="history-components-status" class="muted">等待历史快照</span>
+          </div>
+          <div class="history-components-grid">
+            <section class="history-component-group history-round-group" aria-labelledby="history-round-heading">
+              <div class="history-component-heading"><strong id="history-round-heading">轮次计分</strong><small>当前进度</small></div>
+              <div id="history-round-scoring" class="history-round-scoring"></div>
+            </section>
+            <section class="history-component-group history-final-group" aria-labelledby="history-final-heading">
+              <div class="history-component-heading"><strong id="history-final-heading">终局计分</strong><small>实时排名目标</small></div>
+              <div id="history-final-scoring" class="history-final-scoring"></div>
+            </section>
+            <section class="history-component-group history-booster-group" aria-labelledby="history-booster-heading">
+              <div class="history-component-heading"><strong id="history-booster-heading">助推板块</strong><small>公共池与持有者</small></div>
+              <div id="history-boosters" class="history-boosters"></div>
+            </section>
+            <section class="history-component-group history-federation-group" aria-labelledby="history-federation-heading">
+              <div class="history-component-heading"><strong id="history-federation-heading">剩余联邦片</strong><small>按类型计数</small></div>
+              <div id="history-federation-supply" class="history-federation-supply"></div>
+            </section>
+          </div>
+        </section>
+
         <section class="panel content-band history-research-panel">
           <div class="panel-heading">
             <div>
@@ -746,6 +775,7 @@
                 <div id="history-research-stage" class="research-board-stage">
                   <img class="research-board-art" src="/assets/boards/research-board.png?source=bga-260630-1810" alt="盖亚计划科研背景板块">
                   <div id="history-research-tech" class="research-board-tech" aria-label="历史快照科技板块"></div>
+                  <div id="history-research-federation" class="research-board-federation" aria-label="改造轨顶联邦板块"></div>
                   <div id="history-research-markers" class="research-board-markers" aria-label="历史快照玩家科研轨位置"></div>
                 </div>
               </div>

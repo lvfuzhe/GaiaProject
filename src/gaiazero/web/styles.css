@@ -1332,6 +1332,38 @@ main {
   pointer-events: none;
 }
 
+.research-board-federation {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.research-federation-tile {
+  position: absolute;
+  top: -0.7628%;
+  left: 4.9180%;
+  width: 7.8689%;
+  aspect-ratio: 96 / 119;
+  display: block;
+  transform: scale(0.85);
+  transform-origin: center;
+  filter: drop-shadow(0 1px 2px rgb(9 14 12 / 60%));
+  pointer-events: auto;
+}
+
+.research-federation-tile:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.research-federation-tile img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
 /* BGA gameBoard.png is 1220 x 1311; these slots preserve its source coordinates. */
 .research-tech-slot {
   position: absolute;
@@ -2180,6 +2212,154 @@ main {
 
 .history-research-panel {
   margin-top: 14px;
+}
+
+.history-components-panel {
+  margin-top: 14px;
+}
+
+.history-components-grid {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
+  gap: 18px 24px;
+}
+
+.history-component-group {
+  min-width: 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-strong);
+}
+
+.history-component-heading {
+  margin-bottom: 9px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.history-component-heading strong {
+  font-size: 11px;
+}
+
+.history-component-heading small {
+  color: var(--muted);
+  font-size: 8px;
+  white-space: nowrap;
+}
+
+.history-round-scoring,
+.history-final-scoring,
+.history-boosters,
+.history-federation-supply {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-color: var(--line-strong) transparent;
+  scrollbar-width: thin;
+  padding: 2px 2px 7px;
+}
+
+.history-round-tile,
+.history-final-tile,
+.history-booster-tile,
+.history-federation-tile {
+  min-width: 0;
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface-soft);
+  overflow: hidden;
+}
+
+.history-round-tile { width: 66px; }
+.history-final-tile { width: 132px; }
+.history-booster-tile { width: 58px; }
+.history-federation-tile { width: 63px; }
+
+.history-component-art {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 78px;
+  padding: 4px;
+  background: #151b18;
+}
+
+.history-component-art img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.history-final-tile .history-component-art { height: 82px; }
+.history-booster-tile .history-component-art { height: 126px; }
+.history-federation-tile .history-component-art { height: 82px; }
+
+.history-component-meta {
+  min-height: 38px;
+  padding: 6px;
+  display: grid;
+  align-content: start;
+  gap: 2px;
+}
+
+.history-component-meta strong {
+  font-family: Consolas, monospace;
+  font-size: 9px;
+}
+
+.history-component-meta small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 7px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-round-tile.current {
+  border-color: var(--green);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--green) 25%, transparent);
+}
+
+.history-round-tile.current .history-component-meta small,
+.history-booster-tile.available .history-component-meta small {
+  color: var(--green);
+  font-weight: 700;
+}
+
+.history-round-tile.past .history-component-art,
+.history-booster-tile.assigned .history-component-art,
+.history-federation-tile.depleted .history-component-art {
+  filter: grayscale(0.75);
+  opacity: 0.58;
+}
+
+.history-federation-tile .history-component-art b {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  border: 1px solid rgb(255 255 255 / 72%);
+  border-radius: 10px;
+  background: rgb(13 24 19 / 88%);
+  font-family: Consolas, monospace;
+  font-size: 10px;
 }
 
 .history-research-layout {
@@ -4155,6 +4335,11 @@ footer {
 
   .metric-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .history-components-grid {
+    grid-template-columns: 1fr;
+    gap: 16px;
   }
 
   .setup-summary {

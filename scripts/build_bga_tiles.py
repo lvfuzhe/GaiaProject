@@ -47,6 +47,10 @@ SHEETS = (
         "endGameBonus.png",
         "3494E636C3CDF4D6DDC9F6D247EF1360285F8B9D6CAB10D1BCA10CC181D082CF",
     ),
+    SpriteSheet(
+        "federationTokens.png",
+        "64B3A410C6D01B3BCCCDB3663A7257C826FE04CB1F70F3D6880CFB26BC393A5F",
+    ),
 )
 
 
@@ -105,7 +109,9 @@ def _crop_columns(
                 raise ValueError(f"BGA tile crop is blank: {source.name} column {column}")
 
             output = OUTPUT_DIR / filename_pattern.format(output_index)
-            if output_format == "GIF":
+            if output_format == "PNG":
+                image.convert("RGBA").save(output, format="PNG", optimize=True)
+            elif output_format == "GIF":
                 image.convert("RGBA").save(output, format="GIF", optimize=True)
             else:
                 background = Image.new("RGB", image.size, "white")
@@ -169,6 +175,15 @@ def build(source_dir: Path, download: bool = False) -> list[Path]:
         output_size=(141, 87),
         filename_pattern="final-scoring-{:02d}.jpg",
         output_format="JPEG",
+    ))
+    outputs.extend(_crop_columns(
+        sources["federationTokens.png"],
+        first_column=1,
+        count=6,
+        source_size=(96, 119),
+        output_size=(96, 119),
+        filename_pattern="federation-{:02d}.png",
+        output_format="PNG",
     ))
     return outputs
 

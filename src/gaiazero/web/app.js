@@ -590,6 +590,7 @@ function tileAsset(kind, id) {
     round: ["round-scoring", "gif"],
     final: ["final-scoring", "jpg"],
     booster: ["booster", "jpg"],
+    federation: ["federation", "png"],
   };
   const [prefix, extension] = assets[kind] || [];
   return prefix ? `/assets/tiles/${prefix}-${String(number).padStart(2, "0")}.${extension}` : "";
@@ -642,6 +643,80 @@ function finalRanking(snapshot, tile) {
       ...entry,
       points: [18, 12, 6, 0][Math.min(entry.rank - 1, 3)],
     }));
+}
+
+function renderHistoryConfiguredComponents(snapshot) {
+  const setup = snapshot?.setup;
+  const status = byId("history-components-status");
+  const roundTarget = byId("history-round-scoring");
+  const finalTarget = byId("history-final-scoring");
+  const boosterTarget = byId("history-boosters");
+  const federationTarget = byId("history-federation-supply");
+  if (!status || !roundTarget || !finalTarget || !boosterTarget || !federationTarget) return;
+
+  if (!setup) {
+    status.textContent = "当前快照没有初始配置";
+    roundTarget.innerHTML = "";
+    finalTarget.innerHTML = "";
+    boosterTarget.innerHTML = "";
+    federationTarget.innerHTML = "";
+    return;
+  }
+
+  const currentRound = Number(snapshot.round || 0);
+  const terminal = Boolean(snapshot.terminal);
+  const roundScoring = Array.isArray(setup.round_scoring) ? setup.round_scoring : [];
+  roundTarget.innerHTML = roundScoring.map((tile) => {
+    const round = Number(tile.round);
+    const current = !terminal && currentRound === round;
+    const past = terminal || currentRound > round;
+    const stateLabel = current ? "进行中" : (past ? "已完成" : "待开始");
+    const name = setupLabel(tile);
+    return `<article class="history-round-tile ${current ? "current" : ""} ${past ? "past" : ""}" title="第 ${round} 轮 · ${escapeHtml(name)} · ${stateLabel}">
+      <span class="history-component-art"><img src="${tileAsset("round", tile.id)}" alt="${escapeHtml(name)}"></span>
+      <span class="history-component-meta"><strong>R${round}</strong><small>${stateLabel}</small></span>
+    </article>`;
+  }).join("");
+
+  const finalScoring = Array.isArray(setup.final_scoring) ? setup.final_scoring : [];
+  finalTarget.innerHTML = finalScoring.map((tile, index) => {
+    const name = setupLabel(tile);
+    const ranking = snapshot?.players?.length ? finalRanking(snapshot, tile) : [];
+    const rankingLabel = ranking.map((entry) => `P${entry.player.id} ${entry.value}`).join(" · ");
+    return `<article class="history-final-tile" title="${escapeHtml(name)}${rankingLabel ? ` · ${escapeHtml(rankingLabel)}` : ""}">
+      <span class="history-component-art"><img src="${tileAsset("final", tile.id)}" alt="${escapeHtml(name)}"></span>
+      <span class="history-component-meta"><strong>终局 ${index + 1}</strong><small>${escapeHtml(name)}</small></span>
+    </article>`;
+  }).join("");
+
+  const boosters = Array.isArray(setup.boosters) ? setup.boosters : [];
+  const players = Array.isArray(snapshot.players) ? snapshot.players : [];
+  boosterTarget.innerHTML = boosters.map((booster) => {
+    const currentOwner = players.find((player) => Number(player.booster) === Number(booster.id));
+    const ownerId = currentOwner?.id ?? Number(booster.owner ?? -1);
+    const owner = ownerId >= 0 ? players.find((player) => Number(player.id) === ownerId) : null;
+    const ownerLabel = ownerId >= 0
+      ? `P${ownerId}${owner?.faction ? ` · ${owner.faction}` : ""}`
+      : "公共池";
+    const name = BOOSTER_NAMES[booster.id] || booster.label || `助推 ${Number(booster.id) + 1}`;
+    return `<article class="history-booster-tile ${ownerId >= 0 ? "assigned" : "available"}" title="${escapeHtml(name)} · ${escapeHtml(ownerLabel)}">
+      <span class="history-component-art"><img src="${tileAsset("booster", booster.id)}" alt="${escapeHtml(name)}"></span>
+      <span class="history-component-meta"><strong>B${Number(booster.id) + 1}</strong><small>${escapeHtml(ownerLabel)}</small></span>
+    </article>`;
+  }).join("");
+
+  const supply = Array.isArray(setup.federation_supply) ? setup.federation_supply : [];
+  federationTarget.innerHTML = Array.from({ length: 6 }, (_, id) => {
+    const count = Math.max(0, Number(supply[id] || 0));
+    const name = FEDERATION_NAMES[id];
+    return `<article class="history-federation-tile ${count === 0 ? "depleted" : ""}" title="${escapeHtml(name)} · 剩余 ${count}">
+      <span class="history-component-art"><img src="${tileAsset("federation", id)}" alt="${escapeHtml(name)}"><b>${count}</b></span>
+      <span class="history-component-meta"><strong>F${id + 1}</strong><small>剩余 ${count}</small></span>
+    </article>`;
+  }).join("");
+
+  const configured = roundScoring.length + finalScoring.length + boosters.length;
+  status.textContent = `${terminal ? "对局结束" : (currentRound > 0 ? `第 ${currentRound} 轮` : "开局阶段")} · ${configured} 块已配置`;
 }
 
 function renderSetup(snapshot) {
@@ -2261,6 +2336,7 @@ function renderHistory() {
   byId("history-step-label").textContent = `${step.move} / ${Math.max(0, steps.length - 1)}`;
   const previous = steps[state.history.step - 1]?.state;
   byId("history-delta").textContent = historyDelta(previous, snapshot, step);
+  renderHistoryConfiguredComponents(snapshot);
   renderHistoryResearchBoard(snapshot);
   renderPlayerRows("history-players-table", snapshot, "history-active-player");
   renderPersonalBoards("history-player-board-grid", snapshot);
@@ -3089,16 +3165,18 @@ function drawLostPlanetMarker(context, x, y, color, scale = 1) {
 function renderResearchBoard(snapshot, scope = "play") {
   const stage = byId(`${scope}-research-stage`);
   const techLayer = byId(`${scope}-research-tech`);
+  const federationLayer = byId(`${scope}-research-federation`);
   const markerLayer = byId(`${scope}-research-markers`);
   const legend = byId(`${scope}-research-player-legend`);
   const status = byId(`${scope}-research-status`);
-  if (!stage || !techLayer || !markerLayer || !legend || !status) return;
+  if (!stage || !techLayer || !federationLayer || !markerLayer || !legend || !status) return;
 
   const setup = snapshot?.setup;
   const players = snapshot?.players || [];
   if (!players.length) {
     status.textContent = "等待科研轨数据";
     techLayer.innerHTML = "";
+    federationLayer.innerHTML = "";
     markerLayer.innerHTML = "";
     legend.innerHTML = "";
     return;
@@ -3130,6 +3208,19 @@ function renderResearchBoard(snapshot, scope = "play") {
     });
     techLayer.innerHTML = [...trackTechSlots, ...freeTechSlots].join("");
     techLayer.dataset.signature = techSignature;
+  }
+
+  const federation = setup?.terraforming_federation;
+  const federationId = Number(federation?.id);
+  if (Number.isInteger(federationId) && federationId >= 0 && federationId < 6) {
+    const federationName = FEDERATION_NAMES[federationId] || federation.label || `联邦 ${federationId + 1}`;
+    if (federationLayer.dataset.signature !== String(federationId)) {
+      federationLayer.innerHTML = `<span class="research-federation-tile" role="img" tabindex="0" aria-label="改造轨顶联邦板块：${escapeHtml(federationName)}" title="改造轨顶 · ${escapeHtml(federationName)}"><img src="${tileAsset("federation", federationId)}" alt="" aria-hidden="true"></span>`;
+      federationLayer.dataset.signature = String(federationId);
+    }
+  } else {
+    federationLayer.innerHTML = "";
+    federationLayer.dataset.signature = "";
   }
 
   markerLayer.innerHTML = Object.entries(TRACK_LABELS).flatMap(([track, label], trackIndex) =>

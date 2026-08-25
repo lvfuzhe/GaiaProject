@@ -654,6 +654,7 @@ class DashboardTests(unittest.TestCase):
                 "round-scoring-01.gif",
                 "final-scoring-01.jpg",
                 "booster-01.jpg",
+                "federation-01.png",
             ):
                 with urlopen(f"{base}/assets/tiles/{path}", timeout=5) as response:
                     tile_assets[path] = (response.headers.get_content_type(), response.read())
@@ -688,11 +689,17 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("play-board-canvas", page)
             self.assertIn("play-live-roles", page)
             self.assertIn("play-research-stage", page)
+            self.assertIn("play-research-federation", page)
             self.assertIn("play-research-markers", page)
             self.assertIn("history-research-stage", page)
             self.assertIn("history-research-tech", page)
+            self.assertIn("history-research-federation", page)
             self.assertIn("history-research-markers", page)
             self.assertIn("history-research-player-legend", page)
+            self.assertIn("history-round-scoring", page)
+            self.assertIn("history-final-scoring", page)
+            self.assertIn("history-boosters", page)
+            self.assertIn("history-federation-supply", page)
             self.assertIn("history-action-log", page)
             self.assertNotIn("history-action-table", page)
             self.assertNotIn("play-research-players", page)
@@ -728,6 +735,7 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("function runInteractiveAiTurn", app_script)
             self.assertIn("function renderLiveResearchBoard", app_script)
             self.assertIn("function renderHistoryResearchBoard", app_script)
+            self.assertIn("function renderHistoryConfiguredComponents", app_script)
             self.assertIn("function renderHistoryActionEntry", app_script)
             self.assertIn('renderResearchBoard(snapshot, "history")', app_script)
             self.assertIn("function undoInteractiveTurn", app_script)
@@ -792,10 +800,21 @@ class DashboardTests(unittest.TestCase):
             self.assertIn(".research-tech-slot.advanced.track-0 { left: 4.2623%; }", styles)
             self.assertIn(".research-tech-slot.standard.track-0 { left: 2.2951%; }", styles)
             self.assertIn(".research-tech-slot.free-2 { left: 72.5410%; }", styles)
+            self.assertIn(".research-federation-tile", styles)
+            self.assertIn("left: 4.9180%", styles)
             for name, (content_type, content) in tile_assets.items():
-                expected_type = "image/gif" if name.endswith(".gif") else "image/jpeg"
+                expected_type = (
+                    "image/gif" if name.endswith(".gif")
+                    else "image/png" if name.endswith(".png")
+                    else "image/jpeg"
+                )
                 self.assertEqual(content_type, expected_type)
-                self.assertTrue(content.startswith(b"GIF" if expected_type == "image/gif" else b"\xff\xd8"))
+                signature = {
+                    "image/gif": b"GIF",
+                    "image/png": b"\x89PNG\r\n\x1a\n",
+                    "image/jpeg": b"\xff\xd8",
+                }[expected_type]
+                self.assertTrue(content.startswith(signature))
                 self.assertGreater(len(content), 1_000, name)
         finally:
             server.shutdown()
