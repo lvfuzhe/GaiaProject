@@ -1810,6 +1810,15 @@ def _interactive_player_changes(
                 "before": old_value,
                 "after": new_value,
             })
+    old_used_federations = max(0, old.federation_tokens - old.federation_keys)
+    new_used_federations = max(0, new.federation_tokens - new.federation_keys)
+    if old_used_federations != new_used_federations:
+        changes.append({
+            "kind": "counter",
+            "counter": "federation_used",
+            "before": old_used_federations,
+            "after": new_used_federations,
+        })
     if old.knowledge_academies != new.knowledge_academies:
         changes.append({
             "kind": "academy",

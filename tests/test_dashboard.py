@@ -13,6 +13,7 @@ from gaiazero.dashboard import (
     _interactive_action_record,
     _interactive_action_snapshot,
     _interactive_board_changes,
+    _interactive_player_changes,
     create_dashboard_server,
 )
 from gaiazero.game import GaiaState, MiniGaiaState
@@ -78,6 +79,39 @@ class DashboardTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.metrics.unlink(missing_ok=True)
         shutil.rmtree(self.history, ignore_errors=True)
+
+    def test_federation_use_updates_unused_and_used_history_counts(self) -> None:
+        before = GaiaState.initial(2)
+        players = list(before.players)
+        players[0] = replace(
+            players[0],
+            federation_tokens=2,
+            federation_keys=2,
+        )
+        before = replace(before, players=tuple(players))
+        players[0] = replace(players[0], federation_keys=1)
+        after = replace(before, players=tuple(players))
+
+        changes = _interactive_player_changes(before, after, 0)
+
+        self.assertIn(
+            {
+                "kind": "counter",
+                "counter": "federation_keys",
+                "before": 2,
+                "after": 1,
+            },
+            changes,
+        )
+        self.assertIn(
+            {
+                "kind": "counter",
+                "counter": "federation_used",
+                "before": 0,
+                "after": 1,
+            },
+            changes,
+        )
 
     def test_optional_technology_research_skip_has_a_distinct_action_kind(self) -> None:
         state = replace(
@@ -737,6 +771,17 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("function renderHistoryResearchBoard", app_script)
             self.assertIn("function renderHistoryConfiguredComponents", app_script)
             self.assertIn("function renderHistoryActionEntry", app_script)
+            self.assertIn("federation_tile_counts", app_script)
+            self.assertIn("federation_unused", app_script)
+            self.assertIn("federation_used", app_script)
+            self.assertIn("owned-federation-state unused", app_script)
+            self.assertIn("owned-federation-state used", app_script)
+            self.assertIn("未使用联邦片", app_script)
+            self.assertIn("已使用联邦片", app_script)
+            self.assertIn("已获联邦板块", app_script)
+            self.assertIn("owned-federation-count", app_script)
+            self.assertIn("acquiredAdvancedTech", app_script)
+            self.assertIn("已被高级科技覆盖", app_script)
             self.assertIn('renderResearchBoard(snapshot, "history")', app_script)
             self.assertIn("function undoInteractiveTurn", app_script)
             self.assertIn("function updateLivePlayRole", app_script)
@@ -801,6 +846,10 @@ class DashboardTests(unittest.TestCase):
             self.assertIn(".research-tech-slot.standard.track-0 { left: 2.2951%; }", styles)
             self.assertIn(".research-tech-slot.free-2 { left: 72.5410%; }", styles)
             self.assertIn(".research-federation-tile", styles)
+            self.assertIn("aspect-ratio: 130 / 97", styles)
+            self.assertIn(".owned-federation-grid", styles)
+            self.assertIn(".owned-federation-state.unused", styles)
+            self.assertIn(".owned-federation-state.used", styles)
             self.assertIn("left: 4.9180%", styles)
             for name, (content_type, content) in tile_assets.items():
                 expected_type = (

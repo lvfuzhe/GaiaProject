@@ -4783,6 +4783,10 @@ class GaiaState:
                     "federation_threshold": self._federation_threshold(player),
                     "board_federations": info.board_federations,
                     "federation_keys": info.federation_keys,
+                    "federation_unused": info.federation_keys,
+                    "federation_used": max(
+                        0, info.federation_tokens - info.federation_keys
+                    ),
                     "gleens_federation_tokens": info.gleens_federation_tokens,
                     "federation_tile_counts": list(info.federation_tile_counts),
                     "booster": self._player_booster(player),

@@ -2999,6 +2999,9 @@ function renderPersonalBoards(containerId, snapshot) {
   const techCatalog = new Map(
     (snapshot.setup?.standard_tech || []).map((tile) => [Number(tile.id), tile]),
   );
+  const advancedTechCatalog = new Map(
+    (snapshot.setup?.advanced_tech || []).map((tile) => [Number(tile.id), tile]),
+  );
   const planets = snapshot.planets || [];
   const factionIdByName = new Map(BASE_FACTIONS.map((faction) => [faction.name, faction.id]));
   const resourceSpecs = [
@@ -3061,6 +3064,51 @@ function renderPersonalBoards(containerId, snapshot) {
       }).join("")
       : '<span class="base-location empty">尚未部署基地</span>';
     const acquiredTech = Array.isArray(player.tech_tiles) ? player.tech_tiles : [];
+    const acquiredAdvancedTech = Array.isArray(player.advanced_tech_tiles)
+      ? player.advanced_tech_tiles
+      : [];
+    const coveredTech = new Set(
+      Array.isArray(player.covered_tech_tiles)
+        ? player.covered_tech_tiles.map(Number)
+        : [],
+    );
+    const acquiredTechTotal = acquiredTech.length + acquiredAdvancedTech.length;
+    const federationCounts = Array.from({ length: FEDERATION_NAMES.length }, (_, id) => {
+      const localCount = Number(player.federation_tile_counts?.[id]);
+      if (Number.isFinite(localCount) && localCount > 0) return localCount;
+      return Array.isArray(player.federation_tiles)
+        ? player.federation_tiles.filter((tileId) => Number(tileId) === id).length
+        : 0;
+    });
+    const standardFederationTotal = federationCounts.reduce((total, count) => total + count, 0);
+    const gleensFederationTotal = Number(player.gleens_federation_tokens || 0);
+    const trackedFederationTotal = Number(player.federations);
+    const federationTotal = Math.max(
+      standardFederationTotal + gleensFederationTotal,
+      Number.isFinite(trackedFederationTotal) ? trackedFederationTotal : 0,
+    );
+    const federationUnusedValue = Number(
+      player.federation_unused ?? player.federation_keys,
+    );
+    const federationUnused = Number.isFinite(federationUnusedValue)
+      ? Math.max(0, Math.min(federationTotal, federationUnusedValue))
+      : federationTotal;
+    const federationUsedValue = Number(player.federation_used);
+    const federationUsed = Number.isFinite(federationUsedValue)
+      ? Math.max(0, Math.min(federationTotal, federationUsedValue))
+      : Math.max(0, federationTotal - federationUnused);
+    const federationUsage = federationTotal
+      ? `<div class="owned-federation-usage" aria-label="联邦板块使用状态">
+          <div class="owned-federation-state unused" title="绿色面：尚未使用">
+            <i class="owned-federation-face" aria-hidden="true"></i>
+            <span>未使用</span><strong>${formatNumber(federationUnused)}</strong>
+          </div>
+          <div class="owned-federation-state used" title="灰色面：已经使用">
+            <i class="owned-federation-face" aria-hidden="true"></i>
+            <span>已使用</span><strong>${formatNumber(federationUsed)}</strong>
+          </div>
+        </div>`
+      : "";
     const boosterId = Number(player.booster);
     const ownedBooster = Number.isInteger(boosterId) && boosterId >= 0
       ? `<div class="personal-booster-tile">
@@ -3068,17 +3116,47 @@ function renderPersonalBoards(containerId, snapshot) {
           <div><span>当前助推</span><strong>${escapeHtml(BOOSTER_NAMES[boosterId] || `助推 ${boosterId + 1}`)}</strong></div>
         </div>`
       : '<div class="personal-booster-empty">等待选择助推板块</div>';
-    const techTiles = acquiredTech.length
-      ? acquiredTech.map((tileId) => {
+    const techTiles = acquiredTechTotal
+      ? [
+        ...acquiredTech.map((tileId) => {
         const id = Number(tileId);
         const tile = techCatalog.get(id) || { id, key: STANDARD_TECH_KEYS[id], label: "" };
         const label = setupLabel(tile);
-        return `<div class="owned-tech-tile" title="${escapeHtml(label)}">
+        const isCovered = coveredTech.has(id);
+        return `<div class="owned-tech-tile standard ${isCovered ? "covered" : ""}" title="${escapeHtml(label)}${isCovered ? " · 已被高级科技覆盖" : ""}">
           <div class="owned-tech-art"><img src="${tileAsset("standard", id, tile.key)}" alt="${escapeHtml(label)}"></div>
-          <strong>${escapeHtml(label)}</strong>
+          <strong>${escapeHtml(label)}</strong>${isCovered ? "<small>已覆盖</small>" : ""}
         </div>`;
-      }).join("")
+        }),
+        ...acquiredAdvancedTech.map((tileId) => {
+          const id = Number(tileId);
+          const tile = advancedTechCatalog.get(id) || { id, label: ADVANCED_TECH_NAMES[id] || "" };
+          const label = setupLabel(tile);
+          return `<div class="owned-tech-tile advanced" title="高级科技 · ${escapeHtml(label)}">
+            <div class="owned-tech-art"><img src="${tileAsset("advanced", id, tile.key)}" alt="${escapeHtml(label)}"></div>
+            <strong>${escapeHtml(label)}</strong><small>高级科技</small>
+          </div>`;
+        }),
+      ].join("")
       : '<div class="owned-tech-empty">尚未获得科技</div>';
+    const federationTileDetailsTotal = standardFederationTotal + gleensFederationTotal;
+    const federationTiles = federationTileDetailsTotal
+      ? [
+        ...federationCounts.flatMap((count, id) => count > 0 ? [`<div class="owned-federation-tile" title="${escapeHtml(FEDERATION_NAMES[id])} × ${count}">
+          <div class="owned-federation-art">
+            <img src="${tileAsset("federation", id)}" alt="${escapeHtml(FEDERATION_NAMES[id])}">
+            ${count > 1 ? `<b class="owned-federation-count">×${count}</b>` : ""}
+          </div>
+          <strong>${escapeHtml(FEDERATION_NAMES[id])}</strong>
+        </div>`] : []),
+        ...(gleensFederationTotal > 0 ? [`<div class="owned-federation-tile gleens" title="Gleens 专属联邦板块 × ${gleensFederationTotal}">
+          <div class="owned-federation-art owned-federation-special"><span>GLE</span>${gleensFederationTotal > 1 ? `<b class="owned-federation-count">×${gleensFederationTotal}</b>` : ""}</div>
+          <strong>Gleens 专属联邦</strong>
+        </div>`] : []),
+      ].join("")
+      : federationTotal
+        ? '<div class="owned-federation-empty">历史数据未记录板块种类</div>'
+        : '<div class="owned-federation-empty">尚未获得联邦板块</div>';
     const power = Array.isArray(player.power) ? player.power : [0, 0, 0];
     const brainstoneBowl = Number(player.brainstone_bowl || 0);
     const powerAreas = [
@@ -3137,8 +3215,11 @@ function renderPersonalBoards(containerId, snapshot) {
         </div>
         <aside class="personal-tech-rack">
           ${ownedBooster}
-          <div class="personal-tech-heading"><strong>已获科技</strong><span>${acquiredTech.length} 块</span></div>
+          <div class="personal-tech-heading"><strong>已获科技</strong><span>${acquiredTechTotal} 块</span></div>
           <div class="owned-tech-grid">${techTiles}</div>
+          <div class="personal-federation-heading"><strong>已获联邦板块</strong><span>${federationTotal} 块</span></div>
+          ${federationUsage}
+          <div class="owned-federation-grid">${federationTiles}</div>
         </aside>
       </div>
     </article>`;
@@ -3325,7 +3406,7 @@ const PLAY_LOG_RESOURCE_LABELS = {
   gaia_conversion_power: "盖亚兑换额度",
   gaia_power: "盖亚区能量",
   gaiaformers: "盖亚塑形者",
-  federation_key: "绿色联邦标记",
+  federation_key: "未使用联邦片",
 };
 
 const PLAY_LOG_COUNTER_LABELS = {
@@ -3333,7 +3414,8 @@ const PLAY_LOG_COUNTER_LABELS = {
   gaiaformers: "可用盖亚塑形者",
   gaiaformers_in_gaia: "盖亚区塑形者",
   federation_tokens: "联邦板块",
-  federation_keys: "绿色联邦标记",
+  federation_keys: "未使用联邦片",
+  federation_used: "已使用联邦片",
   gleens_federation_tokens: "Gleens 专属联邦板块",
   satellites: "卫星",
 };

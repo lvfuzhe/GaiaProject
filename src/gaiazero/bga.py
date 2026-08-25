@@ -156,14 +156,14 @@ BGA_NOTIFICATION_FUNCTIONS: dict[str, tuple[str, str]] = {
     "notifyGaiaDone": ("盖亚阶段结束", "结算盖亚阶段并进入收入或行动阶段"),
     "notifyGaiaformed": ("盖亚化完成", "把对应的超空间星球翻为盖亚星球"),
     "notifyGainResource": ("获得或支付资源", "应用资源及可能包含的即时 VP 变化"),
-    "notifyGainTech": ("获得科技板块", "获得基础或高级科技、覆盖基础科技并翻灰联邦钥匙"),
+    "notifyGainTech": ("获得科技板块", "获得基础或高级科技、覆盖基础科技并消耗未使用联邦片"),
     "notifyGeneric": ("规则消息", "记录竞拍、全局补分或不属于专用通知的规则结果"),
     "notifyIncome": ("回合收入", "更新当前建筑与科技产生的回合收入明细"),
     "notifyPass": ("过轮", "结算助推/高级科技过轮 VP，选择下轮助推并更新顺位"),
     "notifyPlaceStartingBldg": ("放置起始建筑", "更新蛇形起始建筑摆放"),
     "notifyPlayerOrder": ("玩家顺位", "更新首家与行动顺序"),
     "notifyRace6Swap": ("Ambas 建筑交换", "交换一个矿场与行星研究院的位置"),
-    "notifyResearch": ("推进科研", "更新科研轨、知识开销和联邦钥匙"),
+    "notifyResearch": ("推进科研", "更新科研轨、知识开销和未使用联邦片数量"),
     "notifyRoundEnd": ("大轮结束", "推进轮次或进入终局结算"),
     "notifyScore": ("计分", "应用轮次、科技、种族、被动充能或终局 VP"),
     "notifySetOptions": ("玩家选项", "更新 BGA 自动确认等玩家偏好，不改变规则资源"),
@@ -931,7 +931,8 @@ class _BgaReplayState:
         player = self._player(player_id)
 
         payload = args.get("player")
-        if player is not None and isinstance(payload, dict):
+        has_player_payload = player is not None and isinstance(payload, dict)
+        if has_player_payload:
             _apply_player_payload(player, payload)
         players_payload = args.get("players")
         if isinstance(players_payload, dict):
@@ -939,6 +940,8 @@ class _BgaReplayState:
                 target = self._player(_player_id(source_id))
                 if target is not None and isinstance(source_player, dict):
                     _apply_player_payload(target, source_player)
+                    if target is player:
+                        has_player_payload = True
 
         map_payload = args.get("map")
         if isinstance(map_payload, dict):
@@ -972,6 +975,10 @@ class _BgaReplayState:
                 0,
                 player["knowledge"] - _as_int(args.get("knowledgeCost"), 0),
             )
+            if _as_int(args.get("fedTokenId"), 0) > 0 and not has_player_payload:
+                player["federation_keys"] = max(
+                    0, player["federation_keys"] - 1
+                )
         elif notice_type == "notifyChargePower" and player is not None:
             power = args.get("power")
             if isinstance(power, list) and len(power) >= 4:
@@ -1002,14 +1009,30 @@ class _BgaReplayState:
             if 0 <= covered < 9 and covered not in player["covered_tech_tiles"]:
                 player["covered_tech_tiles"].append(covered)
             player["qic"] = max(0, player["qic"] - _as_int(args.get("qicCost"), 0))
+            if _as_int(args.get("fedTokenId"), 0) > 0 and not has_player_payload:
+                player["federation_keys"] = max(
+                    0, player["federation_keys"] - 1
+                )
         elif notice_type == "notifyTakeFedToken" and player is not None:
-            federation_tile = _local_federation_tile(args.get("fedTokenId"))
-            if federation_tile < 0:
+            bga_federation_tile = _as_int(args.get("fedTokenId"), 0)
+            federation_tile = _local_federation_tile(bga_federation_tile)
+            is_gleens_tile = bga_federation_tile == 7
+            if federation_tile < 0 and not is_gleens_tile:
                 return
-            player["federation_tiles"].append(federation_tile)
-            player["federations"] = len(player["federation_tiles"])
+            if not has_player_payload:
+                if is_gleens_tile:
+                    player["gleens_federation_tokens"] += 1
+                else:
+                    player["federation_tiles"].append(federation_tile)
+                player["federations"] = (
+                    len(player["federation_tiles"])
+                    + player["gleens_federation_tokens"]
+                )
+                if bga_federation_tile != 1:
+                    player["federation_keys"] += 1
             if (
-                federation_tile < len(self.federation_supply)
+                not is_gleens_tile
+                and federation_tile < len(self.federation_supply)
                 and self.federation_supply[federation_tile] > 0
             ):
                 self.federation_supply[federation_tile] -= 1
@@ -1046,6 +1069,8 @@ class _BgaReplayState:
                 first_id = _player_id(order[0])
                 if first_id in self.player_index:
                     self.first_player = self.player_index[first_id]
+        for item in self.players:
+            _refresh_federation_usage(item)
         self._refresh_structure_counts()
 
     def snapshot(self) -> dict[str, Any]:
@@ -1440,6 +1465,10 @@ def _empty_player(index: int, player_id: int, name: str | None) -> dict[str, Any
         "qic_academies": 0,
         "federations": 0,
         "federation_tiles": [],
+        "federation_keys": 0,
+        "federation_unused": 0,
+        "federation_used": 0,
+        "gleens_federation_tokens": 0,
         "booster": -1,
         "passed": False,
     }
@@ -1503,7 +1532,29 @@ def _apply_player_payload(player: dict[str, Any], payload: dict[str, Any]) -> No
             for local_tile in [_local_federation_tile(tile.get("fedTokenId"))]
             if local_tile >= 0
         ]
-        player["federations"] = len(player["federation_tiles"])
+        player["gleens_federation_tokens"] = sum(
+            1
+            for tile in federation_tiles
+            if isinstance(tile, dict) and _as_int(tile.get("fedTokenId"), 0) == 7
+        )
+        player["federations"] = (
+            len(player["federation_tiles"])
+            + player["gleens_federation_tokens"]
+        )
+        player["federation_keys"] = sum(
+            1
+            for tile in federation_tiles
+            if isinstance(tile, dict) and _as_int(tile.get("isGreen"), 0) > 0
+        )
+        _refresh_federation_usage(player)
+
+
+def _refresh_federation_usage(player: dict[str, Any]) -> None:
+    total = max(0, _as_int(player.get("federations"), 0))
+    unused = max(0, min(total, _as_int(player.get("federation_keys"), 0)))
+    player["federation_keys"] = unused
+    player["federation_unused"] = unused
+    player["federation_used"] = total - unused
 
 
 def _collect_player_ids(

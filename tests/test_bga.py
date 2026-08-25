@@ -419,12 +419,65 @@ class BgaImportTests(unittest.TestCase):
             [3, 3, 1, 3, 3, 3],
         )
         self.assertEqual(federation_step["players"][0]["federation_tiles"], [2])
+        self.assertEqual(federation_step["players"][0]["federation_unused"], 1)
+        self.assertEqual(federation_step["players"][0]["federation_used"], 0)
         self.assertEqual(record["bga"]["notification_coverage"]["unknown"], [])
         self.assertEqual(
             set(record["bga"]["notification_coverage"]["observed"])
             - set(BGA_NOTIFICATION_FUNCTIONS),
             set(),
         )
+
+    def test_federation_usage_counts_green_and_consumed_tokens(self) -> None:
+        packets = replay_packets()
+        packets[5]["data"].insert(
+            0,
+            notice(
+                "notifyGainTech",
+                player_name="Alice",
+                techId=17,
+                coverupTechId=1,
+                fedTokenId=2,
+                playerId=PLAYER_ONE,
+            ),
+        )
+
+        record = convert_bga_replay(
+            table_id=TABLE_ID,
+            source_url=f"https://boardgamearena.com/gamereview?table={TABLE_ID}",
+            replay_url=f"https://boardgamearena.com/archive/replay/test/?table={TABLE_ID}",
+            game_data=game_data(),
+            packets=packets,
+        )
+
+        player = record["trace"]["steps"][-1]["state"]["players"][0]
+        self.assertEqual(player["federations"], 1)
+        self.assertEqual(player["federation_keys"], 0)
+        self.assertEqual(player["federation_unused"], 0)
+        self.assertEqual(player["federation_used"], 1)
+
+    def test_player_payload_uses_bga_green_side_and_includes_gleens_token(self) -> None:
+        packets = replay_packets()
+        player = packets[0]["data"][0]["args"]["player"]
+        player["fedTiles"] = [
+            {"fedTokenId": 2, "isGreen": 1},
+            {"fedTokenId": 1, "isGreen": 0},
+            {"fedTokenId": 7, "isGreen": 0},
+        ]
+
+        record = convert_bga_replay(
+            table_id=TABLE_ID,
+            source_url=f"https://boardgamearena.com/gamereview?table={TABLE_ID}",
+            replay_url=f"https://boardgamearena.com/archive/replay/test/?table={TABLE_ID}",
+            game_data=game_data(),
+            packets=packets,
+        )
+
+        imported = record["trace"]["steps"][1]["state"]["players"][0]
+        self.assertEqual(imported["federations"], 3)
+        self.assertEqual(imported["gleens_federation_tokens"], 1)
+        self.assertEqual(imported["federation_unused"], 1)
+        self.assertEqual(imported["federation_used"], 2)
 
     def test_non_score_notification_vp_is_audited_and_advanced_tech_is_covered(self) -> None:
         packets = replay_packets()
@@ -746,6 +799,34 @@ class BgaImportTests(unittest.TestCase):
         final = trace["steps"][-1]["state"]
         self.assertEqual([planet["terrain"] for planet in final["planets"]], [0, 1])
         self.assertEqual([player["faction"] for player in final["players"]], ["Terrans", "Xenos"])
+
+    def test_legacy_bga_history_rebuilds_federation_usage_without_network(self) -> None:
+        review = _ReplayLinkParser(TABLE_ID)
+        review.feed(review_html())
+        record = convert_bga_replay(
+            table_id=TABLE_ID,
+            source_url=f"https://boardgamearena.com/gamereview?table={TABLE_ID}",
+            replay_url=f"https://boardgamearena.com/archive/replay/test/?table={TABLE_ID}",
+            game_data=game_data(),
+            packets=replay_packets(),
+            review_players=review.players,
+        )
+        legacy = json.loads(json.dumps(record))
+        for step in legacy["trace"]["steps"]:
+            for player in step["state"]["players"]:
+                player.pop("federation_keys", None)
+                player.pop("federation_unused", None)
+                player.pop("federation_used", None)
+                player.pop("gleens_federation_tokens", None)
+        write_local_game(self.root, legacy)
+
+        trace = read_local_game_trace(self.root, run_id=f"bga-{TABLE_ID}")
+
+        self.assertIsNotNone(trace)
+        player = trace["steps"][5]["state"]["players"][0]
+        self.assertEqual(player["federations"], 1)
+        self.assertEqual(player["federation_unused"], 1)
+        self.assertEqual(player["federation_used"], 0)
 
     def test_dashboard_import_endpoint_does_not_echo_credentials(self) -> None:
         metrics = self.root.parent / "bga-dashboard.jsonl"

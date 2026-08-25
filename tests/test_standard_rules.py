@@ -3113,6 +3113,7 @@ class StandardGaiaRulesTests(unittest.TestCase):
             players[0],
             tracks=(4, 0, 0, 0, 0, 0),
             tech_tiles=1 << 8,
+            federation_tokens=2,
             federation_keys=2,
         )
         state = replace(
@@ -3129,6 +3130,8 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertTrue(covered.players[0].advanced_tech_tiles & 1)
         self.assertTrue(covered.players[0].covered_tech_tiles & (1 << 8))
         self.assertEqual(covered.players[0].federation_keys, 1)
+        self.assertEqual(covered.snapshot()["players"][0]["federation_unused"], 1)
+        self.assertEqual(covered.snapshot()["players"][0]["federation_used"], 1)
         self.assertEqual(covered.pending_research_player, 0)
 
         resolved = covered.apply(state.research_action(Track.TERRAFORMING))

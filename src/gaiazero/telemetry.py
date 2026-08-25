@@ -422,8 +422,12 @@ def read_local_game_trace(
     record = _read_local_game(Path(path) / f"{run_id}.json")
     if record is None:
         return None
-    trace = dict(record["trace"])
     record_source = "bga" if record.get("source") == "bga" else "local"
+    trace = (
+        _rebuild_legacy_bga_trace(record)
+        if record_source == "bga"
+        else dict(record["trace"])
+    )
     trace.update(
         source=record_source,
         status=record.get("status"),
@@ -439,6 +443,67 @@ def read_local_game_trace(
             "notification_coverage": bga.get("notification_coverage") or {},
         }
     return trace
+
+
+def _rebuild_legacy_bga_trace(record: dict[str, Any]) -> dict[str, Any]:
+    trace = dict(record["trace"])
+    steps = trace.get("steps") or []
+    if not any(
+        isinstance(player, dict)
+        and (
+            "federation_unused" not in player
+            or "federation_used" not in player
+        )
+        for step in steps
+        if isinstance(step, dict)
+        for player in (step.get("state") or {}).get("players", [])
+    ):
+        return trace
+
+    bga = record.get("bga") or {}
+    packets = bga.get("log_packets")
+    if not isinstance(packets, list) or not packets:
+        return trace
+    players = bga.get("players") or []
+    try:
+        table_id = int(bga.get("table_id"))
+        game_data = {
+            "gamename": bga.get("game") or "gaiaproject",
+            "tableId": str(table_id),
+            "players": [
+                {
+                    "id": int(player["bga_player_id"]),
+                    "no": int(player.get("seat", index)) + 1,
+                }
+                for index, player in enumerate(players)
+                if isinstance(player, dict) and player.get("bga_player_id") is not None
+            ],
+            "tableOptions": bga.get("table_options") or [],
+        }
+        review_players = {
+            int(player["bga_player_id"]): {
+                "name": player.get("name"),
+                "score": player.get("score"),
+            }
+            for player in players
+            if isinstance(player, dict) and player.get("bga_player_id") is not None
+        }
+        # Import lazily because the BGA importer persists records through this module.
+        from gaiazero.bga import convert_bga_replay
+
+        rebuilt = convert_bga_replay(
+            table_id=table_id,
+            source_url=str(bga.get("source_url") or ""),
+            replay_url=str(bga.get("replay_url") or ""),
+            game_data=game_data,
+            packets=packets,
+            review_players=review_players,
+            initial_state=bga.get("initial_setup"),
+        )
+    except (KeyError, TypeError, ValueError):
+        return trace
+    rebuilt_trace = rebuilt.get("trace")
+    return dict(rebuilt_trace) if isinstance(rebuilt_trace, dict) else trace
 
 
 def delete_local_game(path: str | Path, *, run_id: str) -> bool:
