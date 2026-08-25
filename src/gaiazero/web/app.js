@@ -8,6 +8,20 @@ const TERRAIN_COLORS = [
 ];
 const SECTOR_FILLS = ["#eef4f1", "#f4f0e8", "#eef2f7", "#f5eeee", "#eff3ea"];
 const TERRAIN_LABELS = ["地球型", "沙漠", "沼泽", "火山", "氧化", "钛金", "冰冻", "跨维", "盖亚", "失落星球"];
+// BGA random maps retain each assembled slot, but not the printed sector that
+// originally supplied a planet. These coordinates provide one canonical crop
+// for every printed terrain from the downloaded BGA sector artwork.
+const TERRAIN_ARTWORK_SOURCES = [
+  { tile: 1, q: 0, r: -1 },
+  { tile: 1, q: -1, r: 2 },
+  { tile: 1, q: -1, r: 1 },
+  { tile: 1, q: 2, r: 0 },
+  { tile: 1, q: 2, r: -1 },
+  { tile: 2, q: -2, r: 0 },
+  { tile: 2, q: 0, r: -1 },
+  { tile: 1, q: 1, r: -2 },
+  { tile: 3, q: -1, r: 1 },
+];
 const TRACK_LABELS = {
   terraforming: "地形改造",
   navigation: "航行",
@@ -2423,29 +2437,34 @@ function drawAssembledHexGrid(context, sectors, scale, offsetX, offsetY, compact
 }
 
 function drawPlanetArtwork(context, x, y, size, cellScale, planet, snapshot) {
-  if (Number(planet.terrain) === 9) return false;
-  const sector = snapshot.setup?.map?.sectors?.find(
-    (candidate) => Number(candidate.tile) === Number(planet.sector),
-  );
-  if (!sector) return false;
-  const image = getSectorArtwork(sector.tile, sector.side || "solid");
+  const terrain = Number(planet.terrain);
+  if (terrain === 9) return false;
+  const bgaRandomMap = snapshot.setup?.map?.method === "bga-import";
+  const terrainSource = bgaRandomMap ? TERRAIN_ARTWORK_SOURCES[terrain] : null;
+  const sector = bgaRandomMap
+    ? null
+    : snapshot.setup?.map?.sectors?.find(
+      (candidate) => Number(candidate.tile) === Number(planet.sector),
+    );
+  if (!terrainSource && !sector) return false;
+  const artworkTile = terrainSource?.tile ?? sector.tile;
+  const image = getSectorArtwork(artworkTile, terrainSource ? "solid" : (sector.side || "solid"));
   if (!image) return false;
 
-  const rotation = Math.round(Number(sector.rotation) / 60);
-  const artworkQ = Number(planet.source_q ?? planet.q);
-  const artworkR = Number(planet.source_r ?? planet.r);
-  const [localQ, localR] = rotateAxial(
-    artworkQ - Number(sector.q),
-    artworkR - Number(sector.r),
-    -rotation,
-  );
+  const [localQ, localR] = terrainSource
+    ? [terrainSource.q, terrainSource.r]
+    : rotateAxial(
+      Number(planet.source_q ?? planet.q) - Number(sector.q),
+      Number(planet.source_r ?? planet.r) - Number(sector.r),
+      -Math.round(Number(sector.rotation) / 60),
+    );
   const columnStep = image.naturalWidth / 5;
   const rowStep = image.naturalHeight * 3 / 16;
   const sourceX = image.naturalWidth / 2 + columnStep * (localQ + localR / 2);
   const sourceY = image.naturalHeight / 2 + rowStep * localR;
-  const cropRatio = Number(planet.terrain) === 7 ? 0.72 : Number(planet.terrain) === 5 ? 0.98 : 0.91;
+  const cropRatio = terrain === 7 ? 0.72 : terrain === 5 ? 0.98 : 0.91;
   const cropSize = columnStep * cropRatio;
-  const terrainScale = Number(planet.terrain) === 7 ? 0.76 : 0.84;
+  const terrainScale = terrain === 7 ? 0.76 : 0.84;
   const radius = Math.min(size * terrainScale, cellScale * 0.72);
 
   context.save();

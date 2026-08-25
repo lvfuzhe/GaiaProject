@@ -704,6 +704,11 @@ class DashboardTests(unittest.TestCase):
             self.assertNotIn('data-view="setup"', page)
             self.assertIn("function drawStarfield", app_script)
             self.assertIn("function drawPlanetArtwork", app_script)
+            self.assertIn("const TERRAIN_ARTWORK_SOURCES", app_script)
+            self.assertIn(
+                'snapshot.setup?.map?.method === "bga-import"',
+                app_script,
+            )
             self.assertIn("function drawStarMapBoard", app_script)
             self.assertIn("function setupSectorCount", app_script)
             self.assertIn(
