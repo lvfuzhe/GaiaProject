@@ -16,7 +16,9 @@ from gaiazero.bga import (
     BgaReplayError,
     BgaSessionStore,
     _ReplayLinkParser,
+    _cached_replay_address,
     _extract_completesetup_data,
+    _extract_replay_links,
     _normalize_replay_address,
     convert_bga_replay,
     import_bga_replay,
@@ -332,6 +334,16 @@ class BgaImportTests(unittest.TestCase):
         self.assertEqual(len(parser.links), 2)
         self.assertEqual(parser.players[PLAYER_ONE], {"name": "Alice", "score": 123})
         self.assertEqual(parser.players[PLAYER_TWO], {"name": "Bob", "score": 98})
+
+    def test_review_parser_accepts_embedded_choose_player_links(self) -> None:
+        source = (
+            f'<a class="choosePlayerLink" data-href="/archive/replay/260101-1200/'
+            f'?table={TABLE_ID}&amp;player={PLAYER_ONE}&amp;comments=">选此玩家</a>'
+        )
+        self.assertEqual(
+            _extract_replay_links(source, TABLE_ID),
+            [f"/archive/replay/260101-1200/?table={TABLE_ID}&player={PLAYER_ONE}&comments="],
+        )
 
     def test_only_bga_replay_addresses_are_accepted(self) -> None:
         address = f"https://boardgamearena.com/gamereview?table={TABLE_ID}"
@@ -652,6 +664,60 @@ class BgaImportTests(unittest.TestCase):
             [event["reason"] for event in final_step["record"]["vp"]["events"][-2:]],
             ["科研轨终局计分", "剩余资源计分"],
         )
+
+    def test_review_import_reuses_verified_archive_url_when_review_links_are_hidden(self) -> None:
+        archive = self.root / f"bga-{TABLE_ID}.json"
+        self.root.mkdir(parents=True, exist_ok=True)
+        cached_url = (
+            f"https://boardgamearena.com/archive/replay/260101-1200/"
+            f"?table={TABLE_ID}&player={PLAYER_ONE}"
+        )
+        archive.write_text(
+            json.dumps(
+                {
+                    "bga": {"replay_url": cached_url}
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.assertEqual(_cached_replay_address(self.root, TABLE_ID), cached_url)
+        record = convert_bga_replay(
+            table_id=TABLE_ID,
+            source_url=f"https://boardgamearena.com/gamereview?table={TABLE_ID}",
+            replay_url=f"https://boardgamearena.com/archive/replay/test/?table={TABLE_ID}",
+            game_data=game_data(),
+            packets=replay_packets(),
+        )
+        calls: list[str] = []
+
+        class FallbackClient:
+            def __init__(self, *, timeout: float, cookies: list[dict[str, object]]) -> None:
+                del timeout, cookies
+
+            def login(self, username: str, password: str) -> None:
+                self.logged_in = (username, password)
+
+            def download(self, address: str) -> dict[str, object]:
+                calls.append(address)
+                if "/gamereview" in address:
+                    raise BgaReplayError("hidden review links")
+                return record
+
+            def export_cookies(self) -> list[dict[str, object]]:
+                return []
+
+        with patch("gaiazero.bga.BgaClient", FallbackClient):
+            result = import_bga_replay(
+                username="alice",
+                password="secret",
+                replay_address=f"https://boardgamearena.com/gamereview?table={TABLE_ID}",
+                history_path=self.root,
+            )
+
+        self.assertEqual(len(calls), 2)
+        self.assertIn("/gamereview", calls[0])
+        self.assertIn("/archive/replay/260101-1200/", calls[1])
+        self.assertTrue(result["used_cached_replay_url"])
 
     def test_cookie_cache_round_trips_through_client(self) -> None:
         cookie = Cookie(

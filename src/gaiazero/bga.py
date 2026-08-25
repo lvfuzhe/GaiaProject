@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import gzip
+import html
 import json
 import os
 import re
@@ -308,7 +309,19 @@ class _ReplayLinkParser(HTMLParser):
                 self._capture_score = True
         if tag != "a":
             return
-        href = attributes.get("href") or ""
+        href = (
+            attributes.get("href")
+            or attributes.get("data-href")
+            or attributes.get("data-url")
+            or attributes.get("data-replay-url")
+            or ""
+        )
+        if not href and "choosePlayerLink" in classes:
+            href = attributes.get("onclick") or ""
+        href = html.unescape(href)
+        replay_match = re.search(r"((?:https?://[^\"'<>\s]+)?/archive/replay/[^\"'<>\s]+)", href)
+        if replay_match:
+            href = replay_match.group(1)
         if self._entry_depth and "playername" in classes:
             values = parse_qs(urlparse(href).query)
             self._current_player_id = _player_id(values.get("id", [None])[0])
@@ -317,7 +330,7 @@ class _ReplayLinkParser(HTMLParser):
         if not parsed.path.startswith("/archive/replay/"):
             return
         values = parse_qs(parsed.query)
-        if values.get("table", [""])[0] == str(self.table_id):
+        if values.get("table", [""])[0] == str(self.table_id) and href not in self.links:
             self.links.append(href)
 
     def handle_data(self, data: str) -> None:
@@ -343,6 +356,27 @@ class _ReplayLinkParser(HTMLParser):
                 "name": "".join(self._name_parts).strip(),
                 "score": int(score_match.group()) if score_match else None,
             }
+
+
+def _extract_replay_links(source: str, table_id: int) -> list[str]:
+    """Extract archive links from both rendered anchors and embedded BGA markup."""
+
+    parser = _ReplayLinkParser(table_id)
+    parser.feed(source)
+    links = list(parser.links)
+    pattern = re.compile(
+        r"((?:https?://(?:[^/\"'<>\s]+\.)?boardgamearena\.com)?"
+        r"/archive/replay/[^\"'<>\s]+)",
+        re.IGNORECASE,
+    )
+    for match in pattern.finditer(html.unescape(source)):
+        candidate = match.group(1)
+        parsed = urlparse(candidate)
+        if parse_qs(parsed.query).get("table", [""])[0] != str(table_id):
+            continue
+        if candidate not in links:
+            links.append(candidate)
+    return links
 
 
 class BgaClient:
@@ -410,12 +444,27 @@ class BgaClient:
             review_html = self._request_text(review_url)
         review_parser = _ReplayLinkParser(table_id)
         review_parser.feed(review_html)
+        replay_links = _extract_replay_links(review_html, table_id)
         if path_kind == "review":
-            if not review_parser.links:
+            if not replay_links:
+                lowered = review_html.lower()
+                if any(
+                    marker in lowered
+                    for marker in (
+                        "loginuserwithpassword",
+                        "bga-login",
+                        "please log in",
+                        "登录",
+                        "connexion",
+                    )
+                ):
+                    raise BgaAuthenticationError(
+                        "BGA 当前会话未登录或已失效，请重新输入账号密码后重试"
+                    )
                 raise BgaReplayError(
                     "该页面没有找到可下载的复盘，账号可能无权查看或对局尚未结束"
                 )
-            replay_url = urljoin(address, review_parser.links[0])
+            replay_url = urljoin(address, replay_links[0])
             _validate_bga_url(replay_url)
         else:
             replay_url = address
@@ -501,6 +550,29 @@ def import_bga_replay(
 ) -> dict[str, Any]:
     """Download one BGA replay and atomically add it to the local archive."""
 
+    requested_address, table_id, address_kind = _normalize_replay_address(replay_address)
+    cached_replay_address = (
+        _cached_replay_address(history_path, table_id)
+        if address_kind == "review"
+        else None
+    )
+    used_cached_replay = False
+
+    def download_record(client: BgaClient) -> dict[str, Any]:
+        nonlocal used_cached_replay
+        try:
+            return client.download(requested_address)
+        except BgaReplayError:
+            if not cached_replay_address:
+                raise
+            record = client.download(cached_replay_address)
+            bga = record.get("bga")
+            if isinstance(bga, dict):
+                bga["source_url"] = requested_address
+                bga["requested_url"] = requested_address
+            used_cached_replay = True
+            return record
+
     store = BgaSessionStore(session_path) if session_path is not None else None
     saved: dict[str, Any] | None = None
     if store is not None:
@@ -529,14 +601,14 @@ def import_bga_replay(
     used_cached_session = False
     if reusable_cookies:
         try:
-            record = client.download(replay_address)
+            record = download_record(client)
             used_cached_session = True
         except (BgaAuthenticationError, BgaReplayError):
             client.login(effective_username, effective_password)
-            record = client.download(replay_address)
+            record = download_record(client)
     else:
         client.login(effective_username, effective_password)
-        record = client.download(replay_address)
+        record = download_record(client)
 
     if remember and store is not None:
         store.save(
@@ -557,7 +629,27 @@ def import_bga_replay(
         "imported_at": record["updated_at"],
         "session_saved": bool(remember and store is not None),
         "used_cached_session": used_cached_session,
+        "used_cached_replay_url": used_cached_replay,
     }
+
+
+def _cached_replay_address(history_path: str | Path, table_id: int) -> str | None:
+    """Return a previously verified archive URL for a table, if available."""
+
+    path = Path(history_path).resolve() / f"bga-{table_id}.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    bga = payload.get("bga") if isinstance(payload, dict) else None
+    candidate = bga.get("replay_url") if isinstance(bga, dict) else None
+    if not isinstance(candidate, str) or not candidate.strip():
+        return None
+    try:
+        normalized, cached_table, kind = _normalize_replay_address(candidate)
+    except BgaReplayError:
+        return None
+    return normalized if kind == "replay" and cached_table == table_id else None
 
 
 def convert_bga_replay(

@@ -1796,7 +1796,8 @@ async function submitBgaImport(event) {
     if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
     state.bgaImport.result = data;
     const sessionNote = data.used_cached_session ? " · 已复用 Cookie" : "";
-    setBgaImportMessage(`桌号 ${data.table_id} 已写入本地历史${sessionNote}`, "complete");
+    const replayNote = data.used_cached_replay_url ? " · 已复用本地验证过的 archive 地址" : "";
+    setBgaImportMessage(`桌号 ${data.table_id} 已写入本地历史${sessionNote}${replayNote}`, "complete");
     await loadBgaSession();
     await refreshHistoryIndex();
   } catch (error) {
