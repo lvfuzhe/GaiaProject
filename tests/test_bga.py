@@ -54,8 +54,8 @@ def player_payload(race_id: int, *, score: int = 10) -> dict[str, object]:
     }
 
 
-def map_payload() -> dict[str, object]:
-    return {
+def map_payload(*, satellite_players: tuple[int, ...] = ()) -> dict[str, object]:
+    payload: dict[str, object] = {
         "0": {
             "0": {
                 "tileNum": 1,
@@ -79,6 +79,25 @@ def map_payload() -> dict[str, object]:
             },
         }
     }
+    if satellite_players:
+        payload["1"] = {
+            "0": {
+                "tileNum": 1,
+                "planetType": 0,
+                "buildings": [
+                    {
+                        "buildingId": 1,
+                        "playerId": str(player_id),
+                        "isPartOfFed": 1,
+                    }
+                    for player_id in satellite_players
+                ],
+                "isTileCenter": 0,
+                "q": 1,
+                "r": 0,
+            }
+        }
+    return payload
 
 
 def notice(kind: str, **args: object) -> dict[str, object]:
@@ -171,6 +190,13 @@ def replay_packets() -> list[dict[str, object]]:
                         desc="round scoring",
                     ),
                     notice(
+                        "notifyFormFederation",
+                        player_name="Alice",
+                        playerId=PLAYER_ONE,
+                        satellites=[{"q": 1, "r": 0}],
+                        buildings=[{"q": 0, "r": 0}],
+                    ),
+                    notice(
                         "notifyTakeFedToken",
                         player_name="Alice",
                         playerId=PLAYER_ONE,
@@ -183,6 +209,9 @@ def replay_packets() -> list[dict[str, object]]:
                         player_name="Alice",
                         whichResearch=1,
                         knowledgeCost=4,
+                        map=map_payload(
+                            satellite_players=(PLAYER_ONE, PLAYER_TWO),
+                        ),
                         playerId=PLAYER_ONE,
                     ),
                     notice(
@@ -369,6 +398,21 @@ class BgaImportTests(unittest.TestCase):
         )
         self.assertEqual(setup["terraforming_federation"]["id"], 1)
         self.assertEqual(setup["federation_supply"], [3, 2, 3, 3, 3, 3])
+        federation_step = record["trace"]["steps"][5]["state"]
+        self.assertEqual(
+            federation_step["satellites"],
+            [{"id": 2, "q": 1, "r": 0, "owners": [0]}],
+        )
+        self.assertEqual(federation_step["players"][0]["satellites"], 1)
+        final_state = record["trace"]["steps"][-1]["state"]
+        self.assertEqual(
+            final_state["satellites"],
+            [{"id": 2, "q": 1, "r": 0, "owners": [0, 1]}],
+        )
+        self.assertEqual(
+            [player["satellites"] for player in final_state["players"]],
+            [1, 1],
+        )
         self.assertEqual(
             record["trace"]["steps"][-1]["state"]["setup"]["federation_supply"],
             [3, 1, 3, 3, 3, 3],

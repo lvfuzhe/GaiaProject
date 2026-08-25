@@ -790,7 +790,14 @@ class _BgaReplayState:
         self.planet_ids = {
             coordinate: index for index, coordinate in enumerate(ordered_coordinates)
         }
+        self.board_space_ids = {
+            coordinate: index
+            for index, coordinate in enumerate(
+                sorted(first_map, key=lambda item: (item[1], item[0]))
+            )
+        }
         self.planets: dict[tuple[int, int], dict[str, Any]] = {}
+        self.satellites: dict[tuple[int, int], set[int]] = {}
         self.space_stations: list[dict[str, Any]] = []
         self.sectors = _extract_sectors(first_map)
         for coordinate, cell in first_map.items():
@@ -1025,6 +1032,18 @@ class _BgaReplayState:
             "scores": [player["vp"] for player in self.players],
             "players": copy.deepcopy(self.players),
             "planets": planets,
+            "satellites": [
+                {
+                    "id": self.board_space_ids[coordinate],
+                    "q": coordinate[0],
+                    "r": coordinate[1],
+                    "owners": sorted(owners),
+                }
+                for coordinate, owners in sorted(
+                    self.satellites.items(),
+                    key=lambda item: self.board_space_ids[item[0]],
+                )
+            ],
             "space_stations": copy.deepcopy(self.space_stations),
             "setup": setup,
         }
@@ -1119,8 +1138,8 @@ class _BgaReplayState:
     def _apply_map(self, map_payload: dict[str, Any]) -> None:
         cells = _flatten_map(map_payload)
         self.planets = {}
+        self.satellites = {}
         self.space_stations = []
-        satellite_counts = [0] * len(self.players)
         for coordinate, cell in cells.items():
             planet_type = _as_int(cell.get("planetType"), 0)
             buildings = cell.get("buildings") or []
@@ -1139,7 +1158,7 @@ class _BgaReplayState:
                         continue
                     federated = bool(_as_int(item.get("isPartOfFed"), 0))
                     if building_id == 1:
-                        satellite_counts[owner] += 1
+                        self._set_satellite(coordinate, owner)
                     elif building_id == 2:
                         planet["gaiaformer"] = owner
                     elif building_id in BGA_BUILDINGS:
@@ -1178,7 +1197,7 @@ class _BgaReplayState:
                 if owner is None:
                     continue
                 if building_id == 1:
-                    satellite_counts[owner] += 1
+                    self._set_satellite(coordinate, owner)
                 elif building_id == 3:
                     self.space_stations.append(
                         {
@@ -1189,9 +1208,6 @@ class _BgaReplayState:
                             "federated": bool(_as_int(item.get("isPartOfFed"), 0)),
                         }
                     )
-        for index, count in enumerate(satellite_counts):
-            self.players[index]["satellites"] = count
-
     def _mark_federation(self, args: dict[str, Any], player: dict[str, Any]) -> None:
         for item in args.get("buildings") or []:
             if not isinstance(item, dict):
@@ -1207,7 +1223,13 @@ class _BgaReplayState:
         for item in args.get("satellites") or []:
             if not isinstance(item, dict):
                 continue
-            player["satellites"] += 1
+            coordinate = (_as_int(item.get("q"), 0), _as_int(item.get("r"), 0))
+            self._set_satellite(coordinate, player["id"])
+
+    def _set_satellite(self, coordinate: tuple[int, int], owner: int) -> None:
+        if coordinate not in self.board_space_ids:
+            self.board_space_ids[coordinate] = len(self.board_space_ids)
+        self.satellites.setdefault(coordinate, set()).add(owner)
 
     def _refresh_structure_counts(self) -> None:
         counts = [defaultdict(int) for _player in self.players]
@@ -1231,6 +1253,9 @@ class _BgaReplayState:
             if 0 <= gaiaformer < len(self.players):
                 gaiaformers[gaiaformer] += 1
         for index, player in enumerate(self.players):
+            player["satellites"] = sum(
+                index in owners for owners in self.satellites.values()
+            )
             player["structures"] = {
                 building: {
                     "built": counts[index][building],
