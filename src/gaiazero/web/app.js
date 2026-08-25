@@ -189,7 +189,28 @@ const PHASE_LABELS = {
   run_failed: "训练失败"
 };
 const sectorArtworkCache = new Map();
+const mapPieceArtworkCache = new Map();
 let sectorArtworkRenderQueued = false;
+const MAP_PIECE_PATHS = {
+  structures: "/assets/map-pieces/structures.png",
+  planets: "/assets/map-pieces/planets.png",
+  icons: "/assets/map-pieces/icons.png",
+};
+const BGA_STRUCTURE_CROPS = {
+  mine: [750, 0, 69, 77],
+  trading_station: [450, 0, 102, 120],
+  research_lab: [600, 0, 108, 117],
+  planetary_institute: [0, 0, 218, 198],
+  academy: [250, 0, 186, 197],
+};
+const BGA_STRUCTURE_ROWS = [1, 3, 0, 2];
+const BGA_STRUCTURE_HEIGHTS = {
+  mine: 1.08,
+  trading_station: 1.28,
+  research_lab: 1.22,
+  planetary_institute: 1.35,
+  academy: 1.30,
+};
 
 const state = {
   events: [],
@@ -505,6 +526,27 @@ function getSectorArtwork(tile, side) {
     image.src = sectorArtworkPath(tile, side);
   }
   const entry = sectorArtworkCache.get(key);
+  return entry.loaded && !entry.failed ? entry.image : null;
+}
+
+function getMapPieceArtwork(kind) {
+  const path = MAP_PIECE_PATHS[kind];
+  if (!path) return null;
+  if (!mapPieceArtworkCache.has(kind)) {
+    const image = new Image();
+    const entry = { image, loaded: false, failed: false };
+    mapPieceArtworkCache.set(kind, entry);
+    image.addEventListener("load", () => {
+      entry.loaded = true;
+      queueSectorArtworkRender();
+    }, { once: true });
+    image.addEventListener("error", () => {
+      entry.failed = true;
+      queueSectorArtworkRender();
+    }, { once: true });
+    image.src = path;
+  }
+  const entry = mapPieceArtworkCache.get(kind);
   return entry.loaded && !entry.failed ? entry.image : null;
 }
 
@@ -2518,7 +2560,25 @@ function drawAssembledHexGrid(context, sectors, scale, offsetX, offsetY, compact
 
 function drawPlanetArtwork(context, x, y, size, cellScale, planet, snapshot) {
   const terrain = Number(planet.terrain);
-  if (terrain === 9) return false;
+  if (terrain === 9) {
+    const image = getMapPieceArtwork("planets");
+    if (!image) return false;
+    const radius = Math.min(size * 0.76, cellScale * 0.72);
+    context.save();
+    context.beginPath();
+    context.arc(x, y, radius, 0, Math.PI * 2);
+    context.clip();
+    context.drawImage(image, 1320, 0, 132, 132, x - radius, y - radius, radius * 2, radius * 2);
+    context.restore();
+    context.save();
+    context.strokeStyle = "rgba(226, 239, 249, 0.24)";
+    context.lineWidth = Math.max(0.75, size * 0.05);
+    context.beginPath();
+    context.arc(x, y, radius, 0, Math.PI * 2);
+    context.stroke();
+    context.restore();
+    return true;
+  }
   const bgaRandomMap = snapshot.setup?.map?.method === "bga-import";
   const terrainSource = bgaRandomMap ? TERRAIN_ARTWORK_SOURCES[terrain] : null;
   const sector = bgaRandomMap
@@ -2685,40 +2745,22 @@ function drawBoard(canvas, snapshot, options = {}) {
       context.stroke();
     }
     if (options.showPlayerPieces !== false && planet.owner >= 0) {
-      context.strokeStyle = PLAYER_COLORS[planet.owner] || "#17211d";
-      context.lineWidth = compactMap ? 2.5 : 4;
-      context.beginPath();
-      context.arc(x, y, size + (compactMap ? 2 : 4), 0, Math.PI * 2);
-      context.stroke();
-      if (Number(planet.terrain) === 9) {
-        drawLostPlanetMarker(
-          context,
-          x,
-          y,
-          PLAYER_COLORS[planet.owner],
-          compactMap ? 0.68 : 1,
-        );
-      } else {
-        drawBuilding(
-          context,
-          planet.coexisting_mine_owner >= 0 ? x - size * 0.2 : x,
-          planet.coexisting_mine_owner >= 0 ? y - size * 0.12 : y,
-          planet.building,
-          PLAYER_COLORS[planet.owner],
-          planet.coexisting_mine_owner >= 0
-            ? (compactMap ? 0.54 : 0.78)
-            : (compactMap ? 0.68 : 1),
-        );
-      }
+      drawBuilding(
+        context,
+        planet.coexisting_mine_owner >= 0 ? x - size * 0.2 : x,
+        planet.coexisting_mine_owner >= 0 ? y - size * 0.12 : y,
+        planet.building,
+        PLAYER_COLORS[planet.owner],
+        planet.coexisting_mine_owner >= 0
+          ? (compactMap ? 0.54 : 0.78)
+          : (compactMap ? 0.68 : 1),
+        planet.owner,
+        size,
+      );
     }
     if (options.showPlayerPieces !== false && planet.coexisting_mine_owner >= 0) {
       const coexistingX = x + size * 0.38;
       const coexistingY = y + size * 0.24;
-      context.strokeStyle = PLAYER_COLORS[planet.coexisting_mine_owner] || "#17211d";
-      context.lineWidth = compactMap ? 1.5 : 2.5;
-      context.beginPath();
-      context.arc(coexistingX, coexistingY, size * 0.42, 0, Math.PI * 2);
-      context.stroke();
       drawBuilding(
         context,
         coexistingX,
@@ -2726,6 +2768,8 @@ function drawBoard(canvas, snapshot, options = {}) {
         "mine",
         PLAYER_COLORS[planet.coexisting_mine_owner],
         compactMap ? 0.42 : 0.58,
+        planet.coexisting_mine_owner,
+        size,
       );
       if (planet.coexisting_mine_federated) {
         context.save();
@@ -2766,7 +2810,7 @@ function drawBoard(canvas, snapshot, options = {}) {
       const x = offsetX + Math.sqrt(3) * (Number(satellite.q) + Number(satellite.r) / 2) * scale;
       const y = offsetY + 1.5 * Number(satellite.r) * scale;
       const owners = Array.isArray(satellite.owners) ? satellite.owners : [];
-      const markerSize = compactMap ? Math.max(2.5, size * 0.2) : Math.max(3.5, size * 0.25);
+      const markerSize = compactMap ? Math.max(4, size * 0.34) : Math.max(5.5, size * 0.38);
       owners.forEach((owner, index) => {
         const offset = (index - (owners.length - 1) / 2) * markerSize * 1.35;
         context.save();
@@ -2783,19 +2827,34 @@ function drawBoard(canvas, snapshot, options = {}) {
     for (const station of snapshot.space_stations || []) {
       const x = offsetX + Math.sqrt(3) * (Number(station.q) + Number(station.r) / 2) * scale;
       const y = offsetY + 1.5 * Number(station.r) * scale;
-      const stationSize = compactMap ? size * 0.43 : size * 0.52;
-      drawHex(context, x, y, stationSize, PLAYER_COLORS[station.owner] || "#b7202b");
-      context.fillStyle = "#ffffff";
-      context.font = `800 ${Math.max(6, stationSize * 0.9)}px Segoe UI`;
-      context.textAlign = "center";
-      context.fillText("S", x, y + Math.max(2, stationSize * 0.3));
+      const stationDimension = compactMap ? size * 0.96 : size * 1.15;
+      const stationImage = getMapPieceArtwork("icons");
+      if (stationImage) {
+        context.drawImage(
+          stationImage,
+          322,
+          0,
+          79,
+          79,
+          x - stationDimension / 2,
+          y - stationDimension / 2,
+          stationDimension,
+          stationDimension,
+        );
+      } else {
+        drawHex(context, x, y, stationDimension * 0.46, PLAYER_COLORS[station.owner] || "#b7202b");
+        context.fillStyle = "#ffffff";
+        context.font = `800 ${Math.max(6, stationDimension * 0.42)}px Segoe UI`;
+        context.textAlign = "center";
+        context.fillText("S", x, y + Math.max(2, stationDimension * 0.14));
+      }
       if (station.federated) {
         context.save();
         context.strokeStyle = "rgba(255,255,255,0.85)";
         context.lineWidth = 1;
         context.setLineDash([2, 2]);
         context.beginPath();
-        context.arc(x, y, stationSize * 1.35, 0, Math.PI * 2);
+        context.arc(x, y, stationDimension * 0.72, 0, Math.PI * 2);
         context.stroke();
         context.restore();
       }
@@ -2905,7 +2964,27 @@ function drawHex(context, x, y, size, fill) {
   context.stroke();
 }
 
-function drawBuilding(context, x, y, building, color, scale = 1) {
+function drawBuilding(context, x, y, building, color, scale = 1, owner = 0, cellSize = 20) {
+  const crop = BGA_STRUCTURE_CROPS[building];
+  const image = crop ? getMapPieceArtwork("structures") : null;
+  if (image) {
+    const [sourceX, sourceY, sourceWidth, sourceHeight] = crop;
+    const row = BGA_STRUCTURE_ROWS[Math.max(0, Number(owner) % BGA_STRUCTURE_ROWS.length)];
+    const targetHeight = Math.max(8, cellSize * (BGA_STRUCTURE_HEIGHTS[building] || 1) * scale);
+    const targetWidth = sourceWidth / sourceHeight * targetHeight;
+    context.drawImage(
+      image,
+      sourceX,
+      sourceY + row * 200,
+      sourceWidth,
+      sourceHeight,
+      x - targetWidth / 2,
+      y - targetHeight / 2,
+      targetWidth,
+      targetHeight,
+    );
+    return;
+  }
   context.fillStyle = color;
   context.strokeStyle = "#ffffff";
   context.lineWidth = Math.max(1, 1.5 * scale);

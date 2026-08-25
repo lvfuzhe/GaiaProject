@@ -136,6 +136,11 @@ for number in range(1, 7):
 for number in range(1, 8):
     name = f"federation-{number:02d}.png"
     ASSETS[f"/assets/tiles/{name}"] = (f"assets/tiles/{name}", "image/png")
+for name in ("structures.png", "planets.png", "icons.png"):
+    ASSETS[f"/assets/map-pieces/{name}"] = (
+        f"assets/map-pieces/{name}",
+        "image/png",
+    )
 for number in range(1, 11):
     name = f"booster-{number:02d}.jpg"
     ASSETS[f"/assets/tiles/{name}"] = (f"assets/tiles/{name}", "image/jpeg")

@@ -693,6 +693,10 @@ class DashboardTests(unittest.TestCase):
             ):
                 with urlopen(f"{base}/assets/tiles/{path}", timeout=5) as response:
                     tile_assets[path] = (response.headers.get_content_type(), response.read())
+            map_piece_assets = {}
+            for path in ("structures.png", "planets.png", "icons.png"):
+                with urlopen(f"{base}/assets/map-pieces/{path}", timeout=5) as response:
+                    map_piece_assets[path] = (response.headers.get_content_type(), response.read())
             with urlopen(f"{base}/api/history", timeout=5) as response:
                 history = json.loads(response.read())
             with urlopen(
@@ -782,6 +786,11 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("已获联邦板块", app_script)
             self.assertIn("owned-federation-count", app_script)
             self.assertIn('/assets/tiles/federation-07.png', app_script)
+            self.assertIn('/assets/map-pieces/structures.png', app_script)
+            self.assertIn('/assets/map-pieces/planets.png', app_script)
+            self.assertIn('/assets/map-pieces/icons.png', app_script)
+            self.assertIn("const markerSize = compactMap ? Math.max(4, size * 0.34)", app_script)
+            self.assertNotIn("context.arc(x, y, size + (compactMap ? 2 : 4)", app_script)
             self.assertIn("acquiredAdvancedTech", app_script)
             self.assertIn("已被高级科技覆盖", app_script)
             self.assertIn('renderResearchBoard(snapshot, "history")', app_script)
@@ -867,6 +876,10 @@ class DashboardTests(unittest.TestCase):
                 }[expected_type]
                 self.assertTrue(content.startswith(signature))
                 self.assertGreater(len(content), 1_000, name)
+            for name, (content_type, content) in map_piece_assets.items():
+                self.assertEqual(content_type, "image/png")
+                self.assertTrue(content.startswith(b"\x89PNG\r\n\x1a\n"))
+                self.assertGreater(len(content), 10_000, name)
         finally:
             server.shutdown()
             server.server_close()
