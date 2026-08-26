@@ -96,11 +96,10 @@ from gaiazero.model import (
     load_checkpoint,
 )
 from gaiazero.npz_history import convert_npz_to_history
+from gaiazero.pipeline_monitor import PipelineSupervisor
 from gaiazero.telemetry import (
-    JsonlTelemetry,
     build_local_history_index,
     delete_local_game,
-    read_events,
     read_local_game_trace,
     write_local_game,
 )
@@ -168,18 +167,24 @@ class DashboardServer(ThreadingHTTPServer):
     def __init__(
         self,
         address: tuple[str, int],
-        metrics_path: str | Path,
+        storage_path: str | Path,
         *,
         history_path: str | Path | None = None,
+        pipeline_path: str | Path | None = None,
         quiet: bool = False,
     ) -> None:
-        self.metrics_path = Path(metrics_path).resolve()
+        self.storage_path = Path(storage_path).resolve()
         self.history_path = (
             Path(history_path).resolve()
             if history_path is not None
-            else (self.metrics_path.parent / "history").resolve()
+            else (self.storage_path / "history").resolve()
         )
         self.bga_session_path = self.history_path / ".bga-session.bin"
+        self.pipeline = PipelineSupervisor(
+            pipeline_path
+            if pipeline_path is not None
+            else self.storage_path / "multiplayer-pipeline"
+        )
         self.quiet = quiet
         self.simulation_lock = threading.Lock()
         self.simulation: dict[str, Any] = {"status": "idle"}
@@ -188,17 +193,18 @@ class DashboardServer(ThreadingHTTPServer):
         self.bga_import_lock = threading.Lock()
         super().__init__(address, DashboardRequestHandler)
 
+    def server_close(self) -> None:
+        self.pipeline.close()
+        super().server_close()
+
 
 class DashboardRequestHandler(BaseHTTPRequestHandler):
     server: DashboardServer
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         request = urlparse(self.path)
-        if request.path == "/api/events":
-            self._serve_events(parse_qs(request.query))
-            return
-        if request.path == "/api/health":
-            self._serve_health()
+        if request.path == "/api/pipeline":
+            self._send_json(self.server.pipeline.status())
             return
         if request.path == "/api/history":
             self._serve_history()
@@ -229,6 +235,9 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         request = urlparse(self.path)
+        if request.path in ("/api/pipeline/start", "/api/pipeline/stop"):
+            self._handle_pipeline_request(request.path)
+            return
         if request.path == "/api/history/import-npz":
             self._handle_npz_history_import()
             return
@@ -612,35 +621,24 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             response = _interactive_session_snapshot(session)
         self._send_json(response)
 
-    def _serve_events(self, query: dict[str, list[str]]) -> None:
+    def _handle_pipeline_request(self, path: str) -> None:
         try:
-            after = max(0, int(query.get("after", ["0"])[0]))
-            limit = min(5_000, max(1, int(query.get("limit", ["5000"])[0])))
-        except ValueError:
-            self._send_json({"error": "after and limit must be integers"}, HTTPStatus.BAD_REQUEST)
-            return
-        events = read_events(self.server.metrics_path, after=after, limit=limit)
-        self._send_json(
-            {
-                "events": events,
-                "last_sequence": events[-1]["sequence"] if events else after,
-                "source": str(self.server.metrics_path),
-                "exists": self.server.metrics_path.exists(),
-            }
-        )
-
-    def _serve_health(self) -> None:
-        path = self.server.metrics_path
-        stat = path.stat() if path.exists() else None
-        self._send_json(
-            {
-                "ok": True,
-                "source": str(path),
-                "exists": stat is not None,
-                "size": stat.st_size if stat else 0,
-                "modified": stat.st_mtime if stat else None,
-            }
-        )
+            if path.endswith("/start"):
+                payload = self._read_json_body()
+                result = self.server.pipeline.start(payload)
+                self._send_json(result, HTTPStatus.ACCEPTED)
+            else:
+                result = self.server.pipeline.stop()
+                self._send_json(result, HTTPStatus.ACCEPTED)
+        except (TypeError, ValueError) as error:
+            self._send_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+        except RuntimeError as error:
+            self._send_json({"error": str(error)}, HTTPStatus.CONFLICT)
+        except OSError as error:
+            self._send_json(
+                {"error": f"unable to control the training pipeline: {error}"},
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
 
     def _serve_history(self) -> None:
         local = build_local_history_index(self.server.history_path)
@@ -652,7 +650,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 "latest_sequence": None,
                 "source": str(self.server.history_path),
                 "local_source": str(self.server.history_path),
-                "training_source": str(self.server.metrics_path),
+                "pipeline_source": str(self.server.pipeline.root),
             }
         )
 
@@ -727,17 +725,19 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
 
 
 def create_dashboard_server(
-    metrics_path: str | Path,
+    storage_path: str | Path,
     host: str = "127.0.0.1",
     port: int = 8765,
     *,
     history_path: str | Path | None = None,
+    pipeline_path: str | Path | None = None,
     quiet: bool = False,
 ) -> DashboardServer:
     return DashboardServer(
         (host, port),
-        metrics_path,
+        storage_path,
         history_path=history_path,
+        pipeline_path=pipeline_path,
         quiet=quiet,
     )
 
@@ -2469,26 +2469,58 @@ def _run_single_simulation(
     config: dict[str, Any],
     run_id: str,
 ) -> None:
-    telemetry = JsonlTelemetry(server.metrics_path, run_id=run_id)
     started = perf_counter()
+    started_at = datetime.now(UTC).isoformat()
     state = initial
     moves = 0
-    telemetry.emit(
-        "run_started",
-        config={"mode": "single-simulation", **config, "iterations": 1},
-        device="heuristic-pimcts",
-        observation_size=initial.observation_size,
-        action_size=initial.action_size,
-        state=initial.snapshot(),
-    )
-    telemetry.emit(
-        "self_play_started",
-        iteration=1,
-        game_in_iteration=1,
-        games_per_iteration=1,
-        total_games=0,
-        state=initial.snapshot(),
-    )
+    trace_steps: list[dict[str, Any]] = [{
+        "move": 0,
+        "player": initial.current_player,
+        "action": None,
+        "action_label": "initial state",
+        "legal_actions": len(initial.legal_actions()),
+        "search_sampled": False,
+        "root_value": None,
+        "candidates": [],
+        "state": initial.snapshot(),
+    }]
+
+    def persist(status: str, *, error: str | None = None) -> str:
+        completed_at = datetime.now(UTC).isoformat()
+        duration = perf_counter() - started
+        scores = list(state.final_scores()) if state.is_terminal else None
+        returns = state.returns().tolist() if state.is_terminal else None
+        record = {
+            "run_id": run_id,
+            "source": "simulation",
+            "status": status,
+            "started_at": started_at,
+            "updated_at": completed_at,
+            "completed_at": completed_at,
+            "ruleset": state.snapshot().get("ruleset"),
+            "engine": "heuristic-pimcts",
+            "config": {"mode": "single-simulation", **config},
+            "error": error,
+            "trace": {
+                "run_id": run_id,
+                "iteration": 1,
+                "game": 1,
+                "started_at": started_at,
+                "completed_at": completed_at,
+                "summary": {
+                    "moves": moves,
+                    "positions": moves,
+                    "scores": scores,
+                    "returns": returns,
+                    "duration_seconds": duration,
+                },
+                "trace_complete": state.is_terminal and len(trace_steps) == moves + 1,
+                "captured_moves": moves,
+                "steps": trace_steps,
+            },
+        }
+        return str(write_local_game(server.history_path, record))
+
     try:
         evaluator = GaiaHeuristicEvaluator()
         searches = [
@@ -2516,18 +2548,16 @@ def _run_single_simulation(
             state = before.apply(action)
             moves += 1
             top_actions = np.argsort(result.policy)[-3:][::-1]
-            telemetry.emit(
-                "self_play_step",
-                iteration=1,
-                game_in_iteration=1,
-                move=moves,
-                player=before.current_player,
-                action=action,
-                action_label=before.describe_action(action),
-                legal_actions=len(before.legal_actions()),
-                search_sampled=True,
-                root_value=result.root_value,
-                candidates=[
+            root_value = np.asarray(result.root_value)
+            trace_steps.append({
+                "move": moves,
+                "player": before.current_player,
+                "action": action,
+                "action_label": before.describe_action(action),
+                "legal_actions": len(before.legal_actions()),
+                "search_sampled": True,
+                "root_value": root_value.item() if root_value.ndim == 0 else root_value.tolist(),
+                "candidates": [
                     {
                         "action": int(candidate),
                         "label": before.describe_action(int(candidate)),
@@ -2537,8 +2567,8 @@ def _run_single_simulation(
                     for candidate in top_actions
                     if result.policy[candidate] > 0
                 ],
-                state=state.snapshot(),
-            )
+                "state": state.snapshot(),
+            })
             with server.simulation_lock:
                 server.simulation.update(
                     move=moves,
@@ -2547,73 +2577,48 @@ def _run_single_simulation(
                 )
         duration = perf_counter() - started
         scores = state.final_scores()
-        telemetry.emit(
-            "self_play_completed",
-            iteration=1,
-            game_in_iteration=1,
-            games_per_iteration=1,
-            total_games=1,
-            moves=moves,
-            positions=moves,
-            replay_positions=0,
-            duration_seconds=duration,
-            scores=scores,
-            returns=state.returns(),
-            state=state.snapshot(),
-        )
-        telemetry.emit(
-            "iteration_completed",
-            iteration=1,
-            new_positions=moves,
-            replay_positions=0,
-            duration_seconds=duration,
-        )
-        telemetry.emit(
-            "run_completed",
-            iterations=1,
-            total_games=1,
-            replay_positions=0,
-            duration_seconds=duration,
-        )
+        archive_path = persist("complete")
         with server.simulation_lock:
             server.simulation.update(
                 status="complete",
                 move=moves,
                 scores=list(scores),
                 duration_seconds=duration,
+                archive_path=archive_path,
             )
     except Exception as error:
         duration = perf_counter() - started
-        telemetry.emit(
-            "run_failed",
-            error_type=type(error).__name__,
-            message=str(error),
-            duration_seconds=duration,
-            state=state.snapshot(),
-        )
+        archive_error = f"{type(error).__name__}: {error}"
+        try:
+            archive_path = persist("failed", error=archive_error)
+        except Exception:
+            archive_path = None
         with server.simulation_lock:
             server.simulation.update(
                 status="failed",
                 move=moves,
-                error=f"{type(error).__name__}: {error}",
+                error=archive_error,
                 duration_seconds=duration,
+                archive_path=archive_path,
             )
 
 
 def serve_dashboard(
-    metrics_path: str | Path,
+    storage_path: str | Path,
     host: str = "127.0.0.1",
     port: int = 8765,
     history_path: str | Path | None = None,
+    pipeline_path: str | Path | None = None,
 ) -> None:
     server = create_dashboard_server(
-        metrics_path,
+        storage_path,
         host,
         port,
         history_path=history_path,
+        pipeline_path=pipeline_path,
     )
     print(f"GaiaZero dashboard: http://{host}:{server.server_port}")
-    print(f"Metrics source: {server.metrics_path}")
+    print(f"Pipeline root: {server.pipeline.root}")
     print(f"Local history: {server.history_path}")
     try:
         server.serve_forever()

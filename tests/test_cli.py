@@ -1,9 +1,7 @@
-import tempfile
+import argparse
 import unittest
-from pathlib import Path
-from unittest.mock import patch
 
-from gaiazero.cli import build_parser, command_train_all
+from gaiazero.cli import build_parser
 
 
 class CliTrainingSplitTests(unittest.TestCase):
@@ -15,53 +13,23 @@ class CliTrainingSplitTests(unittest.TestCase):
         self.assertEqual(args.shuffle_pack_size, 4096)
         self.assertEqual(args.device, "auto")
 
-    def test_train_all_defaults_to_three_player_counts(self) -> None:
-        args = build_parser().parse_args(["train-all"])
+    def test_synchronous_training_commands_are_removed(self) -> None:
+        parser = build_parser()
+        subparsers = next(
+            action
+            for action in parser._actions
+            if isinstance(action, argparse._SubParsersAction)
+        )
 
-        self.assertEqual(tuple(args.player_counts), (2, 3, 4))
-        self.assertEqual(args.ruleset, "standard")
-        self.assertEqual(args.output_dir, "runs/models")
-        self.assertEqual(args.metrics_dir, "runs/metrics-by-players")
+        self.assertNotIn("train", subparsers.choices)
+        self.assertNotIn("train-all", subparsers.choices)
+        self.assertIn("pipeline", subparsers.choices)
 
-    def test_train_all_dispatches_independent_models(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            output_dir = Path(temporary) / "models"
-            metrics_dir = Path(temporary) / "metrics"
-            args = build_parser().parse_args([
-                "train-all",
-                "--output-dir",
-                str(output_dir),
-                "--metrics-dir",
-                str(metrics_dir),
-                "--seed",
-                "11",
-            ])
+    def test_dashboard_defaults_to_async_pipeline_storage(self) -> None:
+        args = build_parser().parse_args(["dashboard"])
 
-            with patch("gaiazero.cli.command_train") as train:
-                command_train_all(args)
-
-            self.assertEqual(train.call_count, 3)
-            children = [call.args[0] for call in train.call_args_list]
-            self.assertEqual([child.players for child in children], [2, 3, 4])
-            self.assertEqual(
-                [Path(child.output).name for child in children],
-                [
-                    "gaia-standard-2p-katago.pt",
-                    "gaia-standard-3p-katago.pt",
-                    "gaia-standard-4p-katago.pt",
-                ],
-            )
-            self.assertEqual(
-                [Path(child.metrics).name for child in children],
-                [
-                    "metrics-standard-2p-katago.jsonl",
-                    "metrics-standard-3p-katago.jsonl",
-                    "metrics-standard-4p-katago.jsonl",
-                ],
-            )
-            self.assertEqual([child.seed for child in children], [11, 1_000_014, 2_000_017])
-            self.assertTrue(output_dir.is_dir())
-            self.assertTrue(metrics_dir.is_dir())
+        self.assertEqual(args.storage_dir, "runs")
+        self.assertEqual(args.pipeline_root, "runs/multiplayer-pipeline")
 
 
 if __name__ == "__main__":

@@ -13,134 +13,94 @@
       <div class="brand-mark" aria-hidden="true">GZ</div>
       <div>
         <h1>GaiaZero</h1>
-        <p>训练监控台</p>
+        <p>异步 NPZ 训练控制台</p>
       </div>
     </div>
     <div class="connection-block">
       <span id="connection-dot" class="status-dot waiting" aria-hidden="true"></span>
       <div>
-        <strong id="run-status">等待数据</strong>
-        <span id="phase-label">尚未发现训练事件</span>
+        <strong id="run-status">等待流水线</strong>
+        <span id="phase-label">五个训练进程尚未启动</span>
       </div>
       <label class="live-toggle">
         <input id="live-toggle" type="checkbox" checked>
-        <span>实时</span>
+      <span>自动刷新</span>
       </label>
-      <button id="refresh-button" class="icon-button" type="button" title="立即刷新" aria-label="立即刷新">↻</button>
+    <button id="refresh-button" class="icon-button" type="button" title="立即刷新" aria-label="立即刷新">↻</button>
     </div>
   </header>
 
   <nav class="tabs" aria-label="监控视图">
     <button class="tab active" type="button" data-view="overview" aria-selected="true">概览</button>
+    <button class="tab" type="button" data-view="pipeline-selfplay" aria-selected="false">自对弈</button>
+    <button class="tab" type="button" data-view="pipeline-shuffle" aria-selected="false">洗牌</button>
+    <button class="tab" type="button" data-view="pipeline-train" aria-selected="false">训练</button>
+    <button class="tab" type="button" data-view="pipeline-export" aria-selected="false">导出</button>
+    <button class="tab" type="button" data-view="pipeline-gatekeeper" aria-selected="false">守门测试</button>
     <button class="tab" type="button" data-view="play" aria-selected="false">人工对战</button>
-    <button class="tab" type="button" data-view="selfplay" aria-selected="false">自博弈</button>
     <button class="tab" type="button" data-view="history" aria-selected="false">历史回放</button>
     <button class="tab" type="button" data-view="bga-import" aria-selected="false">BGA 导入</button>
-    <button class="tab" type="button" data-view="diagnostics" aria-selected="false">诊断</button>
   </nav>
 
   <main>
     <section id="overview" class="view active" aria-labelledby="overview-title">
-      <h2 id="overview-title" class="sr-only">训练概览</h2>
-      <div class="metric-strip">
-        <article class="metric-card">
-          <span>迭代</span>
-          <strong id="metric-iteration">0 / 0</strong>
-          <small id="metric-iteration-note">未开始</small>
-        </article>
-        <article class="metric-card">
-          <span>自博弈</span>
-          <strong id="metric-games">0</strong>
-          <small id="metric-games-note">0 个训练局面</small>
-        </article>
-        <article class="metric-card">
-          <span>回放池</span>
-          <strong id="metric-replay">0</strong>
-          <small id="metric-replay-note">容量 0%</small>
-        </article>
-        <article class="metric-card accent">
-          <span>总损失</span>
-          <strong id="metric-loss">--</strong>
-          <small id="metric-loss-note">等待反向传播</small>
-        </article>
-        <article class="metric-card">
-          <span>吞吐量</span>
-          <strong id="metric-throughput">--</strong>
-          <small>局面 / 秒</small>
-        </article>
-        <article class="metric-card">
-          <span>已运行</span>
-          <strong id="metric-elapsed">00:00</strong>
-          <small id="metric-device">设备 --</small>
-        </article>
-      </div>
-
-      <div class="overview-grid content-band">
-        <section class="panel chart-panel">
+      <h2 id="overview-title" class="sr-only">异步训练概览</h2>
+      <div class="pipeline-overview-layout content-band">
+        <section class="panel pipeline-launch-panel">
           <div class="panel-heading">
-            <div>
-              <p class="eyebrow">Optimization</p>
-              <h3>损失趋势</h3>
-            </div>
-            <div class="legend" aria-label="图例">
-              <span><i class="legend-total"></i>总损失</span>
-              <span><i class="legend-policy"></i>策略</span>
-              <span><i class="legend-value"></i>价值</span>
-            </div>
+            <div><p class="eyebrow">Five-process pipeline</p><h3>启动配置</h3></div>
+            <span id="pipeline-overall-badge" class="health-badge waiting">未启动</span>
           </div>
-          <div class="canvas-frame">
-            <canvas id="loss-chart" aria-label="训练损失折线图"></canvas>
-            <div id="loss-empty" class="canvas-empty">等待训练更新</div>
-          </div>
+          <form id="pipeline-start-form" class="pipeline-config-form">
+            <label class="wide"><span>流水线目录</span><input id="pipeline-root" name="root" type="text" value="runs/multiplayer-pipeline" spellcheck="false"></label>
+            <label><span>玩家人数</span><select id="pipeline-players" name="players"><option value="2">2 人</option><option value="3">3 人</option><option value="4" selected>4 人</option></select></label>
+            <label><span>规则集</span><select id="pipeline-ruleset" name="ruleset"><option value="standard">标准规则</option><option value="mini">Mini 测试</option></select></label>
+            <label><span>计算设备</span><select id="pipeline-device" name="device"><option value="auto">自动</option><option value="cuda">CUDA</option><option value="cpu">CPU</option></select></label>
+            <label><span>MCTS 模拟/步</span><input id="pipeline-simulations" name="simulations" type="number" min="1" value="64"></label>
+            <label><span>每周期对局</span><input id="pipeline-games-per-cycle" name="games_per_cycle" type="number" min="1" value="1"></label>
+            <label><span>洗牌分片大小</span><input id="pipeline-shuffle-pack-size" name="shuffle_pack_size" type="number" min="1" value="4096"></label>
+            <label><span>训练批大小</span><input id="pipeline-batch-size" name="batch_size" type="number" min="1" value="256"></label>
+            <label><span>每周期更新</span><input id="pipeline-updates-per-cycle" name="updates_per_cycle" type="number" min="1" value="32"></label>
+            <label><span>最低回放局面</span><input id="pipeline-min-replay" name="min_replay" type="number" min="1" value="256"></label>
+            <label><span>守门对局数</span><input id="pipeline-gate-games" name="gate_games" type="number" min="1" value="20"></label>
+            <label><span>通过阈值</span><input id="pipeline-gate-threshold" name="gate_threshold" type="number" min="0.01" max="1" step="0.01" value="0.55"></label>
+            <div class="pipeline-launch-actions wide">
+              <span id="pipeline-control-message" class="pipeline-control-message ready">配置完成后可同时启动五个进程</span>
+              <button id="pipeline-stop" class="secondary-command danger" type="button" disabled>停止</button>
+              <button id="pipeline-start" class="primary-command" type="submit">启动五进程</button>
+            </div>
+          </form>
         </section>
 
-        <section class="panel progress-panel">
-          <div class="panel-heading">
-            <div>
-              <p class="eyebrow">Pipeline</p>
-              <h3>运行进度</h3>
-            </div>
-            <span id="progress-percent" class="compact-value">0%</span>
-          </div>
-          <div class="progress-track" aria-hidden="true">
-            <progress id="progress-fill" class="progress-fill" max="100" value="0"></progress>
-          </div>
-          <ol class="phase-list">
-            <li id="phase-selfplay">
-              <span class="phase-index">01</span>
-              <div><strong>生成自博弈</strong><small id="phase-selfplay-note">等待</small></div>
-            </li>
-            <li id="phase-training">
-              <span class="phase-index">02</span>
-              <div><strong>更新网络</strong><small id="phase-training-note">等待</small></div>
-            </li>
-            <li id="phase-arena">
-              <span class="phase-index">03</span>
-              <div><strong>竞技场评测</strong><small id="phase-arena-note">等待</small></div>
-            </li>
-            <li id="phase-checkpoint">
-              <span class="phase-index">04</span>
-              <div><strong>保存检查点</strong><small id="phase-checkpoint-note">等待</small></div>
-            </li>
+        <section class="panel pipeline-flow-panel">
+          <div class="panel-heading"><div><p class="eyebrow">Artifact flow</p><h3>NPZ 闭环</h3></div></div>
+          <ol class="pipeline-flow-list">
+            <li><strong>自对弈</strong><span>完整对局写入 raw/*.npz</span></li>
+            <li><strong>洗牌</strong><span>合并为 shuffled/*.npz</span></li>
+            <li><strong>训练</strong><span>PyTorch 生成候选权重</span></li>
+            <li><strong>守门</strong><span>候选通过后更新 current.pt</span></li>
+            <li><strong>导出</strong><span>发布 GaiaZero .bin 权重</span></li>
           </ol>
         </section>
       </div>
 
-      <section class="panel content-band iteration-panel">
-        <div class="panel-heading">
-          <div>
-            <p class="eyebrow">Iterations</p>
-            <h3>迭代摘要</h3>
-          </div>
-          <span id="iteration-count" class="muted">0 条记录</span>
-        </div>
-        <div class="table-scroll">
-          <table>
-            <thead><tr><th>迭代</th><th>新增局面</th><th>回放池</th><th>总损失</th><th>策略 / 价值</th><th>耗时</th></tr></thead>
-            <tbody id="iteration-table"><tr><td colspan="6" class="empty-cell">暂无迭代结果</td></tr></tbody>
-          </table>
-        </div>
-      </section>
+      <section class="pipeline-worker-grid content-band" id="pipeline-worker-grid" aria-label="五进程状态"></section>
+    </section>
+
+    <section id="pipeline-selfplay" class="view pipeline-worker-view" data-worker="selfplay" hidden>
+      <h2 class="sr-only">自对弈进程监控</h2><div class="pipeline-worker-page content-band"></div>
+    </section>
+    <section id="pipeline-shuffle" class="view pipeline-worker-view" data-worker="shuffle" hidden>
+      <h2 class="sr-only">洗牌进程监控</h2><div class="pipeline-worker-page content-band"></div>
+    </section>
+    <section id="pipeline-train" class="view pipeline-worker-view" data-worker="train" hidden>
+      <h2 class="sr-only">训练进程监控</h2><div class="pipeline-worker-page content-band"></div>
+    </section>
+    <section id="pipeline-export" class="view pipeline-worker-view" data-worker="export" hidden>
+      <h2 class="sr-only">导出进程监控</h2><div class="pipeline-worker-page content-band"></div>
+    </section>
+    <section id="pipeline-gatekeeper" class="view pipeline-worker-view" data-worker="gatekeeper" hidden>
+      <h2 class="sr-only">守门测试进程监控</h2><div class="pipeline-worker-page content-band"></div>
     </section>
 
     <section id="play" class="view" aria-labelledby="play-title" hidden>
@@ -488,97 +448,6 @@
       </div>
     </section>
 
-    <section id="selfplay" class="view" aria-labelledby="selfplay-title" hidden>
-      <h2 id="selfplay-title" class="sr-only">自博弈监控</h2>
-      <div class="selfplay-grid content-band">
-        <section class="panel board-panel">
-          <div class="panel-heading">
-            <div>
-              <p class="eyebrow">Current state</p>
-              <h3>Gaia 星图</h3>
-            </div>
-            <span id="board-round" class="compact-value">第 -- 轮</span>
-          </div>
-          <div class="board-frame">
-            <canvas id="board-canvas" aria-label="GaiaZero 当前棋盘"></canvas>
-            <div id="board-empty" class="canvas-empty">等待棋盘快照</div>
-          </div>
-          <div class="terrain-legend" aria-label="星球图例">
-            <span><i class="terrain t0"></i>地球型</span>
-            <span><i class="terrain t1"></i>沙漠</span>
-            <span><i class="terrain t2"></i>沼泽</span>
-            <span><i class="terrain t3"></i>火山</span>
-            <span><i class="terrain t4"></i>氧化</span>
-            <span><i class="terrain t5"></i>钛金</span>
-            <span><i class="terrain t6"></i>冰冻</span>
-            <span><i class="terrain t7"></i>跨维</span>
-            <span><i class="terrain t8"></i>盖亚</span>
-          </div>
-        </section>
-
-        <section class="panel action-panel">
-          <div class="panel-heading">
-            <div>
-              <p class="eyebrow">Search decision</p>
-              <h3>最近决策</h3>
-            </div>
-            <span id="action-player" class="player-chip">P--</span>
-          </div>
-          <p id="action-label" class="action-label">等待搜索结果</p>
-          <div id="candidate-list" class="candidate-list">
-            <div class="candidate-empty">暂无候选动作</div>
-          </div>
-          <div class="value-vector">
-            <span>根价值</span>
-            <div id="root-values">--</div>
-          </div>
-        </section>
-      </div>
-
-      <section class="panel content-band players-panel">
-        <div class="panel-heading">
-          <div>
-            <p class="eyebrow">Players</p>
-            <h3>玩家状态</h3>
-          </div>
-          <span id="active-player-note" class="muted">当前行动 --</span>
-        </div>
-        <div class="table-scroll">
-          <table>
-            <thead><tr><th>玩家</th><th>分数</th><th>信用点</th><th>矿石</th><th>知识</th><th>QIC</th><th>能量 I/II/III</th><th>研究轨</th><th>联盟</th><th>状态</th></tr></thead>
-            <tbody id="players-table"><tr><td colspan="10" class="empty-cell">暂无玩家状态</td></tr></tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="content-band player-boards-panel">
-        <div class="panel-heading">
-          <div>
-            <p class="eyebrow">Personal boards</p>
-            <h3>个人主版图</h3>
-          </div>
-          <span class="muted">实时资源 · 建筑库存 · 已获科技</span>
-        </div>
-        <div id="player-board-grid" class="player-board-grid"></div>
-      </section>
-
-      <section class="panel content-band games-panel">
-        <div class="panel-heading">
-          <div>
-            <p class="eyebrow">Completed games</p>
-            <h3>最近对局</h3>
-          </div>
-          <span id="games-count" class="muted">0 局</span>
-        </div>
-        <div class="table-scroll">
-          <table>
-            <thead><tr><th>迭代</th><th>对局</th><th>步数</th><th>局面</th><th>得分</th><th>耗时</th></tr></thead>
-            <tbody id="games-table"><tr><td colspan="6" class="empty-cell">暂无完成对局</td></tr></tbody>
-          </table>
-        </div>
-      </section>
-    </section>
-
     <section id="bga-import" class="view" aria-labelledby="bga-import-title" hidden>
       <h2 id="bga-import-title" class="sr-only">BGA 复盘导入</h2>
       <div class="bga-import-layout content-band">
@@ -843,57 +712,10 @@
       </div>
     </section>
 
-    <section id="diagnostics" class="view" aria-labelledby="diagnostics-title" hidden>
-      <h2 id="diagnostics-title" class="sr-only">运行诊断</h2>
-      <div class="diagnostics-grid content-band">
-        <section class="panel config-panel">
-          <div class="panel-heading">
-            <div>
-              <p class="eyebrow">Configuration</p>
-              <h3>运行参数</h3>
-            </div>
-            <span id="run-id" class="mono muted">run --</span>
-          </div>
-          <dl id="config-list" class="config-list">
-            <div><dt>状态</dt><dd>等待训练数据</dd></div>
-          </dl>
-        </section>
-
-        <section class="panel health-panel">
-          <div class="panel-heading">
-            <div>
-              <p class="eyebrow">Telemetry</p>
-              <h3>数据源</h3>
-            </div>
-            <span id="health-badge" class="health-badge waiting">等待</span>
-          </div>
-          <dl class="health-list">
-            <div><dt>事件文件</dt><dd id="health-source" class="mono">--</dd></div>
-            <div><dt>最后事件</dt><dd id="health-updated">--</dd></div>
-            <div><dt>事件数量</dt><dd id="health-events">0</dd></div>
-            <div><dt>模型参数</dt><dd id="health-parameters">--</dd></div>
-            <div><dt>观察 / 动作</dt><dd id="health-shapes">--</dd></div>
-          </dl>
-        </section>
-      </div>
-
-      <section class="panel content-band event-panel">
-        <div class="panel-heading">
-          <div>
-            <p class="eyebrow">Event stream</p>
-            <h3>运行事件</h3>
-          </div>
-          <span id="event-count" class="muted">0 条</span>
-        </div>
-        <div id="event-list" class="event-list">
-          <div class="event-empty">暂无事件</div>
-        </div>
-      </section>
-    </section>
   </main>
 
   <footer>
-    <span id="footer-source">metrics: --</span>
+    <span id="footer-source">pipeline: --</span>
     <span id="footer-clock">--:--:--</span>
   </footer>
   <script src="/app.js"></script>

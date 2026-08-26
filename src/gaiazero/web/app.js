@@ -161,18 +161,12 @@ const BUILDING_SPECS = [
   { key: "planetary_institute", label: "行星研究院", short: "PI", total: 1 },
   { key: "academy", label: "学院", short: "AC", total: 2 },
 ];
-const PHASE_LABELS = {
-  run_started: "初始化完成",
-  self_play_started: "正在生成自博弈",
-  self_play_step: "正在搜索动作",
-  self_play_completed: "自博弈已完成",
-  training_started: "正在更新网络",
-  training_update: "正在反向传播",
-  arena_started: "正在运行竞技场",
-  arena_completed: "竞技场已完成",
-  iteration_completed: "迭代已保存",
-  run_completed: "训练已完成",
-  run_failed: "训练失败"
+const PIPELINE_WORKERS = {
+  selfplay: { label: "自对弈", view: "pipeline-selfplay", artifact: "原始 NPZ" },
+  shuffle: { label: "洗牌", view: "pipeline-shuffle", artifact: "洗牌 NPZ" },
+  train: { label: "训练", view: "pipeline-train", artifact: "候选权重" },
+  export: { label: "导出", view: "pipeline-export", artifact: "BIN 模型" },
+  gatekeeper: { label: "守门测试", view: "pipeline-gatekeeper", artifact: "评测记录" },
 };
 const mapPieceArtworkCache = new Map();
 let sectorArtworkRenderQueued = false;
@@ -200,13 +194,16 @@ const BGA_STRUCTURE_HEIGHTS = {
 };
 
 const state = {
-  events: [],
-  lastSequence: 0,
-  runId: null,
-  source: "--",
-  connected: false,
-  live: true,
-  polling: false,
+  pipeline: {
+    data: null,
+    connected: false,
+    live: true,
+    polling: false,
+    busy: false,
+    configHydrated: false,
+    message: "配置完成后可同时启动五个进程",
+    messageStatus: "ready",
+  },
   manualSetup: {
     initialized: false,
     hydrated: false,
@@ -272,9 +269,6 @@ const state = {
 };
 
 const byId = (id) => document.getElementById(id);
-const latest = (type) => [...state.events].reverse().find((event) => event.type === type);
-const eventsOf = (type) => state.events.filter((event) => event.type === type);
-const payload = (event) => event ? event.payload || {} : {};
 
 function formatNumber(value, digits = 0) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
@@ -308,168 +302,257 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-async function pollEvents(force = false) {
-  if (state.polling || (!state.live && !force)) return;
-  state.polling = true;
+async function pollPipeline(force = false) {
+  if (state.pipeline.polling || (!state.pipeline.live && !force)) return;
+  state.pipeline.polling = true;
   try {
-    const response = await fetch(`/api/events?after=${state.lastSequence}&limit=5000`, { cache: "no-store" });
+    const response = await fetch("/api/pipeline", { cache: "no-store" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const data = await response.json();
-    state.source = data.source || state.source;
-    state.connected = true;
-    let historyChanged = !state.history.index;
-    for (const event of data.events || []) {
-      if (event.type === "run_started" && state.runId && event.run_id !== state.runId) {
-        state.events = [];
-      }
-      if (event.type === "run_started") {
-        state.runId = event.run_id;
-      }
-      if (!state.runId || event.run_id === state.runId) state.events.push(event);
-      state.lastSequence = Math.max(state.lastSequence, Number(event.sequence) || 0);
-      if (["run_started", "self_play_completed", "iteration_completed", "run_completed", "run_failed"].includes(event.type)) {
-        historyChanged = true;
-      }
-    }
-    if (!state.runId && state.events.length) state.runId = state.events.at(-1).run_id;
-    if (historyChanged) await refreshHistoryIndex();
-  } catch (error) {
-    state.connected = false;
+    state.pipeline.data = await response.json();
+    state.pipeline.connected = true;
+  } catch (_error) {
+    state.pipeline.connected = false;
   } finally {
-    state.polling = false;
+    state.pipeline.polling = false;
     render();
   }
 }
 
 function render() {
-  renderStatus();
-  renderMetrics();
-  renderProgress();
-  renderLossChart();
-  renderIterations();
+  renderPipeline();
   renderSetup(state.manualSetup.preview);
   renderPlay();
-  renderSelfPlay();
   renderHistory();
   renderBgaImport();
-  renderDiagnostics();
-  byId("footer-source").textContent = `metrics: ${state.source}`;
   byId("footer-clock").textContent = formatTime(new Date().toISOString());
 }
 
-function runState() {
-  const event = state.events.at(-1);
-  if (!event) return "waiting";
-  if (event.type === "run_failed") return "failed";
-  if (event.type === "run_completed") return "complete";
-  return "running";
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (bytes < 1024) return `${formatNumber(bytes)} B`;
+  if (bytes < 1024 ** 2) return `${formatNumber(bytes / 1024, 1)} KiB`;
+  if (bytes < 1024 ** 3) return `${formatNumber(bytes / 1024 ** 2, 1)} MiB`;
+  return `${formatNumber(bytes / 1024 ** 3, 2)} GiB`;
 }
 
-function renderStatus() {
-  const status = runState();
-  const last = state.events.at(-1);
+function pipelineStatusLabel(status) {
+  return {
+    idle: "未启动",
+    running: "运行中",
+    stopping: "正在停止",
+    stopped: "已停止",
+    failed: "运行失败",
+    unmanaged: "已有训练数据",
+    connected: "已连接",
+    waiting: "等待",
+  }[status] || status || "未知";
+}
+
+function pipelineStatusClass(status) {
+  if (status === "running") return "connected";
+  if (status === "failed") return "failed";
+  if (["stopping", "unmanaged"].includes(status)) return "waiting";
+  return "complete";
+}
+
+function workerPhase(worker) {
+  return worker?.snapshot?.phase || (worker?.process_status === "running" ? "starting" : worker?.process_status || "idle");
+}
+
+function workerPhaseLabel(phase) {
   const labels = {
-    waiting: "等待数据",
-    running: "训练运行中",
-    complete: "训练已完成",
-    failed: "训练失败"
+    idle: "未启动", unmanaged: "未由本页启动", starting: "正在启动", stopped: "已停止",
+    failed: "失败", playing: "生成对局", packing: "合并洗牌", optimizing: "更新网络",
+    evaluating: "候选评测", waiting: "等待新数据", waiting_for_replay: "等待回放池",
+    waiting_for_candidate: "等待候选", waiting_for_approved: "等待批准权重",
   };
-  byId("run-status").textContent = state.connected ? labels[status] : "监控服务失联";
-  byId("phase-label").textContent = last ? (PHASE_LABELS[last.type] || last.type) : "尚未发现训练事件";
-  const dot = byId("connection-dot");
-  dot.className = `status-dot ${state.connected ? status : "failed"}`;
+  return labels[phase] || phase || "未知";
 }
 
-function currentIteration() {
-  const event = [...state.events].reverse().find((item) => payload(item).iteration !== undefined);
-  return Number(payload(event).iteration || 0);
-}
-
-function renderMetrics() {
-  const start = latest("run_started");
-  const config = payload(start).config || {};
-  const iteration = currentIteration();
-  const completedGames = eventsOf("self_play_completed");
-  const game = completedGames.at(-1);
-  const update = latest("training_update") || latest("iteration_completed");
-  const updateData = payload(update);
-  const replay = Number(updateData.replay_positions || payload(game).replay_positions || 0);
-  const positions = completedGames.reduce((total, event) => total + Number(payload(event).positions || 0), 0);
-  const recentGames = completedGames.slice(-8);
-  const recentPositions = recentGames.reduce((total, event) => total + Number(payload(event).positions || 0), 0);
-  const recentDuration = recentGames.reduce((total, event) => total + Number(payload(event).duration_seconds || 0), 0);
-  const throughput = recentDuration > 0 ? recentPositions / recentDuration : null;
-
-  byId("metric-iteration").textContent = `${iteration} / ${config.iterations || 0}`;
-  byId("metric-iteration-note").textContent = iteration ? `当前第 ${iteration} 轮训练` : "未开始";
-  byId("metric-games").textContent = formatNumber(completedGames.length);
-  byId("metric-games-note").textContent = `${formatNumber(positions)} 个训练局面`;
-  byId("metric-replay").textContent = formatNumber(replay);
-  const capacity = Number(config.replay_capacity || 0);
-  byId("metric-replay-note").textContent = capacity ? `容量 ${formatNumber(replay / capacity * 100, 1)}%` : "容量 --";
-  byId("metric-loss").textContent = update ? formatNumber(updateData.loss, 4) : "--";
-  byId("metric-loss-note").textContent = update
-    ? `策略 ${formatNumber(updateData.policy_loss, 3)} · 价值 ${formatNumber(updateData.value_loss, 3)}`
-    : "等待反向传播";
-  byId("metric-throughput").textContent = throughput === null ? "--" : formatNumber(throughput, 1);
-
-  const end = latest("run_completed") || latest("run_failed");
-  let elapsed = 0;
-  if (start) {
-    elapsed = end
-      ? (new Date(end.timestamp) - new Date(start.timestamp)) / 1000
-      : (Date.now() - new Date(start.timestamp).getTime()) / 1000;
-  }
-  byId("metric-elapsed").textContent = formatDuration(elapsed);
-  byId("metric-device").textContent = `设备 ${payload(start).device || "--"}`;
-}
-
-function renderProgress() {
-  const start = latest("run_started");
-  const config = payload(start).config || {};
-  const iterations = Number(config.iterations || 0);
-  const iteration = currentIteration();
-  const last = state.events.at(-1);
-  const data = payload(last);
-  let within = 0;
-  if (last && last.type.startsWith("self_play")) {
-    within = 0.7 * Number(data.game_in_iteration || 0) / Math.max(1, Number(data.games_per_iteration || config.games_per_iteration || 1));
-  } else if (last && (last.type === "training_started" || last.type === "training_update")) {
-    within = 0.7 + 0.2 * Number(data.update || 0) / Math.max(1, Number(data.updates || config.updates_per_iteration || 1));
-  } else if (last && last.type.startsWith("arena")) {
-    within = 0.94;
-  } else if (last && ["iteration_completed", "run_completed"].includes(last.type)) {
-    within = 1;
-  }
-  const progress = iterations ? Math.min(1, Math.max(0, ((iteration - 1) + within) / iterations)) : 0;
-  byId("progress-fill").value = progress * 100;
-  byId("progress-percent").textContent = `${formatNumber(progress * 100, 0)}%`;
-
-  const currentType = last ? last.type : "";
-  const phases = {
-    "phase-selfplay": currentType.startsWith("self_play") ? "active" : (currentType && !currentType.startsWith("self_play") ? "done" : ""),
-    "phase-training": currentType.startsWith("training") ? "active" : (["arena_started", "arena_completed", "iteration_completed", "run_completed"].includes(currentType) ? "done" : ""),
-    "phase-arena": currentType.startsWith("arena") ? "active" : (["iteration_completed", "run_completed"].includes(currentType) ? "done" : ""),
-    "phase-checkpoint": currentType === "iteration_completed" ? "active" : (currentType === "run_completed" ? "done" : "")
+function hydratePipelineConfig(config) {
+  if (state.pipeline.configHydrated || !config || !Object.keys(config).length) return;
+  const fields = {
+    root: "pipeline-root", players: "pipeline-players", ruleset: "pipeline-ruleset",
+    device: "pipeline-device", simulations: "pipeline-simulations",
+    games_per_cycle: "pipeline-games-per-cycle", shuffle_pack_size: "pipeline-shuffle-pack-size",
+    batch_size: "pipeline-batch-size", updates_per_cycle: "pipeline-updates-per-cycle",
+    min_replay: "pipeline-min-replay", gate_games: "pipeline-gate-games",
+    gate_threshold: "pipeline-gate-threshold",
   };
-  for (const [id, className] of Object.entries(phases)) byId(id).className = className;
+  for (const [key, id] of Object.entries(fields)) {
+    if (config[key] !== undefined && byId(id)) byId(id).value = String(config[key]);
+  }
+  state.pipeline.configHydrated = true;
+}
 
-  const gameStart = latest("self_play_started");
-  const trainUpdate = latest("training_update");
-  const arena = latest("arena_completed");
-  const checkpoint = latest("iteration_completed");
-  byId("phase-selfplay-note").textContent = gameStart
-    ? `第 ${payload(gameStart).game_in_iteration} / ${payload(gameStart).games_per_iteration} 局`
-    : "等待";
-  byId("phase-training-note").textContent = trainUpdate
-    ? `更新 ${payload(trainUpdate).update} / ${payload(trainUpdate).updates}`
-    : "等待";
-  byId("phase-arena-note").textContent = arena
-    ? `均值 ${formatNumber(payload(arena).mean_value, 3)}`
-    : "等待";
-  byId("phase-checkpoint-note").textContent = checkpoint
-    ? `迭代 ${payload(checkpoint).iteration} 已保存`
-    : "等待";
+function renderPipeline() {
+  const data = state.pipeline.data;
+  const connected = state.pipeline.connected;
+  const status = data?.status || "idle";
+  hydratePipelineConfig(data?.config);
+  byId("run-status").textContent = connected ? `异步训练${pipelineStatusLabel(status)}` : "监控服务失联";
+  const runningCount = Object.values(data?.workers || {}).filter((worker) => worker.process_status === "running").length;
+  byId("phase-label").textContent = connected
+    ? `${runningCount} / 5 个进程运行 · ${data?.config?.players || "--"} 人局`
+    : "无法读取流水线状态";
+  byId("connection-dot").className = `status-dot ${connected ? (status === "running" ? "running" : status === "failed" ? "failed" : "complete") : "failed"}`;
+  const badge = byId("pipeline-overall-badge");
+  badge.className = `health-badge ${pipelineStatusClass(status)}`;
+  badge.textContent = pipelineStatusLabel(status);
+  const busy = state.pipeline.busy;
+  const running = ["running", "stopping"].includes(status);
+  byId("pipeline-start").disabled = busy || running;
+  byId("pipeline-stop").disabled = busy || !running;
+  document.querySelectorAll("#pipeline-start-form input, #pipeline-start-form select").forEach((field) => {
+    field.disabled = busy || running;
+  });
+  const message = byId("pipeline-control-message");
+  message.className = `pipeline-control-message ${state.pipeline.messageStatus}`;
+  message.textContent = state.pipeline.message;
+  byId("footer-source").textContent = `pipeline: ${data?.root || "--"}`;
+  renderPipelineOverview(data);
+  document.querySelectorAll(".pipeline-worker-view").forEach((section) => {
+    renderPipelineWorkerPage(section, data?.workers?.[section.dataset.worker]);
+  });
+  renderPipelineTrainChart(data?.workers?.train?.history || []);
+}
+
+function workerOverviewNote(name, worker) {
+  const metrics = worker?.snapshot?.metrics || {};
+  if (name === "selfplay") return `${formatNumber(worker?.artifacts?.count || 0)} 局 · 最近 ${formatNumber(metrics.positions)} 局面`;
+  if (name === "shuffle") return `${formatNumber(worker?.artifacts?.count || 0)} 分片 · ${formatNumber(worker?.state?.examples || 0)} 局面`;
+  if (name === "train") return `第 ${formatNumber(worker?.state?.generation || metrics.generation || 0)} 代 · loss ${formatNumber(metrics.loss, 4)}`;
+  if (name === "export") return `${formatNumber(worker?.state?.exports || 0)} 个模型 · ${worker?.current ? formatBytes(worker.current.size) : "等待"}`;
+  const latestResult = worker?.history?.at(-1);
+  return `${formatNumber(worker?.state?.evaluated?.length || 0)} 次评测 · ${latestResult ? (latestResult.passed ? "通过" : "未通过") : "等待"}`;
+}
+
+function renderPipelineOverview(data) {
+  const grid = byId("pipeline-worker-grid");
+  grid.innerHTML = Object.entries(PIPELINE_WORKERS).map(([name, definition], index) => {
+    const worker = data?.workers?.[name];
+    const phase = workerPhase(worker);
+    const status = worker?.process_status || "idle";
+    return `<article class="pipeline-worker-card ${escapeHtml(status)}">
+      <div class="pipeline-worker-card-heading"><span>${String(index + 1).padStart(2, "0")}</span><i class="status-dot ${status === "running" ? "running" : status === "failed" ? "failed" : "complete"}"></i></div>
+      <h3>${definition.label}</h3>
+      <strong>${workerPhaseLabel(phase)}</strong>
+      <p>${workerOverviewNote(name, worker)}</p>
+      <button type="button" class="secondary-command" data-open-pipeline-worker="${name}">查看监控</button>
+    </article>`;
+  }).join("");
+}
+
+function workerMetrics(name, worker) {
+  const metrics = worker?.snapshot?.metrics || {};
+  if (name === "selfplay") return [["已生成对局", worker?.artifacts?.count], ["NPZ 容量", formatBytes(worker?.artifacts?.bytes)], ["最近步数", metrics.moves], ["最近局面", metrics.positions]];
+  if (name === "shuffle") return [["已处理对局", worker?.state?.processed?.length], ["输出分片", worker?.artifacts?.count], ["累计局面", worker?.state?.examples], ["分片容量", formatBytes(worker?.artifacts?.bytes)]];
+  if (name === "train") return [["模型代数", worker?.state?.generation], ["累计更新", worker?.state?.updates], ["回放局面", metrics.replay_positions], ["当前 Loss", metrics.loss === undefined ? null : formatNumber(metrics.loss, 5)]];
+  if (name === "export") return [["导出次数", worker?.state?.exports], ["历史模型", worker?.artifacts?.count], ["当前模型", worker?.current?.name || "--"], ["模型容量", formatBytes(worker?.current?.size)]];
+  const last = worker?.history?.at(-1);
+  return [["已评测候选", worker?.state?.evaluated?.length], ["最近候选", last?.candidate || "--"], ["最近结果", last ? (last.passed ? "通过" : "拒绝") : "--"], ["比赛得分", last?.match_score === undefined ? null : formatNumber(last.match_score, 3)]];
+}
+
+function recentArtifactsTable(worker) {
+  const files = worker?.artifacts?.recent || [];
+  if (!files.length) return '<div class="pipeline-empty">暂无产物</div>';
+  return `<div class="table-scroll"><table><thead><tr><th>文件</th><th>容量</th><th>更新时间</th></tr></thead><tbody>${files.map((file) => `<tr><td class="mono">${escapeHtml(file.name)}</td><td>${formatBytes(file.size)}</td><td>${formatTime(file.modified_at)}</td></tr>`).join("")}</tbody></table></div>`;
+}
+
+function workerHistoryTable(name, worker) {
+  const history = worker?.history || [];
+  if (name === "train") {
+    return history.length ? `<div class="table-scroll"><table><thead><tr><th>代数</th><th>更新</th><th>回放局面</th><th>总损失</th><th>策略 / 价值</th></tr></thead><tbody>${history.slice().reverse().map((item) => `<tr><td>${formatNumber(item.generation)}</td><td>${formatNumber(item.updates)}</td><td>${formatNumber(item.replay_positions)}</td><td>${formatNumber(item.loss, 5)}</td><td>${formatNumber(item.policy_loss, 4)} / ${formatNumber(item.value_loss, 4)}</td></tr>`).join("")}</tbody></table></div>` : '<div class="pipeline-empty">等待第一轮网络更新</div>';
+  }
+  if (name === "gatekeeper") {
+    return history.length ? `<div class="table-scroll"><table><thead><tr><th>候选</th><th>结果</th><th>对局</th><th>比赛得分</th><th>阈值</th></tr></thead><tbody>${history.slice().reverse().map((item) => `<tr><td class="mono">${escapeHtml(item.candidate)}</td><td><span class="pipeline-result ${item.passed ? "passed" : "rejected"}">${item.passed ? "通过" : "拒绝"}</span></td><td>${formatNumber(item.games)}</td><td>${formatNumber(item.match_score, 3)}</td><td>${formatNumber(item.threshold, 3)}</td></tr>`).join("")}</tbody></table></div>` : '<div class="pipeline-empty">等待候选权重</div>';
+  }
+  const stateEntries = Object.entries(worker?.state || {}).filter(([key]) => key !== "processed" && key !== "trained_shards" && key !== "evaluated" && key !== "format");
+  return stateEntries.length ? `<dl class="pipeline-state-list">${stateEntries.map(([key, value]) => `<div><dt>${escapeHtml(key)}</dt><dd class="mono">${escapeHtml(typeof value === "object" ? JSON.stringify(value) : value)}</dd></div>`).join("")}</dl>` : '<div class="pipeline-empty">等待状态文件</div>';
+}
+
+function renderPipelineWorkerPage(section, worker) {
+  const name = section.dataset.worker;
+  const definition = PIPELINE_WORKERS[name];
+  const phase = workerPhase(worker);
+  const metrics = workerMetrics(name, worker);
+  const updated = worker?.snapshot?.updated_at;
+  const log = worker?.log || [];
+  section.querySelector(".pipeline-worker-page").innerHTML = `
+    <header class="pipeline-worker-header panel">
+      <div><p class="eyebrow">Process ${Object.keys(PIPELINE_WORKERS).indexOf(name) + 1} / 5</p><h2>${definition.label}</h2><span>${workerPhaseLabel(phase)} · PID ${worker?.pid || "--"}</span></div>
+      <span class="health-badge ${pipelineStatusClass(worker?.process_status)}">${pipelineStatusLabel(worker?.process_status)}</span>
+    </header>
+    <div class="pipeline-worker-metrics">${metrics.map(([label, value]) => `<article class="metric-card"><span>${label}</span><strong>${value === null || value === undefined ? "--" : escapeHtml(value)}</strong><small>${updated ? `更新 ${formatTime(updated)}` : "等待进程数据"}</small></article>`).join("")}</div>
+    ${name === "train" ? '<section class="panel pipeline-train-chart"><div class="panel-heading"><div><p class="eyebrow">Optimization</p><h3>损失趋势</h3></div></div><div class="canvas-frame"><canvas id="pipeline-train-loss-chart" aria-label="PyTorch 训练损失趋势"></canvas><div id="pipeline-train-loss-empty" class="canvas-empty">等待训练更新</div></div></section>' : ""}
+    <div class="pipeline-worker-details">
+      <section class="panel"><div class="panel-heading"><div><p class="eyebrow">Artifacts</p><h3>最近产物</h3></div><span class="muted">${formatNumber(worker?.artifacts?.count || 0)} 个</span></div>${recentArtifactsTable(worker)}</section>
+      <section class="panel"><div class="panel-heading"><div><p class="eyebrow">State</p><h3>${name === "train" || name === "gatekeeper" ? "运行记录" : "进程状态"}</h3></div></div>${workerHistoryTable(name, worker)}</section>
+    </div>
+    <section class="panel pipeline-log-panel"><div class="panel-heading"><div><p class="eyebrow">Worker log</p><h3>最近日志</h3></div><span class="muted">${log.length} 行</span></div><pre>${escapeHtml(log.join("\n") || "暂无日志")}</pre></section>`;
+}
+
+function renderPipelineTrainChart(history) {
+  const canvas = byId("pipeline-train-loss-chart");
+  const empty = byId("pipeline-train-loss-empty");
+  if (!canvas || !empty) return;
+  const { context, width, height } = setupCanvas(canvas);
+  context.clearRect(0, 0, width, height);
+  empty.hidden = history.length > 0;
+  if (!history.length) return;
+  const values = history.slice(-120).map((item) => Number(item.loss || 0));
+  const min = Math.min(...values);
+  const max = Math.max(...values, min + 0.0001);
+  const padding = { left: 48, right: 16, top: 16, bottom: 28 };
+  context.strokeStyle = "#d9dfda";
+  context.fillStyle = "#68736d";
+  context.font = "11px Segoe UI";
+  for (let row = 0; row <= 4; row += 1) {
+    const y = padding.top + (height - padding.top - padding.bottom) * row / 4;
+    context.beginPath(); context.moveTo(padding.left, y); context.lineTo(width - padding.right, y); context.stroke();
+    context.fillText((max - (max - min) * row / 4).toFixed(3), 4, y + 4);
+  }
+  context.beginPath(); context.strokeStyle = "#18705a"; context.lineWidth = 2;
+  values.forEach((value, index) => {
+    const x = padding.left + (width - padding.left - padding.right) * index / Math.max(1, values.length - 1);
+    const y = padding.top + (height - padding.top - padding.bottom) * (1 - (value - min) / (max - min));
+    if (index === 0) context.moveTo(x, y); else context.lineTo(x, y);
+  });
+  context.stroke();
+}
+
+function pipelineFormPayload() {
+  const form = new FormData(byId("pipeline-start-form"));
+  const integers = ["players", "simulations", "games_per_cycle", "shuffle_pack_size", "batch_size", "updates_per_cycle", "min_replay", "gate_games"];
+  const payload = Object.fromEntries(form.entries());
+  integers.forEach((key) => { payload[key] = Number(payload[key]); });
+  payload.gate_threshold = Number(payload.gate_threshold);
+  return payload;
+}
+
+async function controlPipeline(action, payload = {}) {
+  if (state.pipeline.busy) return;
+  state.pipeline.busy = true;
+  state.pipeline.message = action === "start" ? "正在启动五个进程…" : "正在停止五个进程…";
+  state.pipeline.messageStatus = "running";
+  renderPipeline();
+  try {
+    const response = await fetch(`/api/pipeline/${action}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    state.pipeline.data = result;
+    state.pipeline.connected = true;
+    state.pipeline.message = action === "start" ? "五个进程已启动" : "停止信号已发送";
+    state.pipeline.messageStatus = "ready";
+  } catch (error) {
+    state.pipeline.message = error.message || String(error);
+    state.pipeline.messageStatus = "failed";
+  } finally {
+    state.pipeline.busy = false;
+    renderPipeline();
+  }
 }
 
 function setupCanvas(canvas) {
@@ -497,7 +580,6 @@ function queueSectorArtworkRender() {
     sectorArtworkRenderQueued = false;
     renderSetup(state.manualSetup.preview);
     renderPlanetPositionEditor();
-    renderBoard(latestState());
     renderPlay();
     renderHistory();
   });
@@ -522,75 +604,6 @@ function getMapPieceArtwork(kind) {
   }
   const entry = mapPieceArtworkCache.get(kind);
   return entry.loaded && !entry.failed ? entry.image : null;
-}
-
-function renderLossChart() {
-  const canvas = byId("loss-chart");
-  const { context, width, height } = setupCanvas(canvas);
-  context.clearRect(0, 0, width, height);
-  const updates = eventsOf("training_update").slice(-160);
-  byId("loss-empty").hidden = updates.length > 0;
-  if (!updates.length) return;
-
-  const series = [
-    { key: "loss", color: "#c14c39" },
-    { key: "policy_loss", color: "#2d68a7" },
-    { key: "value_loss", color: "#18705a" }
-  ];
-  const all = updates.flatMap((event) => series.map((line) => Number(payload(event)[line.key] || 0)));
-  const min = Math.min(...all, 0);
-  const max = Math.max(...all, 1);
-  const padding = { left: 44, right: 12, top: 12, bottom: 28 };
-  const chartWidth = width - padding.left - padding.right;
-  const chartHeight = height - padding.top - padding.bottom;
-
-  context.strokeStyle = "#e3e7e3";
-  context.fillStyle = "#7a847e";
-  context.font = "10px Segoe UI";
-  context.lineWidth = 1;
-  for (let row = 0; row <= 4; row += 1) {
-    const y = padding.top + chartHeight * row / 4;
-    context.beginPath();
-    context.moveTo(padding.left, y);
-    context.lineTo(width - padding.right, y);
-    context.stroke();
-    const value = max - (max - min) * row / 4;
-    context.fillText(value.toFixed(2), 4, y + 3);
-  }
-
-  for (const line of series) {
-    context.beginPath();
-    context.strokeStyle = line.color;
-    context.lineWidth = 2;
-    updates.forEach((event, index) => {
-      const x = padding.left + chartWidth * index / Math.max(1, updates.length - 1);
-      const normalized = (Number(payload(event)[line.key]) - min) / Math.max(0.0001, max - min);
-      const y = padding.top + chartHeight * (1 - normalized);
-      if (index === 0) context.moveTo(x, y); else context.lineTo(x, y);
-    });
-    context.stroke();
-  }
-  context.fillStyle = "#7a847e";
-  context.fillText("早", padding.left, height - 7);
-  context.fillText("最近", width - padding.right - 23, height - 7);
-}
-
-function renderIterations() {
-  const iterations = eventsOf("iteration_completed").slice().reverse();
-  byId("iteration-count").textContent = `${iterations.length} 条记录`;
-  byId("iteration-table").innerHTML = iterations.length
-    ? iterations.map((event) => {
-      const item = payload(event);
-      return `<tr>
-        <td>${formatNumber(item.iteration)}</td>
-        <td>${formatNumber(item.new_positions)}</td>
-        <td>${formatNumber(item.replay_positions)}</td>
-        <td>${formatNumber(item.loss, 4)}</td>
-        <td>${formatNumber(item.policy_loss, 3)} / ${formatNumber(item.value_loss, 3)}</td>
-        <td>${formatDuration(Number(item.duration_seconds))}</td>
-      </tr>`;
-    }).join("")
-    : '<tr><td colspan="6" class="empty-cell">暂无迭代结果</td></tr>';
 }
 
 function setupLabel(tile) {
@@ -1964,7 +1977,6 @@ async function refreshHistoryIndex({ loadTrace = true, force = false } = {}) {
       return;
     }
     const preferredRun = runs.find((run) => run.run_id === state.history.runId)
-      || runs.find((run) => run.run_id === state.runId)
       || runs.at(-1);
     state.history.runId = preferredRun.run_id;
     const iterations = preferredRun.iterations || [];
@@ -2532,25 +2544,6 @@ function renderHistory() {
       actionLog.scrollTop += entryBounds.top - logBounds.top - actionLog.clientHeight / 3;
     }
   }
-}
-
-function latestState() {
-  const event = [...state.events].reverse().find((item) => payload(item).state);
-  return payload(event).state || null;
-}
-
-function renderSelfPlay() {
-  const snapshot = latestState();
-  renderBoard(snapshot);
-  renderPlayers(snapshot);
-  renderLatestAction();
-  renderGames();
-}
-
-function renderBoard(snapshot) {
-  byId("board-empty").hidden = Boolean(snapshot);
-  byId("board-round").textContent = snapshotRoundLabel(snapshot);
-  drawBoard(byId("board-canvas"), snapshot);
 }
 
 function seededCanvasRandom(seed) {
@@ -3147,14 +3140,6 @@ function drawBuilding(context, x, y, building, color, scale = 1, owner = 0, cell
     context.strokeRect(x - 9 * scale, y - 6 * scale, 18 * scale, 12 * scale);
     context.strokeRect(x - 5 * scale, y - 10 * scale, 10 * scale, 20 * scale);
   }
-}
-
-function renderPlayers(snapshot) {
-  byId("active-player-note").textContent = snapshot?.current_player === null || snapshot?.current_player === undefined
-    ? "对局已结束"
-    : `当前行动 P${snapshot.current_player}`;
-  renderPlayerRows("players-table", snapshot);
-  renderPersonalBoards("player-board-grid", snapshot);
 }
 
 function renderPlayerRows(tableId, snapshot, noteId = null) {
@@ -4352,96 +4337,6 @@ function spaceActionAtPlayEvent(event, kind) {
     : null;
 }
 
-function renderLatestAction() {
-  const event = latest("self_play_step");
-  const item = payload(event);
-  byId("action-player").textContent = event ? `P${item.player}` : "P--";
-  byId("action-label").textContent = item.action_label || "等待搜索结果";
-  const candidates = item.candidates || [];
-  byId("candidate-list").innerHTML = candidates.length
-    ? candidates.map((candidate) => `<div class="candidate-row">
-        <div>
-          <strong>${escapeHtml(candidate.label)}</strong>
-          <small>${formatNumber(candidate.visits)} visits</small>
-          <progress class="mini-track" max="1" value="${Number(candidate.probability)}"></progress>
-        </div>
-        <div class="candidate-probability">${formatNumber(Number(candidate.probability) * 100, 1)}%</div>
-      </div>`).join("")
-    : '<div class="candidate-empty">暂无候选动作</div>';
-  byId("root-values").innerHTML = item.root_value
-    ? item.root_value.map((value, index) => `<span class="value-pill">P${index} ${formatNumber(value, 2)}</span>`).join("")
-    : "--";
-}
-
-function renderGames() {
-  const games = eventsOf("self_play_completed").slice().reverse();
-  byId("games-count").textContent = `${games.length} 局`;
-  byId("games-table").innerHTML = games.length
-    ? games.slice(0, 20).map((event) => {
-      const item = payload(event);
-      return `<tr>
-        <td>${formatNumber(item.iteration)}</td>
-        <td>${formatNumber(item.game_in_iteration)}</td>
-        <td>${formatNumber(item.moves)}</td>
-        <td>${formatNumber(item.positions)}</td>
-        <td class="mono">${(item.scores || []).map((score) => formatNumber(score, 1)).join(" / ")}</td>
-        <td>${formatDuration(Number(item.duration_seconds))}</td>
-      </tr>`;
-    }).join("")
-    : '<tr><td colspan="6" class="empty-cell">暂无完成对局</td></tr>';
-}
-
-function renderDiagnostics() {
-  const start = latest("run_started");
-  const config = payload(start).config || {};
-  byId("run-id").textContent = state.runId ? `run ${state.runId}` : "run --";
-  const preferred = [
-    ["players", "玩家"], ["iterations", "迭代"], ["games_per_iteration", "每轮对局"],
-    ["updates_per_iteration", "每轮更新"], ["simulations", "搜索模拟"], ["batch_size", "批大小"],
-    ["architecture", "网络架构"], ["hidden_size", "隐藏层"], ["residual_blocks", "残差块"], ["learning_rate", "学习率"],
-    ["replay_capacity", "回放容量"], ["seed", "随机种子"], ["output", "检查点"]
-  ];
-  byId("config-list").innerHTML = start
-    ? preferred.filter(([key]) => config[key] !== undefined).map(([key, label]) =>
-      `<div><dt>${label}</dt><dd class="${key === "output" ? "mono" : ""}">${escapeHtml(config[key])}</dd></div>`
-    ).join("")
-    : "<div><dt>状态</dt><dd>等待训练数据</dd></div>";
-
-  const last = state.events.at(-1);
-  const badge = byId("health-badge");
-  badge.className = `health-badge ${state.connected ? "connected" : "failed"}`;
-  badge.textContent = state.connected ? "已连接" : "失联";
-  byId("health-source").textContent = state.source;
-  byId("health-updated").textContent = last ? `${formatTime(last.timestamp)} · #${last.sequence}` : "--";
-  byId("health-events").textContent = formatNumber(state.events.length);
-  byId("health-parameters").textContent = formatNumber(payload(start).model_parameters);
-  byId("health-shapes").textContent = start
-    ? `${payload(start).observation_size} / ${payload(start).action_size}`
-    : "--";
-
-  const events = state.events.slice(-120).reverse();
-  byId("event-count").textContent = `${state.events.length} 条`;
-  byId("event-list").innerHTML = events.length
-    ? events.map((event) => `<div class="event-row">
-        <span class="event-time">${formatTime(event.timestamp)}</span>
-        <span class="event-type">${escapeHtml(event.type)}</span>
-        <span class="event-detail">${escapeHtml(eventSummary(event))}</span>
-      </div>`).join("")
-    : '<div class="event-empty">暂无事件</div>';
-}
-
-function eventSummary(event) {
-  const item = payload(event);
-  if (event.type === "self_play_step") return `P${item.player} · ${item.action_label}`;
-  if (event.type === "self_play_completed") return `第 ${item.game_in_iteration} 局 · ${item.moves} 步 · ${formatNumber(item.duration_seconds, 2)}s`;
-  if (event.type === "training_update") return `update ${item.update}/${item.updates} · loss ${formatNumber(item.loss, 4)}`;
-  if (event.type === "iteration_completed") return `iteration ${item.iteration} · replay ${formatNumber(item.replay_positions)}`;
-  if (event.type === "arena_completed") return `${item.games} games · value ${formatNumber(item.mean_value, 3)}`;
-  if (event.type === "run_failed") return `${item.error_type}: ${item.message}`;
-  if (event.type === "run_completed") return `${item.total_games} games · ${formatDuration(Number(item.duration_seconds))}`;
-  return PHASE_LABELS[event.type] || "";
-}
-
 function setHistoryStep(step) {
   const trace = state.history.trace;
   if (!trace?.steps?.length) return;
@@ -4482,7 +4377,8 @@ function toggleHistoryPlayback() {
 }
 
 function selectView(name) {
-  const selected = ["overview", "play", "selfplay", "history", "bga-import", "diagnostics"].includes(name) ? name : "overview";
+  const views = ["overview", "pipeline-selfplay", "pipeline-shuffle", "pipeline-train", "pipeline-export", "pipeline-gatekeeper", "play", "history", "bga-import"];
+  const selected = views.includes(name) ? name : "overview";
   document.querySelectorAll(".view").forEach((view) => {
     const active = view.id === selected;
     view.classList.toggle("active", active);
@@ -4496,10 +4392,9 @@ function selectView(name) {
   window.location.hash = selected;
   if (selected === "history") void refreshHistoryIndex();
   requestAnimationFrame(() => {
-    renderLossChart();
+    renderPipelineTrainChart(state.pipeline.data?.workers?.train?.history || []);
     renderSetup(state.manualSetup.preview);
     renderPlay();
-    renderBoard(latestState());
     renderHistory();
   });
 }
@@ -4508,10 +4403,19 @@ document.querySelectorAll(".tab").forEach((tab) => {
   tab.addEventListener("click", () => selectView(tab.dataset.view));
 });
 byId("live-toggle").addEventListener("change", (event) => {
-  state.live = event.target.checked;
-  if (state.live) pollEvents(true);
+  state.pipeline.live = event.target.checked;
+  if (state.pipeline.live) pollPipeline(true);
 });
-byId("refresh-button").addEventListener("click", () => pollEvents(true));
+byId("refresh-button").addEventListener("click", () => pollPipeline(true));
+byId("pipeline-start-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  controlPipeline("start", pipelineFormPayload());
+});
+byId("pipeline-stop").addEventListener("click", () => controlPipeline("stop"));
+byId("pipeline-worker-grid").addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-open-pipeline-worker]");
+  if (button) selectView(PIPELINE_WORKERS[button.dataset.openPipelineWorker]?.view || "overview");
+});
 document.querySelectorAll("[data-play-workspace]").forEach((button) => {
   button.addEventListener("click", () => switchPlayWorkspace(button.dataset.playWorkspace));
 });
@@ -4754,9 +4658,8 @@ byId("bga-import-form").addEventListener("submit", submitBgaImport);
 byId("bga-import-open-history").addEventListener("click", openImportedBgaHistory);
 byId("bga-import-clear-session").addEventListener("click", clearBgaSession);
 window.addEventListener("resize", () => {
-  renderLossChart();
+  renderPipelineTrainChart(state.pipeline.data?.workers?.train?.history || []);
   renderSetup(state.manualSetup.preview);
-  renderBoard(latestState());
   renderPlay();
   renderHistory();
   renderPlanetPositionEditor();
@@ -4771,12 +4674,11 @@ const pathView = window.location.pathname.startsWith("/setup/")
     : window.location.pathname === "/import/bga" ? "bga-import" : "";
 selectView((initialHash === "setup" ? "play" : initialHash) || pathView || "overview");
 loadBgaSession();
-pollEvents(true);
+pollPipeline(true);
 pollInteractiveGame();
-setInterval(() => pollEvents(false), POLL_INTERVAL_MS);
+setInterval(() => pollPipeline(false), POLL_INTERVAL_MS);
 setInterval(pollInteractiveGame, 1200);
 setInterval(() => {
-  renderStatus();
-  renderMetrics();
+  renderPipeline();
   byId("footer-clock").textContent = formatTime(new Date().toISOString());
 }, 1000);

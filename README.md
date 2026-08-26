@@ -33,16 +33,12 @@ $env:PYTHONPATH = "src"
 python -m gaiazero demo --ruleset standard --simulations 32
 ```
 
-运行一个小型自博弈训练：
+
+同步 `train` 和 `train-all` 已删除。所有模型训练统一使用五进程异步 NPZ 流水线，
+可从 Dashboard 一键启动，也可以在终端运行：
 
 ```powershell
-gaiazero train `
-  --ruleset standard `
-  --players 2 `
-  --iterations 5 `
-  --games-per-iteration 8 `
-  --simulations 64 `
-  --output runs/gaia-standard.pt
+gaiazero pipeline --players 4 --ruleset standard --device auto
 ```
 
 评测检查点，每局轮换神经网络所在座位：
@@ -51,26 +47,11 @@ gaiazero train `
 gaiazero evaluate runs/gaia-standard.pt --ruleset standard --players 2 --games 20 --simulations 128
 ```
 
-按人数分别训练三个独立模型（顺序执行 2、3、4 人训练）：
-
-```powershell
-gaiazero train-all `
-  --iterations 5 `
-  --games-per-iteration 8 `
-  --simulations 64 `
-  --output-dir runs/models `
-  --metrics-dir runs/metrics-by-players
-```
-
-输出文件为 `runs/models/gaia-standard-2p-katago.pt`、`gaia-standard-3p-katago.pt`、
-`gaia-standard-4p-katago.pt`，对应指标分别写入
-`runs/metrics-by-players/metrics-standard-2p-katago.jsonl`、
-`metrics-standard-3p-katago.jsonl` 和 `metrics-standard-4p-katago.jsonl`。
-评测时必须使用匹配人数和架构的检查点：
+不同人数分别使用独立的流水线目录和模型。评测时必须使用匹配人数和架构的检查点：
 
 - 2/3/4 人局统一使用 KataGo 风格网络：全局门控残差塔、独立策略头和多人价值头。
 
-架构选择由 `--players` 自动完成，并写入训练指标和检查点；2/3/4 人局都使用同一
+架构选择由 `--players` 自动完成并写入检查点；2/3/4 人局都使用同一
 KataGo 网络族，但每个人数仍使用匹配的价值头维度。由于当前观察是结构化扁平向量，网络使用适配该状态表示的
 全局门控残差块，而不是围棋棋盘卷积。
 
@@ -78,28 +59,40 @@ KataGo 网络族，但每个人数仍使用匹配的价值头维度。由于当�
 gaiazero evaluate runs/models/gaia-standard-4p-katago.pt --players 4 --games 20 --simulations 128
 ```
 
-`standard` 是 `demo`、`train` 和 `evaluate` 的默认规则集。需要运行旧版快速模型时使用
+`standard` 是 `demo`、`pipeline` 和 `evaluate` 的默认规则集。需要运行旧版快速模型时使用
 `--ruleset mini`；两个规则集的观察维度和动作维度不同，检查点不能混用。
 标准规则的 2、3、4 人局也使用独立检查点：地图尺寸、观察维度和价值头输出人数不同，
 不能将一个人数的检查点直接用于另一个人数。
 
-## 训练监控台
+## 异步训练监控台
 
-训练命令默认把结构化事件写入 `runs/metrics.jsonl`。在另一个终端启动仪表盘：
+启动仪表盘：
 
 ```powershell
-gaiazero dashboard --metrics runs/metrics.jsonl --port 8765
+gaiazero dashboard --port 8765
 ```
 
-人工对战会按局原子保存到指标文件同级的 `history` 目录，默认即
+浏览器访问 `http://127.0.0.1:8765`。概览页可以配置人数、设备、MCTS、NPZ 分片、PyTorch
+训练和守门参数，并一键启动或停止以下五个独立 Python 进程：
+
+- 自对弈：持续写入完整对局 `raw/*.npz`
+- 洗牌：合并并打包为 `shuffled/*.npz`
+- 训练：原生 PyTorch 读取 NPZ，生成候选 `.pt`
+- 导出：把已批准权重转换为 GaiaZero `.bin`
+- 守门测试：候选权重对阵当前权重，达标后批准
+
+导航栏为五个进程分别提供监控页面，展示进程状态、原生状态文件、最近产物、结构化训练或
+守门记录以及日志尾部。监控数据位于 `runs/multiplayer-pipeline`，不再读取
+`runs/metrics.jsonl`，旧的自博弈棋盘监控页和事件诊断页已删除。
+
+人工对战会按局原子保存到 Dashboard 数据目录同级的 `history` 目录，默认即
 `runs/history/play-*.json`。可以显式指定其他本地目录：
 
 ```powershell
-gaiazero dashboard --metrics runs/metrics.jsonl --history-dir runs/play-history --port 8765
+gaiazero dashboard --history-dir runs/play-history --port 8765
 ```
 
-浏览器访问 `http://127.0.0.1:8765`。监控台包含概览、人工对战、自博弈、历史回放、BGA 导入
-和诊断六个视图。人工对战内按“初始设置 → 角色与对局”两步工作区配置随机拼接地图、种族座位、
+人工对战内按“初始设置 → 角色与对局”两步工作区配置随机拼接地图、种族座位、
 计分/科技/助推板块，并可在同一局中切换人工与 AI；系统会按人数寻找匹配的 KataGo 检查点，
 找不到时使用启发式 PIMCTS。训练模型不会读取这套人工对局配置。
 
@@ -117,38 +110,13 @@ gaiazero dashboard --metrics runs/metrics.jsonl --history-dir runs/play-history 
 [`src/gaiazero/web/assets/sectors/ATTRIBUTION.md`](src/gaiazero/web/assets/sectors/ATTRIBUTION.md)。
 
 历史回放只读取 `history` 目录中已经物化为 JSON 的本地人工对战、BGA 导入和手动转换后的 NPZ 回放。
-训练过程产生的指标 JSONL 和原始/洗牌 NPZ 不会自动进入历史回放。人工对战在新建、每步行动、角色切换和撤销后
+训练过程产生的原始/洗牌 NPZ 不会自动进入历史回放。人工对战在新建、每步行动、角色切换和撤销后
 自动更新本地 JSON，关闭并重启仪表盘后仍可从“历史回放”选择加载。每局可使用滑杆或播放
 控制逐步检查棋盘、资源、科研轨与动作账本；页面同时检查轨迹连续性、轮次顺序、资源上限、
 星球所有权、终局状态和规则引擎动作转移。手动执行 `npz-to-history` 后生成的 `training_npz` JSON
 副本会出现在历史回放中，并可直接删除；历史工具栏的“导入 NPZ”按钮也可以选择本地 NPZ 完成同样转换。
-删除只影响 JSON 副本，不会删除原始 NPZ。训练指标仍通过训练监控和事件接口查看。
-
-训练过程会记录每一步棋盘状态，并默认每隔四步附带一次完整搜索候选；可按运行规模调整
-搜索详情的采样间隔：
-
-```powershell
-gaiazero train --metrics runs/experiment-a.jsonl --metrics-move-interval 8
-gaiazero dashboard --metrics runs/experiment-a.jsonl --port 8765
-```
-
-Dashboard 与训练进程相互独立，不会修改训练 JSONL；人工对战历史单独写入本地历史目录。
-监控过程不加载训练模型或占用 GPU 显存。文件保留后，训练或服务结束时仍可查看最后状态。
-
-CPU 冒烟训练可以显著缩小参数：
-
-```powershell
-gaiazero train `
-  --iterations 1 `
-  --games-per-iteration 1 `
-  --updates-per-iteration 1 `
-  --eval-games 0 `
-  --simulations 2 `
-  --hidden-size 32 `
-  --residual-blocks 1 `
-  --batch-size 8 `
-  --output runs/smoke.pt
-```
+删除只影响 JSON 副本，不会删除原始 NPZ。Dashboard 直接读取异步流水线的状态 JSON、产物目录
+和日志；监控本身不加载训练模型，也不占用 GPU 显存。
 
 ## 核心设计
 
@@ -181,7 +149,7 @@ src/gaiazero/selfplay.py        自博弈数据生成
 src/gaiazero/replay.py          有界经验回放
 src/gaiazero/training.py        AlphaZero 联合损失训练器
 src/gaiazero/arena.py           座位轮换评测
-src/gaiazero/telemetry.py       结构化 JSONL 训练事件
+src/gaiazero/pipeline_monitor.py 五进程控制与状态采集
 src/gaiazero/dashboard.py       监控及本地历史 HTTP 服务
 src/gaiazero/web/               响应式监控页面
 src/gaiazero/cli.py             命令行入口

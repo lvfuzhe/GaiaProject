@@ -25,6 +25,7 @@ import subprocess
 import sys
 import time
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -124,6 +125,7 @@ def pipeline_paths(root: str | Path) -> dict[str, Path]:
         "approved": base / "approved",
         "exported": base / "exported",
         "logs": base / "logs",
+        "status": base / "status",
     }
 
 
@@ -156,6 +158,36 @@ def _read_json(path: Path, default: dict[str, Any]) -> dict[str, Any]:
         return value if isinstance(value, dict) else dict(default)
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return dict(default)
+
+
+def _publish_worker_status(
+    paths: dict[str, Path],
+    worker: str,
+    phase: str,
+    **metrics: Any,
+) -> None:
+    previous = _read_json(paths["status"] / f"{worker}.json", {})
+    previous_metrics = previous.get("metrics")
+    if not metrics and isinstance(previous_metrics, dict):
+        metrics = previous_metrics
+    _atomic_json(
+        paths["status"] / f"{worker}.json",
+        {
+            "format": PIPELINE_FORMAT,
+            "worker": worker,
+            "phase": phase,
+            "pid": os.getpid(),
+            "updated_at": datetime.now(UTC).isoformat(),
+            "metrics": metrics,
+        },
+    )
+
+
+def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8", newline="\n") as stream:
+        stream.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+        stream.flush()
 
 
 def save_pipeline_config(config: PipelineConfig) -> Path:
@@ -298,6 +330,7 @@ def run_selfplay(config: PipelineConfig, *, once: bool = False) -> int:
     evaluator: NetworkEvaluator | None = None
     loaded_source: tuple[str, int] | None = None
     game_index = 0
+    _publish_worker_status(paths, "selfplay", "starting", games=0)
     while not _stop_requested(paths["root"]):
         approved = _approved_checkpoint(paths)
         source = (
@@ -319,6 +352,14 @@ def run_selfplay(config: PipelineConfig, *, once: bool = False) -> int:
         games = 1 if once else config.games_per_cycle
         for _ in range(games):
             seed = config.seed + game_index
+            _publish_worker_status(
+                paths,
+                "selfplay",
+                "playing",
+                games=game_index,
+                seed=seed,
+                weight=source[0],
+            )
             initial = state_type.initial(config.players, seed)
             trace_started = time.perf_counter()
             trace_steps: list[dict[str, Any]] = [{
@@ -409,6 +450,18 @@ def run_selfplay(config: PipelineConfig, *, once: bool = False) -> int:
                     },
                 },
             )
+            _publish_worker_status(
+                paths,
+                "selfplay",
+                "waiting",
+                games=game_index + 1,
+                seed=seed,
+                weight=source[0],
+                latest_shard=destination.name,
+                positions=len(result.examples),
+                moves=len(result.actions),
+                duration_seconds=time.perf_counter() - trace_started,
+            )
             print(
                 f"[selfplay] wrote {destination.name} positions={len(result.examples)}",
                 flush=True,
@@ -430,6 +483,13 @@ def run_shuffle(config: PipelineConfig, *, once: bool = False) -> int:
     )
     processed = set(str(name) for name in state.get("processed", []))
     total_written = 0
+    _publish_worker_status(
+        paths,
+        "shuffle",
+        "starting",
+        processed_games=len(processed),
+        examples=int(state.get("examples", 0)),
+    )
     while not _stop_requested(paths["root"]):
         pending = [
             path
@@ -437,6 +497,13 @@ def run_shuffle(config: PipelineConfig, *, once: bool = False) -> int:
             if path.name not in processed
         ]
         if pending:
+            _publish_worker_status(
+                paths,
+                "shuffle",
+                "packing",
+                pending_games=len(pending),
+                processed_games=len(processed),
+            )
             examples: list[TrainingExample] = []
             for path in pending:
                 shard, _metadata = read_npz_shard(path, include_metadata=False)
@@ -469,6 +536,15 @@ def run_shuffle(config: PipelineConfig, *, once: bool = False) -> int:
                 f"[shuffle] games={len(pending)} positions={len(examples)} packs={sequence}",
                 flush=True,
             )
+        _publish_worker_status(
+            paths,
+            "shuffle",
+            "waiting",
+            processed_games=len(processed),
+            examples=int(state.get("examples", 0)),
+            packs=int(state.get("sequence", 0)),
+            last_cycle_positions=total_written,
+        )
         if once:
             break
         time.sleep(config.poll_seconds)
@@ -527,11 +603,28 @@ def run_train(config: PipelineConfig, *, once: bool = False) -> int:
     # Reconstruct the in-memory replay after a process restart. ReplayBuffer
     # enforces its own rolling capacity while shards remain immutable on disk.
     _fill_replay(paths, replay, loaded)
+    _publish_worker_status(
+        paths,
+        "train",
+        "starting",
+        generation=generation,
+        updates=updates,
+        replay_positions=len(replay),
+    )
     while not _stop_requested(paths["root"]):
         new_positions = _fill_replay(paths, replay, loaded)
         untrained = loaded - trained_shards
         should_train = len(replay) >= config.min_replay and (bool(untrained) or once)
         if should_train:
+            _publish_worker_status(
+                paths,
+                "train",
+                "optimizing",
+                generation=generation,
+                updates=updates,
+                replay_positions=len(replay),
+                new_positions=new_positions,
+            )
             metrics = trainer.train_updates(replay, config.updates_per_cycle)
             generation += 1
             updates += config.updates_per_cycle
@@ -558,10 +651,35 @@ def run_train(config: PipelineConfig, *, once: bool = False) -> int:
                 metadata=metadata,
             )
             trained_shards.update(loaded)
+            training_record = {
+                "timestamp": datetime.now(UTC).isoformat(),
+                "generation": generation,
+                "updates": updates,
+                "replay_positions": len(replay),
+                "new_positions": new_positions,
+                "candidate": candidate.name,
+                "loss": metrics.loss,
+                "policy_loss": metrics.policy_loss,
+                "value_loss": metrics.value_loss,
+                "policy_entropy": metrics.policy_entropy,
+            }
+            _append_jsonl(paths["logs"] / "train.jsonl", training_record)
+            _publish_worker_status(paths, "train", "waiting", **training_record)
             print(
                 f"[train] candidate={candidate.name} new={new_positions} "
                 f"replay={len(replay)} loss={metrics.loss:.5f}",
                 flush=True,
+            )
+        elif not should_train:
+            _publish_worker_status(
+                paths,
+                "train",
+                "waiting_for_replay",
+                generation=generation,
+                updates=updates,
+                replay_positions=len(replay),
+                minimum_replay=config.min_replay,
+                loaded_shards=len(loaded),
             )
         _atomic_json(
             state_path,
@@ -599,6 +717,13 @@ def run_gatekeeper(config: PipelineConfig, *, once: bool = False) -> int:
     )
     evaluated = set(str(name) for name in state.get("evaluated", []))
     approved_count = 0
+    _publish_worker_status(
+        paths,
+        "gatekeeper",
+        "starting",
+        evaluated=len(evaluated),
+        approved=approved_count,
+    )
     while not _stop_requested(paths["root"]):
         candidates = [
             path
@@ -607,6 +732,13 @@ def run_gatekeeper(config: PipelineConfig, *, once: bool = False) -> int:
         ]
         if candidates:
             candidate = candidates[0]
+            _publish_worker_status(
+                paths,
+                "gatekeeper",
+                "evaluating",
+                candidate=candidate.name,
+                evaluated=len(evaluated),
+            )
             current = _approved_checkpoint(paths)
             if current is None:
                 passed = True
@@ -661,10 +793,28 @@ def run_gatekeeper(config: PipelineConfig, *, once: bool = False) -> int:
                     )
                     + "\n"
                 )
+            _publish_worker_status(
+                paths,
+                "gatekeeper",
+                "waiting",
+                candidate=candidate.name,
+                result="approved" if passed else "rejected",
+                evaluated=len(evaluated),
+                approved=approved_count,
+                **result,
+            )
             print(
                 f"[gatekeeper] {candidate.name} "
                 f"{'approved' if passed else 'rejected'}",
                 flush=True,
+            )
+        elif not candidates:
+            _publish_worker_status(
+                paths,
+                "gatekeeper",
+                "waiting_for_candidate",
+                evaluated=len(evaluated),
+                approved=approved_count,
             )
         if once:
             break
@@ -794,6 +944,7 @@ def run_export(config: PipelineConfig, *, once: bool = False) -> int:
         {"format": PIPELINE_FORMAT, "sha256": "", "exports": 0},
     )
     exports = int(state.get("exports", 0))
+    _publish_worker_status(paths, "export", "starting", exports=exports)
     while not _stop_requested(paths["root"]):
         source = _approved_checkpoint(paths)
         if source is not None:
@@ -813,10 +964,26 @@ def run_export(config: PipelineConfig, *, once: bool = False) -> int:
                     "exports": exports,
                 }
                 _atomic_json(state_path, state)
+                _publish_worker_status(
+                    paths,
+                    "export",
+                    "waiting",
+                    exports=exports,
+                    latest_model=destination.name,
+                    source=str(source),
+                    sha256=digest,
+                )
                 print(
                     f"[export] {source.name} -> {destination.name}",
                     flush=True,
                 )
+        if source is None:
+            _publish_worker_status(
+                paths,
+                "export",
+                "waiting_for_approved",
+                exports=exports,
+            )
         if once:
             break
         time.sleep(config.poll_seconds)
@@ -933,7 +1100,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         "export": run_export,
         "gatekeeper": run_gatekeeper,
     }
-    workers[args.worker](config, once=args.once)
+    paths = ensure_pipeline_dirs(config.root)
+    try:
+        workers[args.worker](config, once=args.once)
+    except Exception as error:
+        _publish_worker_status(
+            paths,
+            args.worker,
+            "failed",
+            error_type=type(error).__name__,
+            message=str(error),
+        )
+        raise
+    _publish_worker_status(paths, args.worker, "stopped")
     return 0
 
 

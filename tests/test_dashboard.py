@@ -45,11 +45,7 @@ from gaiazero.game.gaia_state import (
     Track,
 )
 from gaiazero.telemetry import (
-    JsonlTelemetry,
-    build_history_index,
     build_local_history_index,
-    read_events,
-    read_game_trace,
     read_local_game_trace,
     write_local_game,
 )
@@ -238,18 +234,6 @@ class DashboardTests(unittest.TestCase):
         )
         with urlopen(request, timeout=5) as response:
             return response.status, json.loads(response.read())
-
-    def test_telemetry_round_trip_with_board_snapshot(self) -> None:
-        telemetry = JsonlTelemetry(self.metrics, run_id="test-run")
-        state = MiniGaiaState.initial(2, seed=3)
-        first = telemetry.emit("run_started", state=state.snapshot(), config={"iterations": 2})
-        second = telemetry.emit("training_update", loss=1.25, update=1)
-
-        events = read_events(self.metrics)
-        self.assertEqual([event["sequence"] for event in events], [first["sequence"], second["sequence"]])
-        self.assertEqual(events[0]["run_id"], "test-run")
-        self.assertEqual(len(events[0]["payload"]["state"]["planets"]), 19)
-        self.assertEqual(read_events(self.metrics, after=first["sequence"]), [second])
 
     def test_bal_taks_credit_academy_is_labeled_in_action_history(self) -> None:
         state = GaiaState.initial(
@@ -647,21 +631,12 @@ class DashboardTests(unittest.TestCase):
         )
 
     def test_http_api_and_static_dashboard(self) -> None:
-        telemetry = JsonlTelemetry(self.metrics, run_id="http-test")
-        state = MiniGaiaState.initial(2)
-        telemetry.emit("run_started", config={}, state=state.snapshot())
-        telemetry.emit(
-            "self_play_started",
-            iteration=1,
-            game_in_iteration=1,
-            state=state.snapshot(),
-        )
-        server = create_dashboard_server(self.metrics, port=0, quiet=True)
+        server = create_dashboard_server(self.metrics.parent, port=0, quiet=True)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
             base = f"http://127.0.0.1:{server.server_port}"
-            with urlopen(f"{base}/api/events", timeout=5) as response:
+            with urlopen(f"{base}/api/pipeline", timeout=5) as response:
                 data = json.loads(response.read())
             with urlopen(base, timeout=5) as response:
                 page = response.read().decode("utf-8")
@@ -713,12 +688,23 @@ class DashboardTests(unittest.TestCase):
                     f"{base}/api/game?run_id=http-test&iteration=1&game=1",
                     timeout=5,
                 )
-            self.assertEqual(data["events"][0]["type"], "run_started")
+            self.assertEqual(data["status"], "idle")
+            self.assertEqual(set(data["workers"]), {"selfplay", "shuffle", "train", "export", "gatekeeper"})
             self.assertEqual(raised.exception.code, 404)
             self.assertEqual(history["runs"], [])
-            self.assertEqual(history["training_source"], str(self.metrics.resolve()))
+            self.assertEqual(
+                history["pipeline_source"],
+                str((self.metrics.parent / "multiplayer-pipeline").resolve()),
+            )
             self.assertIn("GaiaZero", page)
-            self.assertIn("loss-chart", page)
+            self.assertIn("pipeline-start-form", page)
+            self.assertIn("pipeline-selfplay", page)
+            self.assertIn("pipeline-shuffle", page)
+            self.assertIn("pipeline-train", page)
+            self.assertIn("pipeline-export", page)
+            self.assertIn("pipeline-gatekeeper", page)
+            self.assertNotIn('data-view="selfplay"', page)
+            self.assertNotIn('data-view="diagnostics"', page)
             self.assertIn("setup-faction-catalog", page)
             self.assertIn("setup-research-tech", page)
             self.assertIn("setup-editor-form", page)
@@ -935,7 +921,7 @@ class DashboardTests(unittest.TestCase):
             thread.join(timeout=5)
 
     def test_manual_setup_preview_and_validation(self) -> None:
-        server = create_dashboard_server(self.metrics, port=0, quiet=True)
+        server = create_dashboard_server(self.metrics.parent, port=0, quiet=True)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
@@ -1122,7 +1108,7 @@ class DashboardTests(unittest.TestCase):
             thread.join(timeout=5)
 
     def test_single_simulation_writes_complete_replay(self) -> None:
-        server = create_dashboard_server(self.metrics, port=0, quiet=True)
+        server = create_dashboard_server(self.metrics.parent, port=0, quiet=True)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
@@ -1152,7 +1138,7 @@ class DashboardTests(unittest.TestCase):
             self.assertGreater(simulation["move"], 0)
             self.assertEqual(len(simulation["scores"]), 2)
 
-            trace = read_game_trace(self.metrics, run_id=run_id, iteration=1, game=1)
+            trace = read_local_game_trace(self.history, run_id=run_id, iteration=1, game=1)
             self.assertIsNotNone(trace)
             self.assertTrue(trace["trace_complete"])
             self.assertEqual(trace["captured_moves"], simulation["move"])
@@ -1169,13 +1155,14 @@ class DashboardTests(unittest.TestCase):
             )
             self.assertEqual(trace["steps"][1]["state"]["placement"]["step"], 1)
             self.assertTrue(trace["steps"][-1]["state"]["terminal"])
+            self.assertFalse(self.metrics.exists())
         finally:
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
 
     def test_interactive_game_supports_human_ai_and_role_switching(self) -> None:
-        server = create_dashboard_server(self.metrics, port=0, quiet=True)
+        server = create_dashboard_server(self.metrics.parent, port=0, quiet=True)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
@@ -1307,7 +1294,7 @@ class DashboardTests(unittest.TestCase):
             "simulations": 1,
             "roles": ["human", "human"],
         }
-        server = create_dashboard_server(self.metrics, port=0, quiet=True)
+        server = create_dashboard_server(self.metrics.parent, port=0, quiet=True)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
@@ -1340,7 +1327,7 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(index["runs"][0]["source"], "local")
         self.assertEqual(index["runs"][0]["iterations"][0]["games"][0]["moves"], 1)
 
-        restarted = create_dashboard_server(self.metrics, port=0, quiet=True)
+        restarted = create_dashboard_server(self.metrics.parent, port=0, quiet=True)
         restarted_thread = threading.Thread(
             target=restarted.serve_forever,
             daemon=True,
@@ -1396,7 +1383,7 @@ class DashboardTests(unittest.TestCase):
             restarted_thread.join(timeout=5)
 
     def test_history_delete_returns_conflict_instead_of_waiting_for_play_lock(self) -> None:
-        server = create_dashboard_server(self.metrics, port=0, quiet=True)
+        server = create_dashboard_server(self.metrics.parent, port=0, quiet=True)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
@@ -1911,7 +1898,7 @@ class DashboardTests(unittest.TestCase):
         ))
 
     def test_interactive_game_selects_starting_boosters_before_round_one(self) -> None:
-        server = create_dashboard_server(self.metrics, port=0, quiet=True)
+        server = create_dashboard_server(self.metrics.parent, port=0, quiet=True)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
@@ -2083,63 +2070,6 @@ class DashboardTests(unittest.TestCase):
             server.server_close()
             thread.join(timeout=5)
 
-    def test_history_index_and_complete_game_trace(self) -> None:
-        telemetry = JsonlTelemetry(self.metrics, run_id="history-test")
-        state = MiniGaiaState.initial(2)
-        telemetry.emit("run_started", config={"iterations": 1}, state=state.snapshot())
-        telemetry.emit(
-            "self_play_started",
-            iteration=1,
-            game_in_iteration=1,
-            state=state.snapshot(),
-        )
-        actions = []
-        for move in range(1, 3):
-            action = state.legal_actions()[0]
-            next_state = state.apply(action)
-            actions.append(action)
-            telemetry.emit(
-                "self_play_step",
-                iteration=1,
-                game_in_iteration=1,
-                move=move,
-                player=state.current_player,
-                action=action,
-                action_label=state.describe_action(action),
-                legal_actions=len(state.legal_actions()),
-                search_sampled=move == 1,
-                state=next_state.snapshot(),
-            )
-            state = next_state
-        telemetry.emit(
-            "self_play_completed",
-            iteration=1,
-            game_in_iteration=1,
-            moves=2,
-            positions=2,
-            scores=state.final_scores(),
-            returns=[0.0, 0.0],
-            duration_seconds=0.5,
-            state=state.snapshot(),
-        )
-        telemetry.emit("iteration_completed", iteration=1, loss=1.0)
-
-        index = build_history_index(self.metrics)
-        game = index["runs"][0]["iterations"][0]["games"][0]
-        self.assertTrue(game["trace_complete"])
-        self.assertEqual(game["captured_moves"], 2)
-
-        trace = read_game_trace(
-            self.metrics,
-            run_id="history-test",
-            iteration=1,
-            game=1,
-        )
-        self.assertIsNotNone(trace)
-        self.assertTrue(trace["trace_complete"])
-        self.assertEqual([step["move"] for step in trace["steps"]], [0, 1, 2])
-        self.assertEqual([step["action"] for step in trace["steps"][1:]], actions)
-
     def test_history_api_only_lists_materialized_npz_replays_and_can_delete_them(self) -> None:
         write_local_game(
             self.history,
@@ -2161,10 +2091,7 @@ class DashboardTests(unittest.TestCase):
                 },
             },
         )
-        telemetry = JsonlTelemetry(self.metrics, run_id="training-only")
-        telemetry.emit("run_started", config={})
-
-        server = create_dashboard_server(self.metrics, port=0, quiet=True)
+        server = create_dashboard_server(self.metrics.parent, port=0, quiet=True)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
@@ -2217,7 +2144,7 @@ class DashboardTests(unittest.TestCase):
                     },
                 },
             )
-            server = create_dashboard_server(self.metrics, port=0, quiet=True)
+            server = create_dashboard_server(self.metrics.parent, port=0, quiet=True)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:

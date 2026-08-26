@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import torch
@@ -18,6 +19,7 @@ from gaiazero.distributed import (
 )
 from gaiazero.model import NetworkConfig, PolicyValueNetwork, save_checkpoint
 from gaiazero.npz_history import convert_npz_to_history, delete_training_history
+from gaiazero.pipeline_monitor import PipelineSupervisor, WORKER_NAMES
 from gaiazero.replay import TrainingExample
 from gaiazero.telemetry import build_local_history_index, read_local_game_trace
 
@@ -144,6 +146,42 @@ class DistributedPipelineTests(unittest.TestCase):
             self.assertEqual(trace["steps"][0]["move"], 0)
             self.assertTrue(delete_training_history(history, "npz-test"))
             self.assertFalse(output.exists())
+
+    def test_dashboard_supervisor_starts_and_stops_all_five_workers(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "pipeline"
+            processes = []
+
+            def create_process(*args, **kwargs):
+                process = MagicMock()
+                process.pid = 1000 + len(processes)
+                process.poll.return_value = None
+                processes.append((args, kwargs, process))
+                return process
+
+            supervisor = PipelineSupervisor(root)
+            with patch("gaiazero.pipeline_monitor.subprocess.Popen", side_effect=create_process):
+                status = supervisor.start({
+                    "root": str(root),
+                    "players": 3,
+                    "ruleset": "mini",
+                    "simulations": 1,
+                    "device": "cpu",
+                })
+
+            self.assertEqual(status["status"], "running")
+            self.assertEqual(len(processes), 5)
+            commands = [item[0][0] for item in processes]
+            self.assertEqual([command[3] for command in commands], list(WORKER_NAMES))
+            self.assertTrue((root / "pipeline.json").is_file())
+
+            stopped = supervisor.stop()
+            self.assertEqual(stopped["status"], "stopping")
+            self.assertTrue((root / "STOP").is_file())
+            for _args, _kwargs, process in processes:
+                process.terminate.assert_called_once()
+                process.poll.return_value = 0
+            supervisor.close()
 
 
 if __name__ == "__main__":
