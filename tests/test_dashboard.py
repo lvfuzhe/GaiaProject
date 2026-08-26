@@ -14,7 +14,6 @@ from gaiazero.dashboard import (
     _interactive_action_snapshot,
     _interactive_board_changes,
     _interactive_player_changes,
-    _normalize_model_checkpoint,
     create_dashboard_server,
 )
 from gaiazero.game import GaiaState, MiniGaiaState
@@ -245,53 +244,6 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(events[0]["run_id"], "test-run")
         self.assertEqual(len(events[0]["payload"]["state"]["planets"]), 19)
         self.assertEqual(read_events(self.metrics, after=first["sequence"]), [second])
-
-    def test_interactive_model_selection_validates_filenames_and_lists_player_counts(self) -> None:
-        self.assertEqual(_normalize_model_checkpoint(None), "auto")
-        self.assertEqual(
-            _normalize_model_checkpoint("gaia-standard-2p-katago.pt"),
-            "gaia-standard-2p-katago.pt",
-        )
-        for invalid in ("../model.pt", "nested/model.pt", "model.bin"):
-            with self.subTest(invalid=invalid):
-                with self.assertRaises(ValueError):
-                    _normalize_model_checkpoint(invalid)
-
-        server = create_dashboard_server(self.metrics, port=0, quiet=True)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        try:
-            base = f"http://127.0.0.1:{server.server_port}"
-            for players in (2, 3, 4):
-                with self.subTest(players=players):
-                    with urlopen(
-                        f"{base}/api/play/models?players={players}",
-                        timeout=5,
-                    ) as response:
-                        catalog = json.loads(response.read())
-                    self.assertEqual(catalog["players"], players)
-                    self.assertIsInstance(catalog["models"], list)
-                    self.assertTrue(all(
-                        "filename" in model and "compatible" in model
-                        for model in catalog["models"]
-                    ))
-            with self.assertRaises(HTTPError) as raised:
-                self.post_json(
-                    f"{base}/api/play/start",
-                    {
-                        "players": 2,
-                        "seed": 1,
-                        "first_player": 0,
-                        "factions": [0, 2],
-                        "simulations": 1,
-                        "model_checkpoint": "missing-2p.pt",
-                    },
-                )
-            self.assertEqual(raised.exception.code, 400)
-        finally:
-            server.shutdown()
-            server.server_close()
-            thread.join(timeout=5)
 
     def test_bal_taks_credit_academy_is_labeled_in_action_history(self) -> None:
         state = GaiaState.initial(

@@ -215,15 +215,6 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             with self.server.play_lock:
                 self._send_json(_interactive_session_snapshot(self.server.play_session))
             return
-        if request.path == "/api/play/models":
-            try:
-                players = int(parse_qs(request.query).get("players", ["2"])[0])
-                self._send_json(
-                    {"players": players, "models": _interactive_model_options(players)}
-                )
-            except (TypeError, ValueError) as error:
-                self._send_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
-            return
         asset = ASSETS.get(request.path)
         if asset is None:
             self.send_error(HTTPStatus.NOT_FOUND)
@@ -702,7 +693,6 @@ def _normalize_manual_config(payload: dict[str, Any]) -> dict[str, Any]:
     seed = int(payload.get("seed", 0))
     first_player = int(payload.get("first_player", 0))
     simulations = int(payload.get("simulations", 8))
-    model_checkpoint = _normalize_model_checkpoint(payload.get("model_checkpoint"))
     factions_value = payload.get("factions")
     if not 2 <= players <= 4:
         raise ValueError("players must be between two and four")
@@ -724,26 +714,8 @@ def _normalize_manual_config(payload: dict[str, Any]) -> dict[str, Any]:
         "first_player": first_player,
         "factions": factions,
         "simulations": simulations,
-        "model_checkpoint": model_checkpoint,
         "random_setup": random_setup,
     }
-
-
-def _normalize_model_checkpoint(value: object) -> str:
-    """Accept only a model filename from the server-managed model directory."""
-    if value is None:
-        return "auto"
-    selected = str(value).strip()
-    if not selected or selected.lower() == "auto":
-        return "auto"
-    if (
-        selected in {".", ".."}
-        or "/" in selected
-        or "\\" in selected
-        or not selected.lower().endswith(".pt")
-    ):
-        raise ValueError("model_checkpoint must be 'auto' or a .pt filename")
-    return selected
 
 
 def _normalize_random_setup(value: object) -> dict[str, Any] | None:
@@ -2116,56 +2088,16 @@ def _interactive_action_record(
     }
 
 
-def _interactive_model_options(players: int) -> list[dict[str, Any]]:
-    if players not in (2, 3, 4):
-        raise ValueError("players must be between two and four")
-    expected_architecture = architecture_for_players(players)
-    model_directory = Path.cwd() / "runs" / "models"
-    options: list[dict[str, Any]] = []
-    for checkpoint in sorted(
-        model_directory.glob("*.pt"),
-        key=lambda path: path.name.lower(),
-    ):
-        try:
-            model, metadata = load_checkpoint(checkpoint, "cpu")
-        except Exception:
-            continue
-        options.append(
-            {
-                "filename": checkpoint.name,
-                "label": checkpoint.stem,
-                "players": model.config.num_players,
-                "architecture": model.architecture,
-                "observation_size": model.config.observation_size,
-                "action_size": model.config.action_size,
-                "compatible": (
-                    model.config.num_players == players
-                    and model.architecture == expected_architecture
-                ),
-                "generation": metadata.get("generation"),
-            }
-        )
-    return options
-
-
 def _interactive_ai_components(
     state: GaiaState,
-    model_checkpoint: str = "auto",
 ) -> tuple[object, str]:
     expected_architecture = architecture_for_players(state.num_players)
     model_directory = Path.cwd() / "runs" / "models"
-    if model_checkpoint == "auto":
-        checkpoints = (
-            model_directory
-            / f"gaia-standard-{state.num_players}p-{expected_architecture}.pt",
-            model_directory / f"gaia-standard-{state.num_players}p.pt",
-        )
-    else:
-        selected = model_directory / _normalize_model_checkpoint(model_checkpoint)
-        if not selected.is_file():
-            raise ValueError(f"selected AI model was not found: {selected.name}")
-        checkpoints = (selected,)
-    selected_error: str | None = None
+    checkpoints = (
+        model_directory
+        / f"gaia-standard-{state.num_players}p-{expected_architecture}.pt",
+        model_directory / f"gaia-standard-{state.num_players}p.pt",
+    )
     for checkpoint in checkpoints:
         if not checkpoint.is_file():
             continue
@@ -2178,21 +2110,9 @@ def _interactive_ai_components(
                 model.config.num_players,
             )
             if actual == expected and model.architecture == expected_architecture:
-                return (
-                    NetworkEvaluator(model, "cpu"),
-                    f"KataGo + PIMCTS · {checkpoint.stem}",
-                )
-            selected_error = (
-                f"selected AI model {checkpoint.name} is not compatible with "
-                f"the {state.num_players}-player board"
-            )
-        except Exception as error:
-            selected_error = f"selected AI model {checkpoint.name} could not be loaded: {error}"
-    if model_checkpoint != "auto":
-        raise ValueError(
-            selected_error
-            or f"selected AI model was not found: {model_checkpoint}"
-        )
+                return NetworkEvaluator(model, "cpu"), "KataGo + PIMCTS"
+        except Exception:
+            pass
     return GaiaHeuristicEvaluator(), "Heuristic PIMCTS"
 
 
@@ -2203,10 +2123,7 @@ def _create_interactive_session(
 ) -> dict[str, Any]:
     created_at = datetime.now(UTC).isoformat()
     initial_snapshot = initial.snapshot()
-    evaluator, engine = _interactive_ai_components(
-        initial,
-        config.get("model_checkpoint", "auto"),
-    )
+    evaluator, engine = _interactive_ai_components(initial)
     searches = [
         PUCTSearch(
             evaluator,
