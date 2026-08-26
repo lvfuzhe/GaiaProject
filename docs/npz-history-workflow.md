@@ -18,6 +18,11 @@ To inspect a training sample in the dashboard, explicitly convert it:
 gaiazero npz-to-history runs/pipeline-4p/raw/game-0001.npz --history-dir runs/history
 ```
 
+The same conversion is available in the history page: click `导入 NPZ`, choose a
+local `.npz` file, and wait for the converted `training_npz` replay to appear in
+the selectors. The browser upload is temporary; only the converted JSON is kept
+in the history directory.
+
 For a directory:
 
 ```powershell

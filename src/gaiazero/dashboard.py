@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+import tempfile
 import threading
 import uuid
 from dataclasses import replace
@@ -10,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from time import perf_counter
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import numpy as np
 
@@ -93,6 +95,7 @@ from gaiazero.model import (
     architecture_for_players,
     load_checkpoint,
 )
+from gaiazero.npz_history import convert_npz_to_history
 from gaiazero.telemetry import (
     JsonlTelemetry,
     build_local_history_index,
@@ -226,6 +229,9 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         request = urlparse(self.path)
+        if request.path == "/api/history/import-npz":
+            self._handle_npz_history_import()
+            return
         if request.path == "/api/bga/import":
             self._handle_bga_import()
             return
@@ -343,6 +349,65 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             )
         finally:
             self.server.bga_import_lock.release()
+
+    def _handle_npz_history_import(self) -> None:
+        try:
+            filename, content = self._read_npz_upload()
+            self.server.history_path.mkdir(parents=True, exist_ok=True)
+            stem = re.sub(r"[^A-Za-z0-9_-]+", "-", Path(filename).stem).strip("-")
+            run_id = f"npz-{stem[:60] or uuid.uuid4().hex[:12]}"
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                suffix=".npz",
+                prefix=".history-upload-",
+                dir=self.server.history_path,
+                delete=False,
+            ) as stream:
+                temporary = Path(stream.name)
+                stream.write(content)
+                stream.flush()
+            try:
+                output = convert_npz_to_history(
+                    temporary,
+                    self.server.history_path,
+                    run_id=run_id,
+                )
+            finally:
+                temporary.unlink(missing_ok=True)
+            self._send_json(
+                {
+                    "ok": True,
+                    "run_id": output.stem,
+                    "source": "training_npz",
+                    "filename": filename,
+                    "path": str(output),
+                },
+                HTTPStatus.CREATED,
+            )
+        except (TypeError, ValueError, OSError) as error:
+            self._send_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+
+    def _read_npz_upload(self) -> tuple[str, bytes]:
+        filename = unquote(self.headers.get("X-Filename", "")).strip()
+        if (
+            not filename
+            or "/" in filename
+            or "\\" in filename
+            or Path(filename).name != filename
+            or Path(filename).suffix.lower() != ".npz"
+        ):
+            raise ValueError("X-Filename must be a plain .npz filename")
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as error:
+            raise ValueError("invalid Content-Length") from error
+        max_upload = 128 * 1024 * 1024
+        if length < 1 or length > max_upload:
+            raise ValueError("NPZ upload must be between 1 byte and 128 MiB")
+        content = self.rfile.read(length)
+        if len(content) != length:
+            raise ValueError("NPZ upload was truncated")
+        return filename, content
 
     def _handle_bga_import(self) -> None:
         if not self.server.bga_import_lock.acquire(blocking=False):

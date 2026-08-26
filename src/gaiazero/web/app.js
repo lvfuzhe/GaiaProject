@@ -231,6 +231,7 @@ const state = {
     step: 0,
     loading: false,
     deleting: false,
+    importing: false,
     indexRequestId: 0,
     message: "",
     playing: false,
@@ -2031,6 +2032,7 @@ function renderHistorySelectors() {
   const iterationSelect = byId("history-iteration-select");
   const gameSelect = byId("history-game-select");
   const deleteButton = byId("history-delete");
+  const importButton = byId("history-import-npz");
   if (!runSelect || !iterationSelect || !gameSelect) return;
   const runs = historyRuns();
   runSelect.innerHTML = runs.length
@@ -2073,6 +2075,46 @@ function renderHistorySelectors() {
     deleteButton.title = deletable
       ? "永久删除当前本地历史"
       : "没有可删除的历史";
+  }
+  if (importButton) {
+    importButton.disabled = state.history.importing || state.history.deleting || state.history.loading;
+    importButton.textContent = state.history.importing ? "转换中" : "导入 NPZ";
+    importButton.title = state.history.importing
+      ? "正在转换 NPZ 回放"
+      : "选择包含完整轨迹的 NPZ，并转换为可浏览的历史回放";
+  }
+}
+
+async function importNpzHistory(file) {
+  if (!file || state.history.importing) return;
+  state.history.importing = true;
+  state.history.message = `正在转换 ${file.name}`;
+  renderHistorySelectors();
+  renderHistory();
+  try {
+    const response = await fetch("/api/history/import-npz", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "X-Filename": encodeURIComponent(file.name),
+      },
+      body: file,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    state.history.runId = data.run_id || null;
+    state.history.iteration = 1;
+    state.history.game = 1;
+    state.history.trace = null;
+    state.history.step = 0;
+    state.history.message = `已转换 ${data.filename || file.name}`;
+    await refreshHistoryIndex({ loadTrace: true, force: true });
+  } catch (error) {
+    state.history.message = error.message || String(error);
+  } finally {
+    state.history.importing = false;
+    renderHistorySelectors();
+    renderHistory();
   }
 }
 
@@ -4656,6 +4698,12 @@ byId("history-run-select").addEventListener("change", async (event) => {
   await loadHistoryGame(true);
 });
 byId("history-refresh").addEventListener("click", () => refreshHistoryIndex());
+byId("history-import-npz").addEventListener("click", () => byId("history-npz-file").click());
+byId("history-npz-file").addEventListener("change", (event) => {
+  const file = event.target.files?.[0];
+  event.target.value = "";
+  if (file) void importNpzHistory(file);
+});
 byId("history-delete").addEventListener("click", deleteSelectedHistory);
 byId("history-iteration-select").addEventListener("change", async (event) => {
   stopHistoryPlayback();

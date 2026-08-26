@@ -1,6 +1,7 @@
 import hashlib
 import json
 import shutil
+import tempfile
 import threading
 import time
 import unittest
@@ -9,6 +10,8 @@ from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+import numpy as np
+
 from gaiazero.dashboard import (
     _interactive_action_record,
     _interactive_action_snapshot,
@@ -16,6 +19,7 @@ from gaiazero.dashboard import (
     _interactive_player_changes,
     create_dashboard_server,
 )
+from gaiazero.distributed import write_npz_shard
 from gaiazero.game import GaiaState, MiniGaiaState
 from gaiazero.game.gaia_state import (
     BAL_TAKS_GAIAFORMER_QIC_ACTION,
@@ -49,6 +53,7 @@ from gaiazero.telemetry import (
     read_local_game_trace,
     write_local_game,
 )
+from gaiazero.replay import TrainingExample
 
 
 PLAYER_BOARD_SHA256 = (
@@ -730,6 +735,8 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("setup-editor-map-size", page)
             self.assertIn("小地图 · BGA 3 人推荐", page)
             self.assertIn("play-config-form", page)
+            self.assertIn("history-import-npz", page)
+            self.assertIn("history-npz-file", page)
             self.assertIn("play-board-canvas", page)
             self.assertIn("play-live-roles", page)
             self.assertIn("play-research-stage", page)
@@ -2188,6 +2195,52 @@ class DashboardTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
+
+    def test_npz_upload_materializes_a_deletable_history_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "uploaded-game.npz"
+            write_npz_shard(
+                source,
+                [
+                    TrainingExample(
+                        observation=np.asarray([0.0, 1.0], dtype=np.float32),
+                        legal_mask=np.asarray([True, False], dtype=np.bool_),
+                        policy_target=np.asarray([1.0, 0.0], dtype=np.float32),
+                        value_target=np.asarray([0.0, 0.0], dtype=np.float32),
+                    )
+                ],
+                {
+                    "ruleset": "mini",
+                    "history": {
+                        "steps": [{"move": 0, "state": {"ruleset": "mini"}}],
+                        "summary": {"moves": 0, "positions": 1, "scores": [0, 0]},
+                    },
+                },
+            )
+            server = create_dashboard_server(self.metrics, port=0, quiet=True)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                request = Request(
+                    f"http://127.0.0.1:{server.server_port}/api/history/import-npz",
+                    data=source.read_bytes(),
+                    headers={
+                        "Content-Type": "application/octet-stream",
+                        "X-Filename": "uploaded-game.npz",
+                    },
+                    method="POST",
+                )
+                with urlopen(request, timeout=5) as response:
+                    imported = json.loads(response.read())
+                self.assertEqual(response.status, 201)
+                self.assertEqual(imported["source"], "training_npz")
+                output = self.history / f"{imported['run_id']}.json"
+                self.assertTrue(output.is_file())
+                self.assertFalse((self.history / "uploaded-game.npz").exists())
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
 
 
 if __name__ == "__main__":
