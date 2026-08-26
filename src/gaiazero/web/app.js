@@ -2043,7 +2043,7 @@ function renderHistorySelectors() {
   runSelect.value = state.history.runId || "";
   const iterations = historyRun()?.iterations || [];
   iterationSelect.innerHTML = iterations.length
-    ? iterations.map((item) => ["local", "bga"].includes(historyRun()?.source)
+    ? iterations.map((item) => ["local", "bga", "training_npz"].includes(historyRun()?.source)
       ? `<option value="${item.iteration}">本地记录 · ${item.games.length} 局</option>`
       : `<option value="${item.iteration}">第 ${item.iteration} 轮 · ${item.games.length} 局</option>`).join("")
     : '<option value="">暂无迭代</option>';
@@ -2065,7 +2065,7 @@ function renderHistorySelectors() {
   gameSelect.disabled = !games.length;
   if (deleteButton) {
     const source = historyRun()?.source;
-    const deletable = ["local", "bga"].includes(source);
+    const deletable = ["local", "bga", "training_npz"].includes(source);
     deleteButton.disabled = state.history.deleting || state.history.loading || !deletable;
     deleteButton.textContent = state.history.deleting ? "删除中" : "删除";
     deleteButton.title = deletable
@@ -2076,7 +2076,7 @@ function renderHistorySelectors() {
 
 async function deleteSelectedHistory() {
   const selected = historyRun();
-  if (state.history.deleting || !["local", "bga"].includes(selected?.source)) return;
+  if (state.history.deleting || !["local", "bga"].includes(selected?.source) && selected?.source !== "training_npz") return;
   const sourceLabel = selected.source === "bga" ? "BGA 复盘" : "人工对局";
   const confirmed = window.confirm(`永久删除当前${sourceLabel}？\n${selected.run_id}`);
   if (!confirmed) return;

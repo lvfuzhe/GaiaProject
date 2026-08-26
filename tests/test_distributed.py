@@ -17,7 +17,9 @@ from gaiazero.distributed import (
     write_npz_shard,
 )
 from gaiazero.model import NetworkConfig, PolicyValueNetwork, save_checkpoint
+from gaiazero.npz_history import convert_npz_to_history, delete_training_history
 from gaiazero.replay import TrainingExample
+from gaiazero.telemetry import build_local_history_index, read_local_game_trace
 
 
 class DistributedPipelineTests(unittest.TestCase):
@@ -97,6 +99,49 @@ class DistributedPipelineTests(unittest.TestCase):
             actual = restored(observation)
         self.assertTrue(torch.allclose(expected[0], actual[0]))
         self.assertTrue(torch.allclose(expected[1], actual[1]))
+
+    def test_npz_history_conversion_is_explicit_and_deletable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "game.npz"
+            history = root / "history"
+            write_npz_shard(
+                source,
+                [self._example(1), self._example(2)],
+                {
+                    "players": 3,
+                    "ruleset": "mini",
+                    "history": {
+                        "steps": [
+                            {
+                                "move": 0,
+                                "player": 0,
+                                "action": None,
+                                "state": {"ruleset": "mini", "round": 0},
+                            },
+                            {
+                                "move": 1,
+                                "player": 0,
+                                "action": 3,
+                                "state": {"ruleset": "mini", "round": 1},
+                            },
+                        ],
+                        "summary": {"moves": 1, "positions": 2, "scores": [1, 0, 0]},
+                    },
+                },
+            )
+
+            output = convert_npz_to_history(source, history, run_id="npz-test")
+            payload = output.read_text(encoding="utf-8")
+            self.assertIn('"source":"training_npz"', payload)
+            self.assertIn('"move":1', payload)
+            index = build_local_history_index(history)
+            self.assertEqual(index["runs"][0]["source"], "training_npz")
+            trace = read_local_game_trace(history, run_id="npz-test")
+            self.assertIsNotNone(trace)
+            self.assertEqual(trace["steps"][0]["move"], 0)
+            self.assertTrue(delete_training_history(history, "npz-test"))
+            self.assertFalse(output.exists())
 
 
 if __name__ == "__main__":

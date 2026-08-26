@@ -301,8 +301,9 @@ def run_selfplay(config: PipelineConfig, *, once: bool = False) -> int:
         games = 1 if once else config.games_per_cycle
         for _ in range(games):
             seed = config.seed + game_index
+            initial = state_type.initial(config.players, seed)
             result = play_self_game(
-                state_type.initial(config.players, seed),
+                initial,
                 evaluator,
                 _search_config(config, seed),
                 SelfPlayConfig(

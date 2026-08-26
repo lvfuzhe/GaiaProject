@@ -366,7 +366,13 @@ def build_local_history_index(path: str | Path) -> dict[str, Any]:
         except (TypeError, ValueError):
             continue
         status = str(record.get("status") or "active")
-        record_source = "bga" if record.get("source") == "bga" else "local"
+        record_source = (
+            "bga"
+            if record.get("source") == "bga"
+            else "training_npz"
+            if record.get("source") == "training_npz"
+            else "local"
+        )
         completed_at = record.get("completed_at")
         run_id = str(record["run_id"])
         game = {
@@ -422,7 +428,13 @@ def read_local_game_trace(
     record = _read_local_game(Path(path) / f"{run_id}.json")
     if record is None:
         return None
-    record_source = "bga" if record.get("source") == "bga" else "local"
+    record_source = (
+        "bga"
+        if record.get("source") == "bga"
+        else "training_npz"
+        if record.get("source") == "training_npz"
+        else "local"
+    )
     trace = (
         _rebuild_legacy_bga_trace(record)
         if record_source == "bga"

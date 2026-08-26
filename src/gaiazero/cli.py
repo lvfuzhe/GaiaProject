@@ -10,6 +10,7 @@ import torch
 from gaiazero.arena import evaluate_against, play_arena_game
 from gaiazero.dashboard import serve_dashboard
 from gaiazero.distributed import PipelineConfig, run_pipeline
+from gaiazero.npz_history import convert_npz_directory, convert_npz_to_history, delete_training_history
 from gaiazero.game import (
     GaiaHeuristicEvaluator,
     GaiaState,
@@ -359,6 +360,22 @@ def command_pipeline(args: argparse.Namespace) -> None:
     )
 
 
+def command_npz_to_history(args: argparse.Namespace) -> None:
+    source = Path(args.source)
+    if source.is_dir():
+        outputs = convert_npz_directory(source, args.history_dir)
+    else:
+        outputs = [convert_npz_to_history(source, args.history_dir, run_id=args.run_id)]
+    for output in outputs:
+        print(output)
+
+
+def command_delete_training_history(args: argparse.Namespace) -> None:
+    if not delete_training_history(args.history_dir, args.run_id):
+        raise ValueError(f"training history not found: {args.run_id}")
+    print(f"deleted {args.run_id}")
+
+
 def command_evaluate(args: argparse.Namespace) -> None:
     model, metadata = load_checkpoint(args.checkpoint, args.device)
     state_type, baseline = _game_components(args.ruleset)
@@ -508,6 +525,23 @@ def build_parser() -> argparse.ArgumentParser:
     pipeline.add_argument("--gate-games", type=int, default=20)
     pipeline.add_argument("--gate-threshold", type=float, default=0.55)
     pipeline.set_defaults(handler=command_pipeline)
+
+    npz_history = subparsers.add_parser(
+        "npz-to-history",
+        help="explicitly convert NPZ self-play samples to dashboard replay JSON",
+    )
+    npz_history.add_argument("source", help="an NPZ file or directory")
+    npz_history.add_argument("--history-dir", default="runs/history")
+    npz_history.add_argument("--run-id", default=None)
+    npz_history.set_defaults(handler=command_npz_to_history)
+
+    delete_training = subparsers.add_parser(
+        "delete-training-history",
+        help="delete one replay previously converted from NPZ training data",
+    )
+    delete_training.add_argument("run_id")
+    delete_training.add_argument("--history-dir", default="runs/history")
+    delete_training.set_defaults(handler=command_delete_training_history)
     return parser
 
 
