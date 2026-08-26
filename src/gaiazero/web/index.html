@@ -749,12 +749,20 @@
             <span id="history-components-status" class="muted">等待历史快照</span>
           </div>
           <div class="history-components-grid">
-            <section class="history-component-group history-round-group" aria-labelledby="history-round-heading">
-              <div class="history-component-heading"><strong id="history-round-heading">回合面板</strong><small id="history-round-status">等待历史快照</small></div>
+            <section class="history-component-group history-official-round-group" aria-labelledby="history-round-heading">
+              <div class="history-component-heading"><strong id="history-round-heading">官方回合计分面板</strong><small id="history-round-status">等待历史快照</small></div>
               <div class="history-round-summary"><strong id="history-round-current">第 -- 轮</strong><span id="history-round-score-note">等待回合计分板块</span></div>
               <div class="history-round-panel-grid">
-                <div class="history-round-panel-section"><strong>回合计分片</strong><div id="history-round-scoring" class="history-round-scoring history-round-track"></div></div>
-                <div class="history-round-panel-section"><strong id="history-final-heading">终局计分片</strong><div id="history-final-scoring" class="history-final-scoring"></div></div>
+                <div class="history-round-board-shell">
+                  <div id="history-round-board" class="history-round-board" aria-label="官方回合计分面板">
+                    <img class="history-round-board-art" src="/assets/boards/round-board.png?source=bga-260812-1015" alt="盖亚计划官方回合计分面板">
+                    <div id="history-round-scoring" class="history-round-scoring" aria-label="回合计分片"></div>
+                    <div id="history-final-scoring" class="history-final-scoring" aria-label="终局计分片"></div>
+                    <div id="history-final-track-1" class="history-final-score-track" aria-label="第一终局计分轨"></div>
+                    <div id="history-final-track-2" class="history-final-score-track" aria-label="第二终局计分轨"></div>
+                    <div id="history-planet-type-counts" class="history-planet-type-counts" aria-label="玩家已殖民星球类型"></div>
+                  </div>
+                </div>
               </div>
             </section>
             <section class="history-component-group history-booster-group" aria-labelledby="history-booster-heading">

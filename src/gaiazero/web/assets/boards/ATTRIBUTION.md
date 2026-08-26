@@ -14,3 +14,7 @@ their respective copyright holders, including Feuerland Spiele and Z-Man
 Games. This file is included to reproduce the physical research board in the
 local monitoring interface. Review the applicable rights before redistributing
 the artwork outside this project.
+
+The `round-board.png` file is Board Game Arena's `roundBoard.png` from the same
+Gaia Project theme release and is used as the official public scoring-board
+background in the history replay view.

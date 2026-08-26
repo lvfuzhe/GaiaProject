@@ -647,6 +647,45 @@ function finalMetric(snapshot, key, playerId) {
   return 0;
 }
 
+const PLANET_TYPE_COUNT_SLOTS = [
+  { terrain: 0, slot: 1 },
+  { terrain: 4, slot: 2 },
+  { terrain: 3, slot: 3 },
+  { terrain: 1, slot: 4 },
+  { terrain: 2, slot: 5 },
+  { terrain: 5, slot: 6 },
+  { terrain: 6, slot: 7 },
+  { terrain: 8, slot: 8 },
+  { terrain: 9, slot: 10 },
+];
+
+function colonizedTypeMask(snapshot, player) {
+  const encodedValue = player?.colonized_types;
+  const encodedTypes = Number(encodedValue);
+  if (encodedValue !== null && encodedValue !== undefined && Number.isFinite(encodedTypes)) return encodedTypes;
+  const playerId = Number(player?.id);
+  return (snapshot.planets || []).reduce((mask, planet) => {
+    const ownsPlanet = Number(planet.owner) === playerId;
+    const ownsCoexistingMine = Number(planet.coexisting_mine_owner) === playerId;
+    const terrain = Number(planet.terrain);
+    return ownsPlanet || ownsCoexistingMine ? mask | (1 << terrain) : mask;
+  }, 0);
+}
+
+function renderHistoryPlanetTypeTokens(snapshot, target) {
+  if (!target) return;
+  const players = Array.isArray(snapshot?.players) ? snapshot.players : [];
+  target.innerHTML = PLANET_TYPE_COUNT_SLOTS.map(({ terrain, slot }) => {
+    const owners = players.filter((player) => colonizedTypeMask(snapshot, player) & (1 << terrain));
+    if (!owners.length) return "";
+    const label = TERRAIN_LABELS[terrain] || "星球";
+    const tokens = owners.map((player) => (
+      `<span class="history-planet-type-token p${player.id}" title="P${player.id} · 已殖民${escapeHtml(label)}" aria-label="P${player.id}，已殖民${escapeHtml(label)}">P${player.id}</span>`
+    )).join("");
+    return `<div class="history-planet-type-count count-${slot}" data-terrain="${terrain}" aria-label="${escapeHtml(label)}：${owners.map((player) => `P${player.id}`).join("、")}">${tokens}</div>`;
+  }).join("");
+}
+
 function finalRanking(snapshot, tile) {
   const values = (snapshot.players || []).map((player) => ({
     player,
@@ -672,9 +711,11 @@ function renderHistoryConfiguredComponents(snapshot) {
   const roundScoreNote = byId("history-round-score-note");
   const roundTarget = byId("history-round-scoring");
   const finalTarget = byId("history-final-scoring");
+  const finalTracks = [byId("history-final-track-1"), byId("history-final-track-2")];
+  const planetTypeTarget = byId("history-planet-type-counts");
   const boosterTarget = byId("history-boosters");
   const federationTarget = byId("history-federation-supply");
-  if (!status || !roundTarget || !finalTarget || !boosterTarget || !federationTarget) return;
+  if (!status || !roundTarget || !finalTarget || finalTracks.some((target) => !target) || !planetTypeTarget || !boosterTarget || !federationTarget) return;
 
   if (!setup) {
     status.textContent = "当前快照没有初始配置";
@@ -683,6 +724,8 @@ function renderHistoryConfiguredComponents(snapshot) {
     if (roundScoreNote) roundScoreNote.textContent = "等待回合计分板块";
     roundTarget.innerHTML = "";
     finalTarget.innerHTML = "";
+    finalTracks.forEach((target) => { target.innerHTML = ""; });
+    planetTypeTarget.innerHTML = "";
     boosterTarget.innerHTML = "";
     federationTarget.innerHTML = "";
     return;
@@ -717,31 +760,37 @@ function renderHistoryConfiguredComponents(snapshot) {
     const stateLabel = current ? "进行中" : (past ? "已完成" : "待开始");
     const name = setupLabel(tile);
     return `<article class="history-round-tile ${current ? "current" : ""} ${past ? "past" : ""}" title="第 ${round} 轮 · ${escapeHtml(name)} · ${stateLabel}">
-      <span class="history-component-art"><img src="${tileAsset("round", tile.id)}" alt="${escapeHtml(name)}"></span>
-      <span class="history-component-meta"><strong>R${round}</strong><small>${stateLabel}</small></span>
+      <img src="${tileAsset("round", tile.id)}" alt="${escapeHtml(name)}">
     </article>`;
   }).join("");
 
   const finalScoring = Array.isArray(setup.final_scoring) ? setup.final_scoring : [];
-  const finalTrackColumns = Math.max(3, Math.min(4, players.length || 3));
   finalTarget.innerHTML = finalScoring.map((tile, index) => {
     const name = setupLabel(tile);
-    const ranking = snapshot?.players?.length ? finalRanking(snapshot, tile) : [];
-    const rankingLabel = ranking.map((entry) => `P${entry.player.id} ${entry.value}`).join(" · ");
-    const trackRanks = Array.from({ length: Math.max(3, players.length) }, (_, rankIndex) => {
-      const rank = rankIndex + 1;
-      const tokens = ranking
-        .filter((entry) => entry.rank === rank)
-        .map((entry) => `<span class="history-score-token p${entry.player.id}" title="P${entry.player.id} · ${formatNumber(entry.value)}">P${entry.player.id}</span>`)
-        .join("");
-      return `<div class="history-final-rank"><small>#${rank}</small><span>${tokens || "·"}</span></div>`;
-    }).join("");
-    return `<article class="history-final-tile" title="${escapeHtml(name)}${rankingLabel ? ` · ${escapeHtml(rankingLabel)}` : ""}">
-      <span class="history-component-art"><img src="${tileAsset("final", tile.id)}" alt="${escapeHtml(name)}"></span>
-      <span class="history-component-meta"><strong>终局 ${index + 1}</strong><small>${escapeHtml(name)}</small></span>
-      <span class="history-final-track" style="--history-final-columns:${finalTrackColumns}" aria-label="${escapeHtml(name)}终局计分轨">${trackRanks}</span>
+    return `<article class="history-final-tile" title="终局计分 ${index + 1} · ${escapeHtml(name)}">
+      <img src="${tileAsset("final", tile.id)}" alt="${escapeHtml(name)}">
     </article>`;
   }).join("");
+
+  finalTracks.forEach((trackTarget, trackIndex) => {
+    const tile = finalScoring[trackIndex];
+    if (!tile) {
+      trackTarget.innerHTML = "";
+      return;
+    }
+    const spaces = Array.from({ length: 11 }, (_, score) => {
+      const tokens = players.map((player) => {
+        const value = Math.max(0, Number(finalMetric(snapshot, tile.key, player.id)) || 0);
+        const position = value === 0 ? 0 : (value % 10 === 0 ? 10 : value % 10);
+        if (position !== score) return "";
+        const marker = value > 20 ? "+20" : value > 10 ? "+10" : `P${player.id}`;
+        return `<span class="history-final-score-token p${player.id}" title="P${player.id} · ${formatNumber(value)}" aria-label="P${player.id}，数值 ${formatNumber(value)}">${marker}</span>`;
+      }).join("");
+      return `<span class="history-final-score-space" data-score="${score}">${tokens}</span>`;
+    }).join("");
+    trackTarget.innerHTML = spaces;
+  });
+  renderHistoryPlanetTypeTokens(snapshot, planetTypeTarget);
 
   const boosters = Array.isArray(setup.boosters) ? setup.boosters : [];
   boosterTarget.innerHTML = boosters.map((booster) => {
@@ -2699,24 +2748,6 @@ function drawPlanetArtwork(context, x, y, size, cellScale, planet, snapshot) {
   return true;
 }
 
-function drawPlayerToken(context, x, y, playerId, cellSize, compactMap) {
-  const radius = Math.max(compactMap ? 4 : 5.5, cellSize * (compactMap ? 0.22 : 0.27));
-  context.save();
-  context.fillStyle = PLAYER_COLORS[playerId] || "#d9e2e8";
-  context.strokeStyle = "rgba(255,255,255,0.92)";
-  context.lineWidth = compactMap ? 0.8 : 1.1;
-  context.beginPath();
-  context.arc(x, y, radius, 0, Math.PI * 2);
-  context.fill();
-  context.stroke();
-  context.fillStyle = "#ffffff";
-  context.font = `800 ${Math.max(5, radius * 0.95)}px Segoe UI`;
-  context.textAlign = "center";
-  context.textBaseline = "middle";
-  context.fillText(`P${playerId}`, x, y + 0.2);
-  context.restore();
-}
-
 function drawStarMapBoard(canvas, snapshot, showPlayerPieces, extraOptions = {}) {
   drawBoard(canvas, snapshot, {
     showSectors: true,
@@ -2888,19 +2919,6 @@ function drawBoard(canvas, snapshot, options = {}) {
         context.stroke();
         context.restore();
       }
-    }
-    if (options.showPlayerPieces !== false && planet.owner >= 0) {
-      drawPlayerToken(context, x - size * 0.62, y - size * 0.62, planet.owner, size, compactMap);
-    }
-    if (options.showPlayerPieces !== false && planet.coexisting_mine_owner >= 0) {
-      drawPlayerToken(
-        context,
-        x + size * 0.62,
-        y - size * 0.62,
-        planet.coexisting_mine_owner,
-        size,
-        compactMap,
-      );
     }
     if (options.showPlayerPieces !== false && planet.gaiaformer >= 0 && planet.owner < 0) {
       context.strokeStyle = PLAYER_COLORS[planet.gaiaformer] || "#17211d";

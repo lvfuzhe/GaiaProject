@@ -154,6 +154,10 @@ ASSETS["/assets/boards/research-board.png"] = (
     "assets/boards/research-board.png",
     "image/png",
 )
+ASSETS["/assets/boards/round-board.png"] = (
+    "assets/boards/round-board.png",
+    "image/png",
+)
 
 
 class DashboardServer(ThreadingHTTPServer):

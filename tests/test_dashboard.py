@@ -677,6 +677,9 @@ class DashboardTests(unittest.TestCase):
             with urlopen(f"{base}/assets/boards/research-board.png", timeout=5) as response:
                 research_board_image = response.read()
                 research_board_content_type = response.headers.get_content_type()
+            with urlopen(f"{base}/assets/boards/round-board.png", timeout=5) as response:
+                round_board_image = response.read()
+                round_board_content_type = response.headers.get_content_type()
             player_board_assets = []
             for number in range(1, 15):
                 with urlopen(f"{base}/assets/factions/player-board-{number:02d}.jpg", timeout=5) as response:
@@ -738,6 +741,10 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("history-round-scoring", page)
             self.assertIn("history-final-scoring", page)
             self.assertIn("history-round-panel-grid", page)
+            self.assertIn("history-round-board", page)
+            self.assertIn("history-final-track-1", page)
+            self.assertIn("history-final-track-2", page)
+            self.assertIn("history-planet-type-counts", page)
             self.assertIn("history-map-zoom", page)
             self.assertNotIn("history-map-gap", page)
             self.assertIn("history-map-background", page)
@@ -765,10 +772,19 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("function drawSectorSeparators", app_script)
             self.assertIn("(compactMap ? 0.89 : 0.92) -", app_script)
             self.assertIn("scale * (0.24 +", app_script)
-            self.assertIn("function drawPlayerToken", app_script)
+            self.assertNotIn("function drawPlayerToken", app_script)
+            self.assertNotIn("drawPlayerToken(", app_script)
             self.assertIn("history-round-score-note", app_script)
-            self.assertIn("history-final-track", app_script)
-            self.assertIn("--history-final-columns", app_script)
+            self.assertIn("history-final-track-1", app_script)
+            self.assertIn("finalMetric(snapshot, tile.key, player.id)", app_script)
+            self.assertIn("history-final-score-space", app_script)
+            self.assertIn("PLANET_TYPE_COUNT_SLOTS", app_script)
+            self.assertIn("{ terrain: 4, slot: 2 }", app_script)
+            self.assertIn("{ terrain: 3, slot: 3 }", app_script)
+            self.assertIn("{ terrain: 8, slot: 8 }", app_script)
+            self.assertIn("{ terrain: 9, slot: 10 }", app_script)
+            self.assertIn("renderHistoryPlanetTypeTokens", app_script)
+            self.assertIn("history-planet-type-token", app_script)
             self.assertIn('background: "#171d23"', app_script)
             self.assertIn("gap: 0", app_script)
             self.assertIn("const useSectorArtwork = options.sectorArtwork ?? true", app_script)
@@ -850,6 +866,8 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(research_board_content_type, "image/png")
             self.assertTrue(research_board_image.startswith(b"\x89PNG\r\n\x1a\n"))
             self.assertEqual(hashlib.sha256(research_board_image).hexdigest().upper(), RESEARCH_BOARD_SHA256)
+            self.assertEqual(round_board_content_type, "image/png")
+            self.assertTrue(round_board_image.startswith(b"\x89PNG\r\n\x1a\n"))
             self.assertTrue(all(
                 content_type == "image/jpeg"
                 and content.startswith(b"\xff\xd8")
@@ -881,6 +899,8 @@ class DashboardTests(unittest.TestCase):
             self.assertIn(".owned-federation-grid", styles)
             self.assertIn(".owned-federation-state.unused", styles)
             self.assertIn(".owned-federation-state.used", styles)
+            self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr));", styles)
+            self.assertIn(".history-planet-type-count.count-10", styles)
             self.assertIn("left: 4.9180%", styles)
             for name, (content_type, content) in tile_assets.items():
                 expected_type = (
