@@ -1202,6 +1202,13 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(game["roles"], ["human", "ai"])
             self.assertEqual(game["current_role"], "human")
             self.assertFalse(game["can_undo"])
+            probabilities = [
+                action["probability"]
+                for action in game["legal_actions"]
+            ]
+            self.assertEqual(len(probabilities), len(game["legal_actions"]))
+            self.assertAlmostEqual(sum(probabilities), 1.0, places=5)
+            self.assertTrue(all("visits" in action for action in game["legal_actions"]))
             initial_state = game["state"]
             self.assertEqual(game["config"]["random_setup"], random_setup)
             self.assertEqual(

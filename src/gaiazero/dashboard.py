@@ -2137,6 +2137,7 @@ def _create_interactive_session(
         "state": initial,
         "searches": searches,
         "engine": engine,
+        "human_policy": None,
         "move": 0,
         "history": [],
         "trace_steps": [
@@ -2325,16 +2326,51 @@ def _interactive_undo_count(session: dict[str, Any]) -> int:
     return 0 if human_index is None else len(history) - human_index
 
 
+def _interactive_human_policy(
+    session: dict[str, Any],
+    state: GaiaState,
+) -> dict[str, Any] | None:
+    """Cache a root PIMCTS policy for the current human-controlled position."""
+    if state.is_terminal or session["roles"][state.current_player] != "human":
+        return None
+    cached = session.get("human_policy")
+    if isinstance(cached, dict) and cached.get("revision") == session["revision"]:
+        return cached
+    try:
+        result = session["searches"][state.current_player].run(
+            state,
+            add_root_noise=False,
+            temperature=1.0,
+        )
+    except Exception:
+        session["human_policy"] = None
+        return None
+    cached = {
+        "revision": session["revision"],
+        "probabilities": result.policy.tolist(),
+        "visits": result.visits.tolist(),
+    }
+    session["human_policy"] = cached
+    return cached
+
+
 def _interactive_session_snapshot(session: dict[str, Any]) -> dict[str, Any]:
     if session.get("status") == "idle":
         return {"status": "idle"}
     state = session["state"]
     state_snapshot = state.snapshot()
     current_player = None if state.is_terminal else state.current_player
-    legal_actions = [] if state.is_terminal else [
-        _interactive_action_snapshot(state, action)
-        for action in state.legal_actions()
-    ]
+    policy = _interactive_human_policy(session, state)
+    legal_actions = []
+    if not state.is_terminal:
+        for action in state.legal_actions():
+            summary = _interactive_action_snapshot(state, action)
+            if policy is not None:
+                probabilities = policy["probabilities"]
+                visits = policy["visits"]
+                summary["probability"] = float(probabilities[action])
+                summary["visits"] = int(visits[action])
+            legal_actions.append(summary)
     config = dict(session["config"])
     config["random_setup"] = _resolved_random_setup(state)
     undo_count = _interactive_undo_count(session)

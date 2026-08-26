@@ -4109,8 +4109,16 @@ function renderPlayActions(session) {
   const otherGeneral = general.filter(
     (action) => action.kind !== "select_booster" && action.kind !== "lost_planet",
   );
+  const actionProbability = (action) => {
+    const probability = Number(action.probability);
+    if (!Number.isFinite(probability)) return "";
+    const visits = Number(action.visits);
+    const visitLabel = Number.isFinite(visits) ? ` · ${formatNumber(visits)} 次访问` : "";
+    return `<span class="play-action-probability" title="PIMCTS 估计概率${visitLabel}">${formatNumber(probability * 100, 1)}%</span>`;
+  };
   const actionButton = (action) => `<button type="button" class="play-action-command" data-play-action="${action.id}" ${disabled ? "disabled" : ""}>
     <strong>${escapeHtml(PLAY_ACTION_LABELS[action.kind] || PLAY_ACTION_LABELS.other)}${action.target === null || action.target === undefined ? "" : ` · #${action.target}`}</strong>
+    ${actionProbability(action)}
     <small>${escapeHtml(action.label)}</small>
   </button>`;
   byId("play-planet-actions").innerHTML = visibleTargeted.length
@@ -4123,7 +4131,7 @@ function renderPlayActions(session) {
         const label = BOOSTER_NAMES[resolvedBooster] || action.label;
         return `<button type="button" class="play-booster-choice" data-play-action="${action.id}" ${disabled ? "disabled" : ""}>
           <img src="${tileAsset("booster", resolvedBooster)}" alt="${escapeHtml(label)}">
-          <span>助推 ${resolvedBooster + 1}</span><strong>${escapeHtml(label)}</strong>
+          <span>助推 ${resolvedBooster + 1}</span><strong>${escapeHtml(label)}</strong>${actionProbability(action)}
         </button>`;
       }).join("")
     : otherGeneral.length
