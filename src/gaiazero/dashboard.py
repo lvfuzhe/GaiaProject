@@ -2110,8 +2110,7 @@ def _interactive_ai_components(
                 model.config.num_players,
             )
             if actual == expected and model.architecture == expected_architecture:
-                label = "NNUE" if model.architecture == "nnue" else "KataGo"
-                return NetworkEvaluator(model, "cpu"), f"{label} + PIMCTS"
+                return NetworkEvaluator(model, "cpu"), "KataGo + PIMCTS"
         except Exception:
             pass
     return GaiaHeuristicEvaluator(), "Heuristic PIMCTS"

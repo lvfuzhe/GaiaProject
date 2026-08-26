@@ -6,6 +6,8 @@ TensorFlow 或 TFRecord。
 
 ## 五个进程
 
+该管线支持 2、3、4 人局。三种人数都使用同一 KataGo 风格残差网络和 MCTS 自对弈路径，只有价值头输出维度和游戏状态维度随人数变化。
+
 1. `selfplay`：轮询 `approved/current.pt`，后续对局自动加载新权重；每局完成后将训练样本
    原子写入 `raw/game-*.npz`。
 2. `shuffle`：扫描尚未处理的原始对局，合并并洗牌，按固定数量输出
@@ -40,6 +42,12 @@ gaiazero pipeline `
 
 ```powershell
 gaiazero pipeline --players 3 --root runs/pipeline-3p --device cuda
+```
+
+两人局使用相同流程和模型架构：
+
+```powershell
+gaiazero pipeline --players 2 --root runs/pipeline-2p --device cuda
 ```
 
 命令会启动五个 Python 子进程，日志分别写入 `root/logs/`。按 `Ctrl+C` 会创建 `STOP`

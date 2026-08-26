@@ -82,8 +82,8 @@ class PipelineConfig:
     gate_threshold: float = 0.55
 
     def __post_init__(self) -> None:
-        if self.players not in (3, 4):
-            raise ValueError("the multiplayer pipeline supports 3 or 4 players")
+        if self.players not in (2, 3, 4):
+            raise ValueError("the multiplayer pipeline supports 2, 3 or 4 players")
         if self.ruleset not in ("standard", "mini"):
             raise ValueError("ruleset must be standard or mini")
         positive = (
@@ -879,7 +879,7 @@ def run_pipeline(config: PipelineConfig) -> None:
 
 def _add_config_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--root", type=Path, default=Path("runs/multiplayer-pipeline"))
-    parser.add_argument("--players", type=int, choices=(3, 4), default=4)
+    parser.add_argument("--players", type=int, choices=(2, 3, 4), default=4)
     parser.add_argument("--ruleset", choices=("standard", "mini"), default="standard")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--simulations", type=int, default=64)

@@ -62,17 +62,16 @@ gaiazero train-all `
   --metrics-dir runs/metrics-by-players
 ```
 
-输出文件为 `runs/models/gaia-standard-2p-nnue.pt`、`gaia-standard-3p-katago.pt`、
+输出文件为 `runs/models/gaia-standard-2p-katago.pt`、`gaia-standard-3p-katago.pt`、
 `gaia-standard-4p-katago.pt`，对应指标分别写入
-`runs/metrics-by-players/metrics-standard-2p-nnue.jsonl`、
+`runs/metrics-by-players/metrics-standard-2p-katago.jsonl`、
 `metrics-standard-3p-katago.jsonl` 和 `metrics-standard-4p-katago.jsonl`。
 评测时必须使用匹配人数和架构的检查点：
 
-- 2 人局固定使用 NNUE：双玩家特征累加器、平方裁剪激活和反对称价值头。
-- 3/4 人局固定使用 KataGo 风格网络：全局门控残差塔、独立策略头和多人价值头。
+- 2/3/4 人局统一使用 KataGo 风格网络：全局门控残差塔、独立策略头和多人价值头。
 
-架构选择由 `--players` 自动完成，并写入训练指标和检查点；不能把 NNUE 与 KataGo
-检查点跨人数加载。由于当前观察是结构化扁平向量，KataGo 网络使用适配该状态表示的
+架构选择由 `--players` 自动完成，并写入训练指标和检查点；2/3/4 人局都使用同一
+KataGo 网络族，但每个人数仍使用匹配的价值头维度。由于当前观察是结构化扁平向量，网络使用适配该状态表示的
 全局门控残差块，而不是围棋棋盘卷积。
 
 ```powershell

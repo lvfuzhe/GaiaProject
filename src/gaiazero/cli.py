@@ -503,7 +503,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="run asynchronous multiplayer self-play, shuffle, train, export and gatekeeper workers",
     )
     pipeline.add_argument("--root", default="runs/multiplayer-pipeline")
-    pipeline.add_argument("--players", type=int, choices=(3, 4), default=4)
+    pipeline.add_argument("--players", type=int, choices=(2, 3, 4), default=4)
     pipeline.add_argument("--ruleset", choices=("standard", "mini"), default="standard")
     pipeline.add_argument("--seed", type=int, default=0)
     pipeline.add_argument("--simulations", type=int, default=64)

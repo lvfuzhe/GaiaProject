@@ -11,15 +11,12 @@ from torch import Tensor, nn
 from gaiazero.core import FloatArray, GameState
 
 
-NNUE_ARCHITECTURE = "nnue"
 KATAGO_ARCHITECTURE = "katago"
-LEGACY_ARCHITECTURE = "legacy_mlp"
 
 
 def architecture_for_players(num_players: int) -> str:
-    if num_players == 2:
-        return NNUE_ARCHITECTURE
-    if num_players in (3, 4):
+    if num_players in (2, 3, 4):
+        # Every supported player count shares one residual-network and MCTS path.
         return KATAGO_ARCHITECTURE
     raise ValueError("network architecture requires two to four players")
 
@@ -42,56 +39,11 @@ class NetworkConfig:
             raise ValueError("residual_blocks must be positive")
         expected = architecture_for_players(self.num_players)
         selected = expected if self.architecture == "auto" else self.architecture
-        if selected not in (expected, LEGACY_ARCHITECTURE):
+        if selected != expected:
             raise ValueError(
                 f"{self.num_players}-player models require {expected}, got {selected}"
             )
         object.__setattr__(self, "architecture", selected)
-
-
-class SquaredClippedReLU(nn.Module):
-    """NNUE-style bounded activation with stable integer-friendly support."""
-
-    def forward(self, inputs: Tensor) -> Tensor:
-        clipped = torch.clamp(inputs, 0.0, 1.0)
-        return clipped * clipped
-
-
-class NNUEPolicyValueBackbone(nn.Module):
-    """Two-player feature accumulators with an antisymmetric value head.
-
-    The observation is currently dense, so accumulators are recomputed for each
-    state. Their first layer remains additive and can be cached incrementally
-    when the rules engine exposes observation deltas in a future optimization.
-    """
-
-    def __init__(self, config: NetworkConfig) -> None:
-        super().__init__()
-        hidden = config.hidden_size
-        head_hidden = max(16, hidden // 2)
-        self.player_zero_accumulator = nn.Linear(config.observation_size, hidden)
-        self.player_one_accumulator = nn.Linear(config.observation_size, hidden)
-        self.accumulator_activation = SquaredClippedReLU()
-        self.hidden = nn.Sequential(
-            nn.Linear(hidden * 2, hidden),
-            SquaredClippedReLU(),
-            nn.Linear(hidden, head_hidden),
-            SquaredClippedReLU(),
-        )
-        self.policy_head = nn.Linear(head_hidden, config.action_size)
-        self.value_head = nn.Linear(head_hidden, 1)
-
-    def forward(self, observations: Tensor) -> tuple[Tensor, Tensor]:
-        player_zero = self.accumulator_activation(
-            self.player_zero_accumulator(observations)
-        )
-        player_one = self.accumulator_activation(
-            self.player_one_accumulator(observations)
-        )
-        hidden = self.hidden(torch.cat((player_zero, player_one), dim=1))
-        player_zero_value = torch.tanh(self.value_head(hidden))
-        values = torch.cat((player_zero_value, -player_zero_value), dim=1)
-        return self.policy_head(hidden), values
 
 
 class KataGoResidualBlock(nn.Module):
@@ -152,67 +104,14 @@ class KataGoPolicyValueBackbone(nn.Module):
         return self.policy_head(hidden), torch.tanh(centered_values)
 
 
-class LegacyResidualMLPBlock(nn.Module):
-    def __init__(self, hidden_size: int) -> None:
-        super().__init__()
-        self.layers = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size),
-            nn.LayerNorm(hidden_size),
-            nn.GELU(),
-            nn.Linear(hidden_size, hidden_size),
-            nn.LayerNorm(hidden_size),
-        )
-        self.activation = nn.GELU()
-
-    def forward(self, inputs: Tensor) -> Tensor:
-        return self.activation(inputs + self.layers(inputs))
-
-
-class LegacyPolicyValueBackbone(nn.Module):
-    """Loader-only implementation for checkpoints created before model splitting."""
-
-    def __init__(self, config: NetworkConfig) -> None:
-        super().__init__()
-        self.stem = nn.Sequential(
-            nn.Linear(config.observation_size, config.hidden_size),
-            nn.LayerNorm(config.hidden_size),
-            nn.GELU(),
-        )
-        self.blocks = nn.Sequential(
-            *(
-                LegacyResidualMLPBlock(config.hidden_size)
-                for _ in range(config.residual_blocks)
-            )
-        )
-        self.policy_head = nn.Sequential(
-            nn.Linear(config.hidden_size, config.hidden_size),
-            nn.GELU(),
-            nn.Linear(config.hidden_size, config.action_size),
-        )
-        self.value_head = nn.Sequential(
-            nn.Linear(config.hidden_size, config.hidden_size // 2),
-            nn.GELU(),
-            nn.Linear(config.hidden_size // 2, config.num_players),
-            nn.Tanh(),
-        )
-
-    def forward(self, observations: Tensor) -> tuple[Tensor, Tensor]:
-        hidden = self.blocks(self.stem(observations))
-        return self.policy_head(hidden), self.value_head(hidden)
-
-
 class PolicyValueNetwork(nn.Module):
-    """Stable wrapper that dispatches to the player-count-specific network."""
+    """Stable wrapper for the shared multiplayer residual network."""
 
     def __init__(self, config: NetworkConfig) -> None:
         super().__init__()
         self.config = config
-        if config.architecture == NNUE_ARCHITECTURE:
-            self.network = NNUEPolicyValueBackbone(config)
-        elif config.architecture == KATAGO_ARCHITECTURE:
+        if config.architecture == KATAGO_ARCHITECTURE:
             self.network = KataGoPolicyValueBackbone(config)
-        elif config.architecture == LEGACY_ARCHITECTURE:
-            self.network = LegacyPolicyValueBackbone(config)
         else:  # NetworkConfig validates this before construction.
             raise ValueError(f"unsupported network architecture {config.architecture}")
 
@@ -279,13 +178,10 @@ def load_checkpoint(
     resolved = resolve_device(device) if isinstance(device, str) else device
     payload = torch.load(Path(path), map_location=resolved, weights_only=False)
     config_payload = dict(payload["network_config"])
-    legacy_checkpoint = "architecture" not in config_payload
-    if legacy_checkpoint:
-        config_payload["architecture"] = LEGACY_ARCHITECTURE
+    if "architecture" not in config_payload:
+        raise ValueError("checkpoint is missing the required network architecture")
     model = PolicyValueNetwork(NetworkConfig(**config_payload))
     model_state = dict(payload["model_state"])
-    if legacy_checkpoint and not any(key.startswith("network.") for key in model_state):
-        model_state = {f"network.{key}": value for key, value in model_state.items()}
     try:
         model.load_state_dict(model_state)
     except RuntimeError as error:

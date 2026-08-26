@@ -46,7 +46,7 @@ class CliTrainingSplitTests(unittest.TestCase):
             self.assertEqual(
                 [Path(child.output).name for child in children],
                 [
-                    "gaia-standard-2p-nnue.pt",
+                    "gaia-standard-2p-katago.pt",
                     "gaia-standard-3p-katago.pt",
                     "gaia-standard-4p-katago.pt",
                 ],
@@ -54,7 +54,7 @@ class CliTrainingSplitTests(unittest.TestCase):
             self.assertEqual(
                 [Path(child.metrics).name for child in children],
                 [
-                    "metrics-standard-2p-nnue.jsonl",
+                    "metrics-standard-2p-katago.jsonl",
                     "metrics-standard-3p-katago.jsonl",
                     "metrics-standard-4p-katago.jsonl",
                 ],
