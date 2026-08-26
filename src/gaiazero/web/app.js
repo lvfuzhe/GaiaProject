@@ -2035,7 +2035,9 @@ function renderHistorySelectors() {
   const runs = historyRuns();
   runSelect.innerHTML = runs.length
     ? runs.map((run) => {
-      const source = run.source === "bga" ? "BGA 复盘" : run.source === "local" ? "本地对战" : "训练";
+      const source = run.source === "bga"
+        ? "BGA 复盘"
+        : run.source === "training_npz" ? "训练回放" : "本地对战";
       const status = run.status === "complete" ? "已完成" : run.status === "active" ? "进行中" : run.status;
       return `<option value="${escapeHtml(run.run_id)}">${source} · ${escapeHtml(run.ruleset || "unknown")} · ${escapeHtml(run.run_id)} · ${escapeHtml(status)}</option>`;
     }).join("")
@@ -2070,14 +2072,16 @@ function renderHistorySelectors() {
     deleteButton.textContent = state.history.deleting ? "删除中" : "删除";
     deleteButton.title = deletable
       ? "永久删除当前本地历史"
-      : source === "training" ? "训练记录来自指标日志，不能在此删除" : "没有可删除的历史";
+      : "没有可删除的历史";
   }
 }
 
 async function deleteSelectedHistory() {
   const selected = historyRun();
   if (state.history.deleting || !["local", "bga"].includes(selected?.source) && selected?.source !== "training_npz") return;
-  const sourceLabel = selected.source === "bga" ? "BGA 复盘" : "人工对局";
+  const sourceLabel = selected.source === "bga"
+    ? "BGA 复盘"
+    : selected.source === "training_npz" ? "训练回放" : "人工对局";
   const confirmed = window.confirm(`永久删除当前${sourceLabel}？\n${selected.run_id}`);
   if (!confirmed) return;
   const runs = historyRuns();

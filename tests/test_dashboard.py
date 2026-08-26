@@ -47,6 +47,7 @@ from gaiazero.telemetry import (
     read_events,
     read_game_trace,
     read_local_game_trace,
+    write_local_game,
 )
 
 
@@ -702,14 +703,15 @@ class DashboardTests(unittest.TestCase):
                     map_piece_assets[path] = (response.headers.get_content_type(), response.read())
             with urlopen(f"{base}/api/history", timeout=5) as response:
                 history = json.loads(response.read())
-            with urlopen(
-                f"{base}/api/game?run_id=http-test&iteration=1&game=1",
-                timeout=5,
-            ) as response:
-                game = json.loads(response.read())
+            with self.assertRaises(HTTPError) as raised:
+                urlopen(
+                    f"{base}/api/game?run_id=http-test&iteration=1&game=1",
+                    timeout=5,
+                )
             self.assertEqual(data["events"][0]["type"], "run_started")
-            self.assertEqual(history["runs"][0]["iterations"][0]["iteration"], 1)
-            self.assertEqual(game["steps"][0]["move"], 0)
+            self.assertEqual(raised.exception.code, 404)
+            self.assertEqual(history["runs"], [])
+            self.assertEqual(history["training_source"], str(self.metrics.resolve()))
             self.assertIn("GaiaZero", page)
             self.assertIn("loss-chart", page)
             self.assertIn("setup-faction-catalog", page)
@@ -2123,6 +2125,62 @@ class DashboardTests(unittest.TestCase):
         self.assertTrue(trace["trace_complete"])
         self.assertEqual([step["move"] for step in trace["steps"]], [0, 1, 2])
         self.assertEqual([step["action"] for step in trace["steps"][1:]], actions)
+
+    def test_history_api_only_lists_materialized_npz_replays_and_can_delete_them(self) -> None:
+        write_local_game(
+            self.history,
+            {
+                "run_id": "npz-api-test",
+                "source": "training_npz",
+                "status": "complete",
+                "started_at": "2026-01-01T00:00:00+00:00",
+                "updated_at": "2026-01-01T00:00:00+00:00",
+                "completed_at": "2026-01-01T00:00:00+00:00",
+                "ruleset": "mini",
+                "trace": {
+                    "summary": {
+                        "moves": 0,
+                        "positions": 1,
+                        "scores": [0, 0],
+                    },
+                    "steps": [{"move": 0, "state": {"ruleset": "mini"}}],
+                },
+            },
+        )
+        telemetry = JsonlTelemetry(self.metrics, run_id="training-only")
+        telemetry.emit("run_started", config={})
+
+        server = create_dashboard_server(self.metrics, port=0, quiet=True)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            base = f"http://127.0.0.1:{server.server_port}"
+            with urlopen(f"{base}/api/history", timeout=5) as response:
+                history = json.loads(response.read())
+            self.assertEqual(
+                [run["run_id"] for run in history["runs"]],
+                ["npz-api-test"],
+            )
+            self.assertEqual(history["runs"][0]["source"], "training_npz")
+            with urlopen(
+                f"{base}/api/game?run_id=npz-api-test&iteration=1&game=1",
+                timeout=5,
+            ) as response:
+                trace = json.loads(response.read())
+            self.assertEqual(trace["source"], "training_npz")
+
+            request = Request(
+                f"{base}/api/history?run_id=npz-api-test",
+                method="DELETE",
+            )
+            with urlopen(request, timeout=5) as response:
+                deleted = json.loads(response.read())
+            self.assertTrue(deleted["deleted"])
+            self.assertFalse((self.history / "npz-api-test.json").exists())
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
 
 
 if __name__ == "__main__":

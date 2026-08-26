@@ -95,11 +95,9 @@ from gaiazero.model import (
 )
 from gaiazero.telemetry import (
     JsonlTelemetry,
-    build_history_index,
     build_local_history_index,
     delete_local_game,
     read_events,
-    read_game_trace,
     read_local_game_trace,
     write_local_game,
 )
@@ -580,18 +578,16 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         )
 
     def _serve_history(self) -> None:
-        training = build_history_index(self.server.metrics_path)
-        for run in training["runs"]:
-            run["source"] = "training"
         local = build_local_history_index(self.server.history_path)
-        runs = [*training["runs"], *local["runs"]]
-        runs.sort(key=lambda run: str(run.get("started_at") or ""))
         self._send_json(
             {
-                "runs": runs,
-                "latest_sequence": training["latest_sequence"],
-                "source": str(self.server.metrics_path),
+                # History is deliberately backed only by materialized JSON
+                # replays. Training JSONL/NPZ remains a separate data product.
+                "runs": local["runs"],
+                "latest_sequence": None,
+                "source": str(self.server.history_path),
                 "local_source": str(self.server.history_path),
+                "training_source": str(self.server.metrics_path),
             }
         )
 
@@ -615,13 +611,6 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             iteration=iteration,
             game=game,
         )
-        if trace is None:
-            trace = read_game_trace(
-                self.server.metrics_path,
-                run_id=run_id,
-                iteration=iteration,
-                game=game,
-            )
         if trace is None:
             self._send_json({"error": "game not found"}, HTTPStatus.NOT_FOUND)
             return
