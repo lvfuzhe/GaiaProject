@@ -225,7 +225,12 @@ def write_npz_shard(
     examples: Sequence[TrainingExample],
     metadata: dict[str, Any] | None = None,
 ) -> int:
-    """Atomically write a native NumPy shard consumed directly by PyTorch."""
+    """Atomically write a native NumPy shard consumed directly by PyTorch.
+
+    Self-play raw shards may additionally carry a complete replay trace in
+    ``metadata['history']``. Training ignores that field; the explicit NPZ
+    converter uses it to rebuild the dashboard replay.
+    """
     if not examples:
         raise ValueError("cannot write an empty training shard")
     payload = io.BytesIO()
@@ -244,14 +249,27 @@ def write_npz_shard(
     return len(examples)
 
 
-def read_npz_shard(path: Path) -> tuple[list[TrainingExample], dict[str, Any]]:
-    """Read and validate one raw or shuffled NumPy shard."""
+def read_npz_shard(
+    path: Path,
+    *,
+    include_metadata: bool = True,
+) -> tuple[list[TrainingExample], dict[str, Any]]:
+    """Read and validate one raw or shuffled NumPy shard.
+
+    Training workers pass ``include_metadata=False`` so complete replay traces
+    remain opaque and are not parsed during optimization. The explicit history
+    converter keeps the default and reads the trace metadata.
+    """
     with np.load(path, allow_pickle=False) as values:
         observations = np.asarray(values["observations"], dtype=np.float32)
         legal_masks = np.asarray(values["legal_masks"], dtype=np.bool_)
         policy_targets = np.asarray(values["policy_targets"], dtype=np.float32)
         value_targets = np.asarray(values["value_targets"], dtype=np.float32)
-        raw_metadata = str(values["metadata"].item()) if "metadata" in values else "{}"
+        raw_metadata = (
+            str(values["metadata"].item())
+            if include_metadata and "metadata" in values
+            else "{}"
+        )
     lengths = {len(observations), len(legal_masks), len(policy_targets), len(value_targets)}
     if len(lengths) != 1:
         raise ValueError(f"sample lengths do not match in {path}")
@@ -302,6 +320,55 @@ def run_selfplay(config: PipelineConfig, *, once: bool = False) -> int:
         for _ in range(games):
             seed = config.seed + game_index
             initial = state_type.initial(config.players, seed)
+            trace_started = time.perf_counter()
+            trace_steps: list[dict[str, Any]] = [{
+                "move": 0,
+                "player": initial.current_player,
+                "action": None,
+                "action_label": "initial state",
+                "legal_actions": len(initial.legal_actions()),
+                "search_sampled": False,
+                "root_value": None,
+                "candidates": [],
+                "state": initial.snapshot(),
+            }]
+
+            def observe_move(
+                move: int,
+                before: Any,
+                action: int,
+                after: Any,
+                search_result: Any,
+            ) -> None:
+                top_actions = np.argsort(search_result.policy)[-3:][::-1]
+                candidates = [
+                    {
+                        "action": int(candidate),
+                        "label": before.describe_action(int(candidate)),
+                        "probability": float(search_result.policy[candidate]),
+                        "visits": int(search_result.visits[candidate]),
+                    }
+                    for candidate in top_actions
+                    if search_result.policy[candidate] > 0
+                ]
+                root_value = np.asarray(search_result.root_value)
+                root_value_payload: Any = (
+                    root_value.item()
+                    if root_value.ndim == 0
+                    else root_value.tolist()
+                )
+                trace_steps.append({
+                    "move": move,
+                    "player": before.current_player,
+                    "action": action,
+                    "action_label": before.describe_action(action),
+                    "legal_actions": len(before.legal_actions()),
+                    "search_sampled": True,
+                    "root_value": root_value_payload,
+                    "candidates": candidates,
+                    "state": after.snapshot(),
+                })
+
             result = play_self_game(
                 initial,
                 evaluator,
@@ -311,6 +378,7 @@ def run_selfplay(config: PipelineConfig, *, once: bool = False) -> int:
                     max_moves=config.max_moves,
                     seed=seed,
                 ),
+                observer=observe_move,
             )
             destination = paths["raw"] / (
                 f"game-{time.time_ns()}-{os.getpid()}-{game_index:08d}.npz"
@@ -326,6 +394,19 @@ def run_selfplay(config: PipelineConfig, *, once: bool = False) -> int:
                     "architecture": expected_network.architecture,
                     "moves": len(result.actions),
                     "weight": source[0],
+                    "history_format": "gaiazero-replay-trace-v1",
+                    "history": {
+                        "summary": {
+                            "moves": len(result.actions),
+                            "positions": len(result.examples),
+                            "scores": list(result.final_state.final_scores()),
+                            "returns": result.final_state.returns().tolist(),
+                            "duration_seconds": time.perf_counter() - trace_started,
+                        },
+                        "trace_complete": len(trace_steps) == len(result.actions) + 1,
+                        "captured_moves": len(result.actions),
+                        "steps": trace_steps,
+                    },
                 },
             )
             print(
@@ -358,7 +439,7 @@ def run_shuffle(config: PipelineConfig, *, once: bool = False) -> int:
         if pending:
             examples: list[TrainingExample] = []
             for path in pending:
-                shard, _metadata = read_npz_shard(path)
+                shard, _metadata = read_npz_shard(path, include_metadata=False)
                 examples.extend(shard)
             random.Random(config.seed + int(state.get("sequence", 0))).shuffle(examples)
             sequence = int(state.get("sequence", 0))
@@ -403,7 +484,7 @@ def _fill_replay(
     for path in sorted(paths["shuffled"].glob("*.npz")):
         if path.name in loaded:
             continue
-        examples, _metadata = read_npz_shard(path)
+        examples, _metadata = read_npz_shard(path, include_metadata=False)
         replay.extend(examples)
         loaded.add(path.name)
         added += len(examples)

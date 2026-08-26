@@ -68,6 +68,8 @@ class DistributedPipelineTests(unittest.TestCase):
                 self.assertEqual(metadata["kind"], "shuffled-training-pack")
             self.assertEqual(len(examples), 4)
             self.assertFalse(any(root.rglob("*.tfrecord")))
+            with self.assertRaisesRegex(ValueError, "complete replay trace"):
+                convert_npz_to_history(shards[0], root / "history")
 
     def test_gaiazero_bin_round_trip(self) -> None:
         config = NetworkConfig(

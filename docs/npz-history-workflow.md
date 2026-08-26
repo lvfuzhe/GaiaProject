@@ -24,9 +24,12 @@ For a directory:
 python scripts/npz_to_history.py runs/pipeline-4p/raw --history-dir runs/history
 ```
 
-The converter writes `source=training_npz` local-history JSON. The existing
-history API and page can load it, and the converted run can be deleted from the
-page or with:
+Raw self-play NPZ files contain both the four training arrays and a complete
+`gaiazero-replay-trace-v1` history: initial setup, every action, post-action
+state snapshot, MCTS candidates, and the terminal state. The converter writes
+that trace as `source=training_npz` local-history JSON. The existing history
+API and page can load it, and the converted run can be deleted from the page or
+with:
 
 ```powershell
 gaiazero delete-training-history npz-game-0001 --history-dir runs/history

@@ -16,35 +16,6 @@ from gaiazero.distributed import read_npz_shard
 from gaiazero.telemetry import delete_local_game, write_local_game
 
 
-def _minimal_state(metadata: dict[str, Any], move: int, player: Any) -> dict[str, Any]:
-    players = max(1, int(metadata.get("players", 3) or 3))
-    return {
-        "ruleset": metadata.get("ruleset", "unknown"),
-        "round": 0,
-        "max_rounds": 6,
-        "phase": "training_sample",
-        "current_player": player,
-        "terminal": False,
-        "scores": [0.0] * players,
-        "players": [
-            {
-                "id": index,
-                "name": f"P{index}",
-                "faction": "Unknown",
-                "credits": 0,
-                "ore": 0,
-                "knowledge": 0,
-                "qic": 0,
-                "vp": 0,
-                "tracks": [0, 0, 0, 0, 0, 0],
-            }
-            for index in range(players)
-        ],
-        "planets": [],
-        "training_sample_move": move,
-    }
-
-
 def _history_record(
     source: Path,
     metadata: dict[str, Any],
@@ -56,30 +27,8 @@ def _history_record(
     steps = history.get("steps") if isinstance(history, dict) else None
     summary = history.get("summary") if isinstance(history, dict) else None
     if not isinstance(steps, list) or not steps:
-        steps = []
-        try:
-            examples, _ = read_npz_shard(source)
-        except (OSError, ValueError, KeyError, json.JSONDecodeError):
-            examples = []
-        for move, _example in enumerate(examples, start=1):
-            steps.append(
-                {
-                    "move": move,
-                    "player": None,
-                    "action": None,
-                    "action_label": "training sample (state snapshot unavailable)",
-                    "state": _minimal_state(metadata, move, None),
-                }
-            )
-        steps.insert(
-            0,
-            {
-                "move": 0,
-                "player": None,
-                "action": None,
-                "action_label": "training sample archive",
-                "state": _minimal_state(metadata, 0, None),
-            },
+        raise ValueError(
+            "NPZ does not contain a complete replay trace; only raw self-play game NPZ files can be converted"
         )
     normalized_steps = []
     for index, raw_step in enumerate(steps):
@@ -90,10 +39,15 @@ def _history_record(
         step.setdefault("player", None)
         step.setdefault("action", None)
         step.setdefault("action_label", "training sample")
-        step.setdefault("state", _minimal_state(metadata, int(step["move"]), step.get("player")))
+        if not isinstance(step.get("state"), dict):
+            raise ValueError("NPZ replay trace contains a step without a state snapshot")
         normalized_steps.append(step)
     normalized_steps.sort(key=lambda item: int(item.get("move", 0)))
     moves = max(0, len(normalized_steps) - 1)
+    if not normalized_steps or int(normalized_steps[0].get("move", -1)) != 0:
+        raise ValueError("NPZ replay trace must start with move 0")
+    if [int(step.get("move", -1)) for step in normalized_steps] != list(range(moves + 1)):
+        raise ValueError("NPZ replay trace contains missing or duplicate moves")
     if not isinstance(summary, dict):
         summary = {}
     summary = {
@@ -123,7 +77,7 @@ def _history_record(
             "iteration": 1,
             "game": 1,
             "summary": summary,
-            "trace_complete": bool(normalized_steps and summary["moves"] == moves),
+        "trace_complete": summary["moves"] == moves,
             "captured_moves": moves,
             "steps": normalized_steps,
         },
