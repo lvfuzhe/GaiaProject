@@ -100,7 +100,9 @@ gaiazero dashboard --metrics runs/metrics.jsonl --history-dir runs/play-history 
 
 浏览器访问 `http://127.0.0.1:8765`。监控台包含概览、人工对战、自博弈、历史回放、BGA 导入
 和诊断六个视图。人工对战内按“初始设置 → 角色与对局”两步工作区配置随机拼接地图、种族座位、
-计分/科技/助推板块，并可在同一局中切换人工与 AI；训练模型不会读取这套人工对局配置。
+计分/科技/助推板块，并可在同一局中切换人工与 AI。角色与对局页面的“AI 模型”下拉框会从
+`runs/models/*.pt` 加载与当前人数匹配的 2/3/4 人 KataGo 检查点；选择“自动匹配当前人数”时，
+系统按人数寻找 `gaia-standard-{人数}p-katago.pt`，找不到时使用启发式 PIMCTS。训练模型不会读取这套人工对局配置。
 
 在 `http://127.0.0.1:8765/import/bga` 输入 BGA 账号、密码和一条已结束对局的
 `gamereview?table=...` 或 `archive/replay/...` 地址，可以手动下载单局复盘。勾选“加密保存”后，

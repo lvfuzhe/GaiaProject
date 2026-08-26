@@ -265,6 +265,11 @@ const state = {
     polling: false,
     autoAi: true,
     aiTimer: null,
+    modelCheckpoint: "auto",
+    models: [],
+    modelsPlayers: null,
+    modelsLoading: false,
+    modelsRequestId: 0,
     message: "就绪",
     messageStatus: "ready"
   }
@@ -3792,6 +3797,51 @@ function ensurePlaySeats(players = state.play.players) {
   );
 }
 
+function renderInteractiveModelSelect(players) {
+  const select = byId("play-config-model");
+  if (!select) return;
+  const compatible = state.play.modelsPlayers === players
+    ? state.play.models.filter((model) => model.compatible)
+    : [];
+  const options = [
+    `<option value="auto">自动匹配当前人数${state.play.modelsLoading ? "（加载中…）" : ""}</option>`,
+    ...compatible.map((model) => `<option value="${escapeHtml(model.filename)}">${escapeHtml(model.label)} · ${model.players}人</option>`),
+  ];
+  if (state.play.modelCheckpoint !== "auto"
+      && !compatible.some((model) => model.filename === state.play.modelCheckpoint)) {
+    state.play.modelCheckpoint = "auto";
+  }
+  select.innerHTML = options.join("");
+  select.value = state.play.modelCheckpoint;
+  select.disabled = state.play.modelsLoading;
+  select.title = compatible.length
+    ? "只显示与当前人数和统一 KataGo 架构兼容的模型"
+    : "未发现兼容模型，将使用启发式 PIMCTS";
+}
+
+async function loadInteractiveModels(players) {
+  const requestId = ++state.play.modelsRequestId;
+  state.play.modelsLoading = true;
+  renderPlayConfig();
+  try {
+    const response = await fetch(`/api/play/models?players=${encodeURIComponent(players)}`, { cache: "no-store" });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    if (requestId !== state.play.modelsRequestId) return;
+    state.play.models = Array.isArray(data.models) ? data.models : [];
+    state.play.modelsPlayers = Number(data.players);
+  } catch (error) {
+    if (requestId !== state.play.modelsRequestId) return;
+    state.play.models = [];
+    state.play.modelsPlayers = players;
+  } finally {
+    if (requestId === state.play.modelsRequestId) {
+      state.play.modelsLoading = false;
+      renderPlayConfig();
+    }
+  }
+}
+
 function playRoleSegment(role, player, live = false, disabled = false) {
   const scope = live ? "live" : "config";
   return `<div class="play-role-segment" role="group" aria-label="P${player} 控制方式">
@@ -3812,6 +3862,7 @@ function renderPlayConfig() {
   byId("play-config-players-summary").textContent = `${players} 人`;
   byId("play-config-seed-summary").textContent = String(seed);
   byId("play-config-first-player-summary").textContent = `P${firstPlayer}`;
+  renderInteractiveModelSelect(players);
   byId("play-config-seats").innerHTML = state.play.factions.map((selected, player) => {
     const faction = BASE_FACTIONS.find((item) => item.id === selected) || BASE_FACTIONS[0];
     return `<article class="play-seat-config">
@@ -3838,6 +3889,7 @@ function playConfigPayload() {
   return {
     ...config,
     simulations,
+    model_checkpoint: state.play.modelCheckpoint,
     roles: [...state.play.roles],
   };
 }
@@ -3901,6 +3953,9 @@ async function postPlay(path, payload = {}) {
 
 function acceptPlaySession(session) {
   state.play.session = session?.status === "idle" ? null : session;
+  if (state.play.session?.config?.model_checkpoint) {
+    state.play.modelCheckpoint = state.play.session.config.model_checkpoint;
+  }
   if (state.play.session) state.play.workspace = "match";
   if (state.play.session?.archive_error) {
     setPlayMessage(`本地历史保存失败：${state.play.session.archive_error}`, "failed");
@@ -4468,6 +4523,16 @@ byId("play-config-seats").addEventListener("click", (event) => {
   setPlayMessage("座位控制方式已更新", "ready");
   renderPlayConfig();
 });
+byId("play-config-model").addEventListener("change", (event) => {
+  state.play.modelCheckpoint = event.target.value || "auto";
+  setPlayMessage(
+    state.play.modelCheckpoint === "auto"
+      ? "AI 模型设为按人数自动匹配"
+      : `已选择 AI 模型 ${state.play.modelCheckpoint}`,
+    "ready",
+  );
+  renderPlayConfig();
+});
 byId("play-config-form").addEventListener("submit", (event) => {
   event.preventDefault();
   startInteractiveGame();
@@ -4516,6 +4581,7 @@ byId("setup-editor-players").addEventListener("change", () => {
   renderRandomElementEditor();
   setSetupEditorMessage("玩家人数已修改，随机元素已按合法模板重置", "ready");
   renderPlayConfig();
+  void loadInteractiveModels(Number(byId("setup-editor-players").value));
 });
 byId("setup-editor-map-size").addEventListener("change", () => {
   const players = Number(byId("setup-editor-players").value);
@@ -4710,6 +4776,7 @@ const pathView = window.location.pathname.startsWith("/setup/")
     ? "play"
     : window.location.pathname === "/import/bga" ? "bga-import" : "";
 selectView((initialHash === "setup" ? "play" : initialHash) || pathView || "overview");
+void loadInteractiveModels(Number(byId("setup-editor-players").value || 2));
 loadBgaSession();
 pollEvents(true);
 pollInteractiveGame();
