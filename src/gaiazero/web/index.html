@@ -674,7 +674,14 @@
                 <p class="eyebrow">Recorded state</p>
                 <h3>规则状态</h3>
               </div>
-              <span id="history-board-round" class="compact-value">第 -- 轮</span>
+              <div class="history-board-heading-tools">
+                <span id="history-board-round" class="compact-value">第 -- 轮</span>
+                <div class="history-map-controls" aria-label="星图显示控制">
+                  <label title="缩放星图"><span>缩放</span><input id="history-map-zoom" type="range" min="0.75" max="1.6" step="0.05" value="1" aria-label="星图缩放"><output id="history-map-zoom-value" for="history-map-zoom">100%</output></label>
+                  <label title="切换星图背景"><span>背景</span><select id="history-map-background" aria-label="星图背景"><option value="#171d23">炭灰</option><option value="#050b14">深空</option><option value="#0b1624">蓝黑</option><option value="#28313a">灰蓝</option></select></label>
+                  <button id="history-map-reset" class="icon-button" type="button" title="重置星图显示" aria-label="重置星图显示">↺</button>
+                </div>
+              </div>
             </div>
             <div class="board-frame history-star-map-frame">
               <canvas id="history-board-canvas" aria-label="历史规则状态棋盘"></canvas>
@@ -743,12 +750,12 @@
           </div>
           <div class="history-components-grid">
             <section class="history-component-group history-round-group" aria-labelledby="history-round-heading">
-              <div class="history-component-heading"><strong id="history-round-heading">轮次计分</strong><small>当前进度</small></div>
-              <div id="history-round-scoring" class="history-round-scoring"></div>
-            </section>
-            <section class="history-component-group history-final-group" aria-labelledby="history-final-heading">
-              <div class="history-component-heading"><strong id="history-final-heading">终局计分</strong><small>实时排名目标</small></div>
-              <div id="history-final-scoring" class="history-final-scoring"></div>
+              <div class="history-component-heading"><strong id="history-round-heading">回合面板</strong><small id="history-round-status">等待历史快照</small></div>
+              <div class="history-round-summary"><strong id="history-round-current">第 -- 轮</strong><span id="history-round-score-note">等待回合计分板块</span></div>
+              <div class="history-round-panel-grid">
+                <div class="history-round-panel-section"><strong>回合计分片</strong><div id="history-round-scoring" class="history-round-scoring history-round-track"></div></div>
+                <div class="history-round-panel-section"><strong id="history-final-heading">终局计分片</strong><div id="history-final-scoring" class="history-final-scoring"></div></div>
+              </div>
             </section>
             <section class="history-component-group history-booster-group" aria-labelledby="history-booster-heading">
               <div class="history-component-heading"><strong id="history-booster-heading">助推板块</strong><small>公共池与持有者</small></div>

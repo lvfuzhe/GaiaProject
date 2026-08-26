@@ -234,7 +234,12 @@ const state = {
     indexRequestId: 0,
     message: "",
     playing: false,
-    timer: null
+    timer: null,
+    mapView: {
+      zoom: 1,
+      gap: 0,
+      background: "#171d23",
+    },
   },
   bgaImport: {
     busy: false,
@@ -662,6 +667,9 @@ function finalRanking(snapshot, tile) {
 function renderHistoryConfiguredComponents(snapshot) {
   const setup = snapshot?.setup;
   const status = byId("history-components-status");
+  const roundStatus = byId("history-round-status");
+  const roundCurrent = byId("history-round-current");
+  const roundScoreNote = byId("history-round-score-note");
   const roundTarget = byId("history-round-scoring");
   const finalTarget = byId("history-final-scoring");
   const boosterTarget = byId("history-boosters");
@@ -670,6 +678,9 @@ function renderHistoryConfiguredComponents(snapshot) {
 
   if (!setup) {
     status.textContent = "当前快照没有初始配置";
+    if (roundStatus) roundStatus.textContent = "等待历史快照";
+    if (roundCurrent) roundCurrent.textContent = "第 -- 轮";
+    if (roundScoreNote) roundScoreNote.textContent = "等待回合计分板块";
     roundTarget.innerHTML = "";
     finalTarget.innerHTML = "";
     boosterTarget.innerHTML = "";
@@ -679,7 +690,26 @@ function renderHistoryConfiguredComponents(snapshot) {
 
   const currentRound = Number(snapshot.round || 0);
   const terminal = Boolean(snapshot.terminal);
+  const players = Array.isArray(snapshot.players) ? snapshot.players : [];
   const roundScoring = Array.isArray(setup.round_scoring) ? setup.round_scoring : [];
+  const roundCount = roundScoring.length || 6;
+  const roundStateLabel = terminal
+    ? "对局结束"
+    : currentRound > 0
+      ? `第 ${Math.min(currentRound, roundCount)} 轮进行中`
+      : "开局阶段";
+  if (roundStatus) roundStatus.textContent = roundStateLabel;
+  if (roundCurrent) roundCurrent.textContent = terminal
+    ? "终局"
+    : currentRound > 0
+      ? `第 ${Math.min(currentRound, roundCount)} / ${roundCount} 轮`
+      : "开局阶段";
+  const activeTile = roundScoring.find((tile) => Number(tile.round) === currentRound);
+  if (roundScoreNote) roundScoreNote.textContent = activeTile
+    ? `${setupLabel(activeTile)} · ${formatNumber(activeTile.points)} VP`
+    : roundScoring.length
+      ? `${roundScoring.length} 个回合计分板块 · 当前板块已高亮`
+      : "未记录回合计分板块";
   roundTarget.innerHTML = roundScoring.map((tile) => {
     const round = Number(tile.round);
     const current = !terminal && currentRound === round;
@@ -693,18 +723,27 @@ function renderHistoryConfiguredComponents(snapshot) {
   }).join("");
 
   const finalScoring = Array.isArray(setup.final_scoring) ? setup.final_scoring : [];
+  const finalTrackColumns = Math.max(3, Math.min(4, players.length || 3));
   finalTarget.innerHTML = finalScoring.map((tile, index) => {
     const name = setupLabel(tile);
     const ranking = snapshot?.players?.length ? finalRanking(snapshot, tile) : [];
     const rankingLabel = ranking.map((entry) => `P${entry.player.id} ${entry.value}`).join(" · ");
+    const trackRanks = Array.from({ length: Math.max(3, players.length) }, (_, rankIndex) => {
+      const rank = rankIndex + 1;
+      const tokens = ranking
+        .filter((entry) => entry.rank === rank)
+        .map((entry) => `<span class="history-score-token p${entry.player.id}" title="P${entry.player.id} · ${formatNumber(entry.value)}">P${entry.player.id}</span>`)
+        .join("");
+      return `<div class="history-final-rank"><small>#${rank}</small><span>${tokens || "·"}</span></div>`;
+    }).join("");
     return `<article class="history-final-tile" title="${escapeHtml(name)}${rankingLabel ? ` · ${escapeHtml(rankingLabel)}` : ""}">
       <span class="history-component-art"><img src="${tileAsset("final", tile.id)}" alt="${escapeHtml(name)}"></span>
       <span class="history-component-meta"><strong>终局 ${index + 1}</strong><small>${escapeHtml(name)}</small></span>
+      <span class="history-final-track" style="--history-final-columns:${finalTrackColumns}" aria-label="${escapeHtml(name)}终局计分轨">${trackRanks}</span>
     </article>`;
   }).join("");
 
   const boosters = Array.isArray(setup.boosters) ? setup.boosters : [];
-  const players = Array.isArray(snapshot.players) ? snapshot.players : [];
   boosterTarget.innerHTML = boosters.map((booster) => {
     const currentOwner = players.find((player) => Number(player.booster) === Number(booster.id));
     const ownerId = currentOwner?.id ?? Number(booster.owner ?? -1);
@@ -2329,9 +2368,21 @@ function renderHistory() {
   state.history.step = Math.max(0, Math.min(state.history.step, steps.length - 1));
   const step = steps[state.history.step];
   const snapshot = step.state;
+  const mapView = state.history.mapView;
+  const mapFrame = byId("history-board-canvas")?.parentElement;
+  if (mapFrame) mapFrame.style.backgroundColor = mapView.background;
+  const zoomInput = byId("history-map-zoom");
+  const backgroundInput = byId("history-map-background");
+  if (zoomInput) zoomInput.value = String(mapView.zoom);
+  if (backgroundInput) backgroundInput.value = mapView.background;
+  const zoomOutput = byId("history-map-zoom-value");
+  if (zoomOutput) zoomOutput.value = `${Math.round(mapView.zoom * 100)}%`;
   drawStarMapBoard(byId("history-board-canvas"), snapshot, true, {
     showPlanetIds: true,
     selectedPlanetId: step.record?.target ?? null,
+    zoom: mapView.zoom,
+    gap: 0,
+    backgroundColor: mapView.background,
   });
   byId("history-board-empty").hidden = Boolean(snapshot);
   byId("history-board-round").textContent = snapshotRoundLabel(snapshot);
@@ -2417,9 +2468,9 @@ function seededCanvasRandom(seed) {
   };
 }
 
-function drawStarfield(context, width, height, seed) {
+function drawStarfield(context, width, height, seed, backgroundColor = "#050b14") {
   context.save();
-  context.fillStyle = "#050b14";
+  context.fillStyle = backgroundColor;
   context.fillRect(0, 0, width, height);
   const random = seededCanvasRandom(seed);
   const stars = Math.max(120, Math.round(width * height / 1050));
@@ -2464,7 +2515,7 @@ function assembledBoardSpaces(sectors) {
   return [...spaces.values()];
 }
 
-function boardGeometry(width, height, snapshot, showSectors) {
+function boardGeometry(width, height, snapshot, showSectors, zoom = 1) {
   const sectors = snapshot.setup?.map?.sectors || [];
   const spaces = assembledBoardSpaces(sectors);
   const tileWidthUnits = 5 * Math.sqrt(3);
@@ -2488,10 +2539,11 @@ function boardGeometry(width, height, snapshot, showSectors) {
   const maxY = Math.max(...raw.map((point) => point.rawY));
   const compactMap = showSectors && width < 500;
   const padding = compactMap ? 54 : (showSectors ? 90 : 70);
-  const scale = Math.max(1, Math.min(
+  const baseScale = Math.max(1, Math.min(
     Math.max(1, width - padding) / Math.max(1, maxX - minX),
     Math.max(1, height - padding) / Math.max(1, maxY - minY),
   ));
+  const scale = baseScale * Math.max(0.7, Math.min(1.8, Number(zoom) || 1));
   return {
     spaces,
     compactMap,
@@ -2513,10 +2565,11 @@ function drawSectorArtworkBackground(
   compactMap,
   tileWidthUnits = 5 * Math.sqrt(3),
   tileHeightUnits = 8,
+  gap = 0,
 ) {
   // Keep a transparent border around every BGA sector so adjacent tiles remain
   // visually distinct instead of merging into one continuous hex field.
-  const artworkScale = compactMap ? 0.89 : 0.92;
+  const artworkScale = Math.max(0.72, (compactMap ? 0.89 : 0.92) - Math.max(0, Number(gap) || 0) * 0.012);
   const imageWidth = tileWidthUnits * scale * artworkScale;
   const imageHeight = tileHeightUnits * scale * artworkScale;
   const artwork = getMapPieceArtwork("sectorBackground");
@@ -2565,6 +2618,53 @@ function drawAssembledHexGrid(context, sectors, scale, offsetX, offsetY, compact
   context.restore();
 }
 
+function drawSectorSeparators(context, sectors, scale, offsetX, offsetY, compactMap, gap = 0) {
+  const localSpaces = sectorLocalSpaces();
+  for (const sector of sectors) {
+    const edges = new Map();
+    for (const local of localSpaces) {
+      const q = Number(sector.q) + local.q;
+      const r = Number(sector.r) + local.r;
+      const centerX = offsetX + Math.sqrt(3) * (q + r / 2) * scale;
+      const centerY = offsetY + 1.5 * r * scale;
+      const vertices = Array.from({ length: 6 }, (_, side) => {
+        const angle = Math.PI / 180 * (60 * side - 30);
+        return {
+          x: centerX + scale * Math.cos(angle),
+          y: centerY + scale * Math.sin(angle),
+        };
+      });
+      for (let side = 0; side < 6; side += 1) {
+        const start = vertices[side];
+        const end = vertices[(side + 1) % 6];
+        const first = `${start.x.toFixed(3)},${start.y.toFixed(3)}`;
+        const second = `${end.x.toFixed(3)},${end.y.toFixed(3)}`;
+        const key = first < second ? `${first}|${second}` : `${second}|${first}`;
+        const edge = edges.get(key);
+        if (edge) edge.count += 1;
+        else edges.set(key, { start, end, count: 1 });
+      }
+    }
+
+    context.save();
+    context.beginPath();
+    for (const edge of edges.values()) {
+      if (edge.count !== 1) continue;
+      context.moveTo(edge.start.x, edge.start.y);
+      context.lineTo(edge.end.x, edge.end.y);
+    }
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.strokeStyle = "rgba(1, 5, 12, 0.96)";
+    context.lineWidth = Math.max(compactMap ? 3.5 : 5.5, scale * (0.24 + Math.max(0, Number(gap) || 0) * 0.012));
+    context.stroke();
+    context.strokeStyle = "rgba(126, 161, 190, 0.42)";
+    context.lineWidth = compactMap ? 0.7 : 1;
+    context.stroke();
+    context.restore();
+  }
+}
+
 function drawPlanetArtwork(context, x, y, size, cellScale, planet, snapshot) {
   void snapshot;
   const terrain = Number(planet.terrain);
@@ -2599,6 +2699,24 @@ function drawPlanetArtwork(context, x, y, size, cellScale, planet, snapshot) {
   return true;
 }
 
+function drawPlayerToken(context, x, y, playerId, cellSize, compactMap) {
+  const radius = Math.max(compactMap ? 4 : 5.5, cellSize * (compactMap ? 0.22 : 0.27));
+  context.save();
+  context.fillStyle = PLAYER_COLORS[playerId] || "#d9e2e8";
+  context.strokeStyle = "rgba(255,255,255,0.92)";
+  context.lineWidth = compactMap ? 0.8 : 1.1;
+  context.beginPath();
+  context.arc(x, y, radius, 0, Math.PI * 2);
+  context.fill();
+  context.stroke();
+  context.fillStyle = "#ffffff";
+  context.font = `800 ${Math.max(5, radius * 0.95)}px Segoe UI`;
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillText(`P${playerId}`, x, y + 0.2);
+  context.restore();
+}
+
 function drawStarMapBoard(canvas, snapshot, showPlayerPieces, extraOptions = {}) {
   drawBoard(canvas, snapshot, {
     showSectors: true,
@@ -2614,7 +2732,13 @@ function drawBoard(canvas, snapshot, options = {}) {
   const { context, width, height } = setupCanvas(canvas);
   context.clearRect(0, 0, width, height);
   if (!snapshot || !snapshot.planets?.length) return;
-  if (options.starfield) drawStarfield(context, width, height, snapshot.setup?.seed || 0);
+  if (options.starfield) drawStarfield(
+    context,
+    width,
+    height,
+    snapshot.setup?.seed || 0,
+    options.backgroundColor || "#050b14",
+  );
   const showSectors = options.showSectors ?? Boolean(snapshot.setup?.map?.sectors?.length);
   const sectors = snapshot.setup?.map?.sectors || [];
 
@@ -2623,7 +2747,7 @@ function drawBoard(canvas, snapshot, options = {}) {
     rawX: Math.sqrt(3) * (planet.q + planet.r / 2),
     rawY: 1.5 * planet.r
   }));
-  const geometry = boardGeometry(width, height, snapshot, showSectors);
+  const geometry = boardGeometry(width, height, snapshot, showSectors, options.zoom || 1);
   const {
     compactMap,
     scale,
@@ -2648,8 +2772,10 @@ function drawBoard(canvas, snapshot, options = {}) {
         compactMap,
         tileWidthUnits,
         tileHeightUnits,
+        options.gap || 0,
       );
       drawAssembledHexGrid(context, sectors, scale, offsetX, offsetY, compactMap);
+      drawSectorSeparators(context, sectors, scale, offsetX, offsetY, compactMap, options.gap || 0);
     } else if (options.starfield) {
       drawAssembledHexGrid(context, sectors, scale, offsetX, offsetY, compactMap);
     } else {
@@ -2762,6 +2888,19 @@ function drawBoard(canvas, snapshot, options = {}) {
         context.stroke();
         context.restore();
       }
+    }
+    if (options.showPlayerPieces !== false && planet.owner >= 0) {
+      drawPlayerToken(context, x - size * 0.62, y - size * 0.62, planet.owner, size, compactMap);
+    }
+    if (options.showPlayerPieces !== false && planet.coexisting_mine_owner >= 0) {
+      drawPlayerToken(
+        context,
+        x + size * 0.62,
+        y - size * 0.62,
+        planet.coexisting_mine_owner,
+        size,
+        compactMap,
+      );
     }
     if (options.showPlayerPieces !== false && planet.gaiaformer >= 0 && planet.owner < 0) {
       context.strokeStyle = PLAYER_COLORS[planet.gaiaformer] || "#17211d";
@@ -4038,11 +4177,17 @@ function renderPlay() {
     .filter((action) => ["ivits_space_station", "lost_planet"].includes(action.kind))
     .map((action) => ({ q: Number(action.space_q), r: Number(action.space_r) }))
     .filter((space) => Number.isFinite(space.q) && Number.isFinite(space.r));
+  const mapView = state.history.mapView;
+  const playMapFrame = byId("play-board-canvas")?.parentElement;
+  if (playMapFrame) playMapFrame.style.backgroundColor = mapView.background;
   drawStarMapBoard(byId("play-board-canvas"), snapshot, true, {
     legalPlanetIds,
     legalSpaceStations,
     selectedPlanetId: state.play.selectedPlanetId,
     showPlanetIds: true,
+    zoom: mapView.zoom,
+    gap: 0,
+    backgroundColor: mapView.background,
   });
   byId("play-board-empty").hidden = Boolean(snapshot?.planets?.length);
   byId("play-board-round").textContent = playPhaseLabel(snapshot);
@@ -4495,6 +4640,18 @@ byId("history-game-select").addEventListener("change", async (event) => {
   state.history.game = Number(event.target.value);
   state.history.trace = null;
   await loadHistoryGame(true);
+});
+byId("history-map-zoom").addEventListener("input", (event) => {
+  state.history.mapView.zoom = Math.max(0.75, Math.min(1.6, Number(event.target.value) || 1));
+  renderHistory();
+});
+byId("history-map-background").addEventListener("change", (event) => {
+  state.history.mapView.background = event.target.value || "#171d23";
+  renderHistory();
+});
+byId("history-map-reset").addEventListener("click", () => {
+  state.history.mapView = { zoom: 1, gap: 0, background: "#171d23" };
+  renderHistory();
 });
 byId("history-step-slider").addEventListener("input", (event) => setHistoryStep(event.target.value));
 byId("history-previous").addEventListener("click", () => setHistoryStep(state.history.step - 1));

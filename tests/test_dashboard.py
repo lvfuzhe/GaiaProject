@@ -737,6 +737,12 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("history-research-player-legend", page)
             self.assertIn("history-round-scoring", page)
             self.assertIn("history-final-scoring", page)
+            self.assertIn("history-round-panel-grid", page)
+            self.assertIn("history-map-zoom", page)
+            self.assertNotIn("history-map-gap", page)
+            self.assertIn("history-map-background", page)
+            self.assertIn("history-round-status", page)
+            self.assertIn("history-round-current", page)
             self.assertIn("history-boosters", page)
             self.assertIn("history-federation-supply", page)
             self.assertIn("history-action-log", page)
@@ -756,13 +762,26 @@ class DashboardTests(unittest.TestCase):
             )
             self.assertIn("function drawStarMapBoard", app_script)
             self.assertIn("function drawSectorArtworkBackground", app_script)
-            self.assertIn("const artworkScale = compactMap ? 0.89 : 0.92", app_script)
+            self.assertIn("function drawSectorSeparators", app_script)
+            self.assertIn("(compactMap ? 0.89 : 0.92) -", app_script)
+            self.assertIn("scale * (0.24 +", app_script)
+            self.assertIn("function drawPlayerToken", app_script)
+            self.assertIn("history-round-score-note", app_script)
+            self.assertIn("history-final-track", app_script)
+            self.assertIn("--history-final-columns", app_script)
+            self.assertIn('background: "#171d23"', app_script)
+            self.assertIn("gap: 0", app_script)
             self.assertIn("const useSectorArtwork = options.sectorArtwork ?? true", app_script)
             self.assertIn("function setupSectorCount", app_script)
             self.assertIn(
                 'drawStarMapBoard(byId("history-board-canvas"), snapshot, true, {',
                 app_script,
             )
+            self.assertIn(
+                'drawStarMapBoard(byId("play-board-canvas"), snapshot, true, {',
+                app_script,
+            )
+            self.assertIn("const playMapFrame = byId(\"play-board-canvas\")?.parentElement", app_script)
             self.assertIn("function handlePlanetEditorClick", app_script)
             self.assertIn("function resetPlanetLayout", app_script)
             self.assertIn("function addPlanetAt", app_script)
