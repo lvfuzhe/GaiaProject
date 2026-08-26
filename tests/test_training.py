@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from gaiazero.game import MiniGaiaHeuristicEvaluator, MiniGaiaState
+from gaiazero.game import GaiaHeuristicEvaluator, GaiaState
 from gaiazero.mcts import SearchConfig
 from gaiazero.model import (
     KATAGO_ARCHITECTURE,
@@ -59,10 +59,10 @@ class TrainingPipelineTests(unittest.TestCase):
             )
 
     def test_self_play_train_and_checkpoint_round_trip(self) -> None:
-        state = MiniGaiaState.initial(num_players=2)
+        state = GaiaState.initial(num_players=2)
         game = play_self_game(
             state,
-            MiniGaiaHeuristicEvaluator(),
+            GaiaHeuristicEvaluator(),
             SearchConfig(simulations=2, seed=2),
             SelfPlayConfig(temperature_moves=4, seed=2),
         )

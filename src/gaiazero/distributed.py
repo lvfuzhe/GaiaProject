@@ -35,8 +35,6 @@ from gaiazero.arena import evaluate_against
 from gaiazero.game import (
     GaiaHeuristicEvaluator,
     GaiaState,
-    MiniGaiaHeuristicEvaluator,
-    MiniGaiaState,
 )
 from gaiazero.mcts import SearchConfig
 from gaiazero.model import (
@@ -61,7 +59,6 @@ EXPORT_MAGIC = b"GAIAZERO-MULTIPLAYER-BIN-V1\0"
 class PipelineConfig:
     root: Path = Path("runs/multiplayer-pipeline")
     players: int = 4
-    ruleset: str = "standard"
     seed: int = 0
     simulations: int = 64
     c_puct: float = 1.5
@@ -85,8 +82,6 @@ class PipelineConfig:
     def __post_init__(self) -> None:
         if self.players not in (2, 3, 4):
             raise ValueError("the multiplayer pipeline supports 2, 3 or 4 players")
-        if self.ruleset not in ("standard", "mini"):
-            raise ValueError("ruleset must be standard or mini")
         positive = (
             "simulations",
             "max_moves",
@@ -199,6 +194,9 @@ def save_pipeline_config(config: PipelineConfig) -> Path:
 def load_pipeline_config(path: str | Path) -> PipelineConfig:
     payload = _read_json(Path(path), {})
     payload.pop("format", None)
+    # Older pipeline files may contain the removed ruleset selector. The
+    # current pipeline always runs the standard GaiaState environment.
+    payload.pop("ruleset", None)
     if not payload:
         raise ValueError(f"pipeline configuration is missing or invalid: {path}")
     payload["root"] = Path(payload["root"])
@@ -209,14 +207,12 @@ def _stop_requested(root: Path) -> bool:
     return (root / "STOP").exists()
 
 
-def _game_components(ruleset: str):
-    if ruleset == "mini":
-        return MiniGaiaState, MiniGaiaHeuristicEvaluator()
+def _game_components():
     return GaiaState, GaiaHeuristicEvaluator()
 
 
 def _network_config(config: PipelineConfig) -> tuple[type, NetworkConfig]:
-    state_type, _baseline = _game_components(config.ruleset)
+    state_type, _baseline = _game_components()
     template = state_type.initial(config.players, config.seed)
     network = NetworkConfig(
         observation_size=template.observation_size,
@@ -431,7 +427,7 @@ def run_selfplay(config: PipelineConfig, *, once: bool = False) -> int:
                     "kind": "selfplay-game",
                     "seed": seed,
                     "players": config.players,
-                    "ruleset": config.ruleset,
+                    "ruleset": "standard-v22",
                     "architecture": expected_network.architecture,
                     "moves": len(result.actions),
                     "weight": source[0],
@@ -631,7 +627,7 @@ def run_train(config: PipelineConfig, *, once: bool = False) -> int:
             metadata = {
                 "pipeline_generation": generation,
                 "players": config.players,
-                "ruleset": config.ruleset,
+                "ruleset": "standard-v22",
                 "architecture": model.architecture,
                 "replay_positions": len(replay),
                 "updates": updates,
@@ -1047,7 +1043,6 @@ def run_pipeline(config: PipelineConfig) -> None:
 def _add_config_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--root", type=Path, default=Path("runs/multiplayer-pipeline"))
     parser.add_argument("--players", type=int, choices=(2, 3, 4), default=4)
-    parser.add_argument("--ruleset", choices=("standard", "mini"), default="standard")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--simulations", type=int, default=64)
     parser.add_argument("--c-puct", type=float, default=1.5)

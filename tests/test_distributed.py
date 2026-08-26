@@ -49,7 +49,6 @@ class DistributedPipelineTests(unittest.TestCase):
             config = PipelineConfig(
                 root=root,
                 players=3,
-                ruleset="mini",
                 simulations=1,
                 shuffle_pack_size=3,
                 min_replay=1,
@@ -114,20 +113,20 @@ class DistributedPipelineTests(unittest.TestCase):
                 [self._example(1), self._example(2)],
                 {
                     "players": 3,
-                    "ruleset": "mini",
+                    "ruleset": "standard-v22",
                     "history": {
                         "steps": [
                             {
                                 "move": 0,
                                 "player": 0,
                                 "action": None,
-                                "state": {"ruleset": "mini", "round": 0},
+                                "state": {"ruleset": "standard-v22", "round": 0},
                             },
                             {
                                 "move": 1,
                                 "player": 0,
                                 "action": 3,
-                                "state": {"ruleset": "mini", "round": 1},
+                                "state": {"ruleset": "standard-v22", "round": 1},
                             },
                         ],
                         "summary": {"moves": 1, "positions": 2, "scores": [1, 0, 0]},
@@ -164,7 +163,6 @@ class DistributedPipelineTests(unittest.TestCase):
                 status = supervisor.start({
                     "root": str(root),
                     "players": 3,
-                    "ruleset": "mini",
                     "simulations": 1,
                     "device": "cpu",
                 })

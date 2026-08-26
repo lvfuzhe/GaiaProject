@@ -20,7 +20,7 @@ from gaiazero.dashboard import (
     create_dashboard_server,
 )
 from gaiazero.distributed import write_npz_shard
-from gaiazero.game import GaiaState, MiniGaiaState
+from gaiazero.game import GaiaState
 from gaiazero.game.gaia_state import (
     BAL_TAKS_GAIAFORMER_QIC_ACTION,
     BRAINSTONE_ACTION,
@@ -2080,14 +2080,14 @@ class DashboardTests(unittest.TestCase):
                 "started_at": "2026-01-01T00:00:00+00:00",
                 "updated_at": "2026-01-01T00:00:00+00:00",
                 "completed_at": "2026-01-01T00:00:00+00:00",
-                "ruleset": "mini",
+                "ruleset": "standard-v22",
                 "trace": {
                     "summary": {
                         "moves": 0,
                         "positions": 1,
                         "scores": [0, 0],
                     },
-                    "steps": [{"move": 0, "state": {"ruleset": "mini"}}],
+                    "steps": [{"move": 0, "state": {"ruleset": "standard-v22"}}],
                 },
             },
         )
@@ -2137,9 +2137,9 @@ class DashboardTests(unittest.TestCase):
                     )
                 ],
                 {
-                    "ruleset": "mini",
+                    "ruleset": "standard-v22",
                     "history": {
-                        "steps": [{"move": 0, "state": {"ruleset": "mini"}}],
+                        "steps": [{"move": 0, "state": {"ruleset": "standard-v22"}}],
                         "summary": {"moves": 0, "positions": 1, "scores": [0, 0]},
                     },
                 },

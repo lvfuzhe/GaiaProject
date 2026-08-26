@@ -372,7 +372,7 @@ function workerPhaseLabel(phase) {
 function hydratePipelineConfig(config) {
   if (state.pipeline.configHydrated || !config || !Object.keys(config).length) return;
   const fields = {
-    root: "pipeline-root", players: "pipeline-players", ruleset: "pipeline-ruleset",
+    root: "pipeline-root", players: "pipeline-players",
     device: "pipeline-device", simulations: "pipeline-simulations",
     games_per_cycle: "pipeline-games-per-cycle", shuffle_pack_size: "pipeline-shuffle-pack-size",
     batch_size: "pipeline-batch-size", updates_per_cycle: "pipeline-updates-per-cycle",

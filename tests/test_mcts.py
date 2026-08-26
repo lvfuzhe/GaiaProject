@@ -2,15 +2,15 @@ import unittest
 
 import numpy as np
 
-from gaiazero.game import MiniGaiaHeuristicEvaluator, MiniGaiaState
+from gaiazero.game import GaiaHeuristicEvaluator, GaiaState
 from gaiazero.mcts import PUCTSearch, SearchConfig
 
 
 class PUCTSearchTests(unittest.TestCase):
     def test_policy_contains_only_legal_actions(self) -> None:
-        state = MiniGaiaState.initial(num_players=2)
+        state = GaiaState.initial(num_players=2)
         result = PUCTSearch(
-            MiniGaiaHeuristicEvaluator(),
+            GaiaHeuristicEvaluator(),
             SearchConfig(simulations=24, seed=4),
         ).run(state)
 
@@ -20,9 +20,9 @@ class PUCTSearchTests(unittest.TestCase):
         self.assertTrue(np.all(result.policy[~state.legal_action_mask()] == 0))
 
     def test_root_noise_preserves_legality_and_normalization(self) -> None:
-        state = MiniGaiaState.initial(num_players=3)
+        state = GaiaState.initial(num_players=3)
         result = PUCTSearch(
-            MiniGaiaHeuristicEvaluator(),
+            GaiaHeuristicEvaluator(),
             SearchConfig(simulations=12, root_noise_fraction=0.5, seed=8),
         ).run(state, add_root_noise=True)
 
@@ -31,9 +31,9 @@ class PUCTSearchTests(unittest.TestCase):
         self.assertEqual(result.root_value.shape, (3,))
 
     def test_zero_temperature_is_greedy(self) -> None:
-        state = MiniGaiaState.initial(num_players=2)
+        state = GaiaState.initial(num_players=2)
         result = PUCTSearch(
-            MiniGaiaHeuristicEvaluator(),
+            GaiaHeuristicEvaluator(),
             SearchConfig(simulations=16),
         ).run(state, temperature=0.0)
 
@@ -43,4 +43,3 @@ class PUCTSearchTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

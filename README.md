@@ -15,7 +15,7 @@ GaiaZero 是一个面向《盖亚计划》类确定性多人策略游戏的 Alph
 默认的 `standard-v22` 规则引擎已覆盖六轮主流程、完整建筑链、六条科研轨、能量碗、
 盖亚计划、科技选择、联邦、助推板块和计分，并加入可复现的随机地图、种族、计分与科技设置。
 它是面向固定动作空间的 AI 规则核心，不是对实体桌游所有图案与种族能力的逐项复刻。
-早期 `MiniGaia` 规则仍保留用于快速回归。
+项目只保留正式 `GaiaState`（`standard-v22`）规则环境。
 
 ## 快速开始
 
@@ -30,7 +30,7 @@ gaiazero demo --simulations 32 --show-actions
 
 ```powershell
 $env:PYTHONPATH = "src"
-python -m gaiazero demo --ruleset standard --simulations 32
+python -m gaiazero demo --simulations 32
 ```
 
 
@@ -38,13 +38,13 @@ python -m gaiazero demo --ruleset standard --simulations 32
 可从 Dashboard 一键启动，也可以在终端运行：
 
 ```powershell
-gaiazero pipeline --players 4 --ruleset standard --device auto
+gaiazero pipeline --players 4 --device auto
 ```
 
 评测检查点，每局轮换神经网络所在座位：
 
 ```powershell
-gaiazero evaluate runs/gaia-standard.pt --ruleset standard --players 2 --games 20 --simulations 128
+gaiazero evaluate runs/gaia-standard.pt --players 2 --games 20 --simulations 128
 ```
 
 不同人数分别使用独立的流水线目录和模型。评测时必须使用匹配人数和架构的检查点：
@@ -59,8 +59,7 @@ KataGo 网络族，但每个人数仍使用匹配的价值头维度。由于当�
 gaiazero evaluate runs/models/gaia-standard-4p-katago.pt --players 4 --games 20 --simulations 128
 ```
 
-`standard` 是 `demo`、`pipeline` 和 `evaluate` 的默认规则集。需要运行旧版快速模型时使用
-`--ruleset mini`；两个规则集的观察维度和动作维度不同，检查点不能混用。
+环境固定为 `standard-v22`；2/3/4 人模型的观察维度和动作维度不同，检查点不能混用。
 标准规则的 2、3、4 人局也使用独立检查点：地图尺寸、观察维度和价值头输出人数不同，
 不能将一个人数的检查点直接用于另一个人数。
 
@@ -142,7 +141,6 @@ V(s) = [v0, v1, ..., vn]
 src/gaiazero/core.py            通用游戏和评估器协议
 src/gaiazero/game/gaia_setup.py 随机初始设置生成器
 src/gaiazero/game/gaia_state.py standard-v22 AI 规则核心
-src/gaiazero/game/mini_gaia.py  旧版轻量规则切片
 src/gaiazero/mcts.py            多玩家 PUCT/PIMCTS
 src/gaiazero/model.py           PyTorch 策略/价值网络与检查点
 src/gaiazero/selfplay.py        自博弈数据生成

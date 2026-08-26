@@ -10,8 +10,6 @@ from gaiazero.npz_history import convert_npz_directory, convert_npz_to_history, 
 from gaiazero.game import (
     GaiaHeuristicEvaluator,
     GaiaState,
-    MiniGaiaHeuristicEvaluator,
-    MiniGaiaState,
 )
 from gaiazero.mcts import SearchConfig
 from gaiazero.model import (
@@ -31,14 +29,12 @@ def _search_config(args: argparse.Namespace, seed: int | None = None) -> SearchC
     )
 
 
-def _game_components(ruleset: str):
-    if ruleset == "mini":
-        return MiniGaiaState, MiniGaiaHeuristicEvaluator()
+def _game_components():
     return GaiaState, GaiaHeuristicEvaluator()
 
 
 def command_demo(args: argparse.Namespace) -> None:
-    state_type, evaluator = _game_components(args.ruleset)
+    state_type, evaluator = _game_components()
     initial = state_type.initial(args.players, args.seed)
     result = play_arena_game(initial, [evaluator] * args.players, _search_config(args))
     if args.show_actions:
@@ -66,7 +62,6 @@ def command_pipeline(args: argparse.Namespace) -> None:
         PipelineConfig(
             root=Path(args.root),
             players=args.players,
-            ruleset=args.ruleset,
             seed=args.seed,
             simulations=args.simulations,
             c_puct=args.c_puct,
@@ -108,7 +103,7 @@ def command_delete_training_history(args: argparse.Namespace) -> None:
 
 def command_evaluate(args: argparse.Namespace) -> None:
     model, metadata = load_checkpoint(args.checkpoint, args.device)
-    state_type, baseline = _game_components(args.ruleset)
+    state_type, baseline = _game_components()
     state = state_type.initial(args.players, args.seed)
     config = model.config
     expected = (state.observation_size, state.action_size, state.num_players)
@@ -145,10 +140,6 @@ def _add_search_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--seed", type=int, default=0)
 
 
-def _add_ruleset_argument(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--ruleset", choices=("standard", "mini"), default="standard")
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="gaiazero", description="AlphaZero + PIMCTS for Gaia")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -156,7 +147,6 @@ def build_parser() -> argparse.ArgumentParser:
     demo = subparsers.add_parser("demo", help="play a heuristic PIMCTS demonstration")
     demo.add_argument("--players", type=int, choices=(2, 3, 4), default=2)
     demo.add_argument("--show-actions", action="store_true")
-    _add_ruleset_argument(demo)
     _add_search_arguments(demo)
     demo.set_defaults(handler=command_demo)
 
@@ -165,7 +155,6 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--players", type=int, choices=(2, 3, 4), default=2)
     evaluate.add_argument("--games", type=int, default=10)
     evaluate.add_argument("--device", default="auto")
-    _add_ruleset_argument(evaluate)
     _add_search_arguments(evaluate)
     evaluate.set_defaults(handler=command_evaluate)
 
@@ -195,7 +184,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     pipeline.add_argument("--root", default="runs/multiplayer-pipeline")
     pipeline.add_argument("--players", type=int, choices=(2, 3, 4), default=4)
-    pipeline.add_argument("--ruleset", choices=("standard", "mini"), default="standard")
     pipeline.add_argument("--seed", type=int, default=0)
     pipeline.add_argument("--simulations", type=int, default=64)
     pipeline.add_argument("--c-puct", type=float, default=1.5)
