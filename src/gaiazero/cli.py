@@ -9,6 +9,7 @@ import torch
 
 from gaiazero.arena import evaluate_against, play_arena_game
 from gaiazero.dashboard import serve_dashboard
+from gaiazero.distributed import PipelineConfig, run_pipeline
 from gaiazero.game import (
     GaiaHeuristicEvaluator,
     GaiaState,
@@ -328,6 +329,36 @@ def command_dashboard(args: argparse.Namespace) -> None:
     serve_dashboard(args.metrics, args.host, args.port, args.history_dir)
 
 
+def command_pipeline(args: argparse.Namespace) -> None:
+    """Run the five asynchronous GaiaZero multiplayer workers."""
+    run_pipeline(
+        PipelineConfig(
+            root=Path(args.root),
+            players=args.players,
+            ruleset=args.ruleset,
+            seed=args.seed,
+            simulations=args.simulations,
+            c_puct=args.c_puct,
+            temperature_moves=args.temperature_moves,
+            max_moves=args.max_moves,
+            poll_seconds=args.poll_seconds,
+            games_per_cycle=args.games_per_cycle,
+            shuffle_pack_size=args.shuffle_pack_size,
+            replay_capacity=args.replay_capacity,
+            batch_size=args.batch_size,
+            updates_per_cycle=args.updates_per_cycle,
+            min_replay=args.min_replay,
+            learning_rate=args.learning_rate,
+            weight_decay=args.weight_decay,
+            hidden_size=args.hidden_size,
+            residual_blocks=args.residual_blocks,
+            device=args.device,
+            gate_games=args.gate_games,
+            gate_threshold=args.gate_threshold,
+        )
+    )
+
+
 def command_evaluate(args: argparse.Namespace) -> None:
     model, metadata = load_checkpoint(args.checkpoint, args.device)
     state_type, baseline = _game_components(args.ruleset)
@@ -449,6 +480,34 @@ def build_parser() -> argparse.ArgumentParser:
     dashboard.add_argument("--host", default="127.0.0.1")
     dashboard.add_argument("--port", type=int, default=8765)
     dashboard.set_defaults(handler=command_dashboard)
+
+    pipeline = subparsers.add_parser(
+        "pipeline",
+        help="run asynchronous multiplayer self-play, shuffle, train, export and gatekeeper workers",
+    )
+    pipeline.add_argument("--root", default="runs/multiplayer-pipeline")
+    pipeline.add_argument("--players", type=int, choices=(3, 4), default=4)
+    pipeline.add_argument("--ruleset", choices=("standard", "mini"), default="standard")
+    pipeline.add_argument("--seed", type=int, default=0)
+    pipeline.add_argument("--simulations", type=int, default=64)
+    pipeline.add_argument("--c-puct", type=float, default=1.5)
+    pipeline.add_argument("--temperature-moves", type=int, default=24)
+    pipeline.add_argument("--max-moves", type=int, default=512)
+    pipeline.add_argument("--poll-seconds", type=float, default=2.0)
+    pipeline.add_argument("--games-per-cycle", type=int, default=1)
+    pipeline.add_argument("--shuffle-pack-size", type=int, default=4096)
+    pipeline.add_argument("--replay-capacity", type=int, default=200_000)
+    pipeline.add_argument("--batch-size", type=int, default=256)
+    pipeline.add_argument("--updates-per-cycle", type=int, default=32)
+    pipeline.add_argument("--min-replay", type=int, default=256)
+    pipeline.add_argument("--learning-rate", type=float, default=1e-3)
+    pipeline.add_argument("--weight-decay", type=float, default=1e-4)
+    pipeline.add_argument("--hidden-size", type=int, default=256)
+    pipeline.add_argument("--residual-blocks", type=int, default=4)
+    pipeline.add_argument("--device", default="auto")
+    pipeline.add_argument("--gate-games", type=int, default=20)
+    pipeline.add_argument("--gate-threshold", type=float, default=0.55)
+    pipeline.set_defaults(handler=command_pipeline)
     return parser
 
 

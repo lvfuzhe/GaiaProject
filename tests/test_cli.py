@@ -7,6 +7,14 @@ from gaiazero.cli import build_parser, command_train_all
 
 
 class CliTrainingSplitTests(unittest.TestCase):
+    def test_multiplayer_pipeline_uses_native_npz_and_pytorch_settings(self) -> None:
+        args = build_parser().parse_args(["pipeline", "--players", "3"])
+
+        self.assertEqual(args.players, 3)
+        self.assertEqual(args.root, "runs/multiplayer-pipeline")
+        self.assertEqual(args.shuffle_pack_size, 4096)
+        self.assertEqual(args.device, "auto")
+
     def test_train_all_defaults_to_three_player_counts(self) -> None:
         args = build_parser().parse_args(["train-all"])
 
