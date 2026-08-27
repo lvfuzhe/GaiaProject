@@ -1,5 +1,7 @@
 # 多人局异步训练流水线
 
+> 当前实现仍是五个 Python 进程。C++ selfplay/C++ gatekeeper、TensorRT 推理和 SWA -> ONNX 导出属于下一阶段待执行改造，具体步骤见 [`pending-execution-cpp-tensorrt.md`](pending-execution-cpp-tensorrt.md)。
+
 该流水线借鉴 KataGo 的异步训练组织方式，但不接入 KataGo。游戏规则、MCTS、网络、
 样本和导出权重均为 GaiaZero 自有格式。全流程只依赖 Python、NumPy 和 PyTorch，不使用
 TensorFlow 或 TFRecord。
