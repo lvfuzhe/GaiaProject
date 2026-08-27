@@ -26,7 +26,7 @@ ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，不引入 ONNX Runti
 
 ### 0. 冻结跨进程契约与基线
 
-- [ ] 固定 `standard-v22` 的观察向量、合法动作掩码、策略输出和值输出的 shape、dtype、动作编号和玩家顺序。
+- [ ] 固定 `standard-v22` 的观察向量、合法动作掩码、策略输出、pairwise WDL 输出和 VP 输出的 shape、dtype、动作编号和玩家顺序。
 - [ ] 固定 NPZ 训练样本格式：输入、掩码、2.6 节定义的全部监督标签、逐头 loss mask/weight，以及 self-play 完整复盘 metadata 的兼容要求。
 - [ ] 固定模型清单格式：规则版本、标签 schema/head 版本、玩家数、观察/动作维度、网络架构、SWA 是否可用、导出 opset、TensorRT 精度模式和权重 SHA-256。
 - [ ] 为 Python 参考实现增加一组固定种子状态和网络输出 golden fixtures，作为 C++ 对齐基准。
@@ -44,11 +44,11 @@ KataGo 把 komi 当作全局条件，是因为同一棋盘在不同 komi 下具�
 - [ ] observation 保留当前 `vp`，并增加每位玩家的归一化 `starting_vp_offset`。相同局面但 offset 不同必须产生不同 observation hash。
 - [ ] 分别为 2、3、4 人局维护补偿表；禁止把不同人数的 offset 混用。
 - [ ] 每局所有 offset 采用统一规范消除平移自由度，例如先读取所选种族/座位的表值，再减去本局均值使 `sum(K_i)=0`；若最终使用整数 VP，应固定取整、余数分配和上下限规则。
-- [ ] `final_vp_targets`、rank/WDL、MCTS terminal utility 和守门结果都使用调整后分数；同时保存未补偿的 `raw_final_vp_targets`，用于重新估算而不污染原始强度数据。
+- [ ] `final_vp_targets`、pairwise WDL、MCTS terminal utility 和守门结果都使用调整后分数；实际排名只由调整后终局 VP 离线派生用于统计，不建立 rank 训练标签或网络头。同时保存未补偿的 `raw_final_vp_targets`，用于重新估算而不污染原始强度数据。
 - [ ] NPZ 和复盘记录 `starting_vp_offsets`、`compensation_version`、原始终局分和调整后终局分；不得只保存调整后结果。
 - [ ] 模型与 ONNX manifest 记录 `compensation_mode=offline-vp-offset`、补偿版本、归一化和取整规则；只有 observation、规则与补偿契约兼容的模型才能直接守门对战。
 
-验收：同一初始设置仅改变 `K_i` 时，初始 `PlayerState.vp`、observation、终局 rank/WDL 和 MCTS 价值随之改变；合法动作和其他规则状态保持不变。
+验收：同一初始设置仅改变 `K_i` 时，初始 `PlayerState.vp`、observation、终局 pairwise WDL、由其聚合的 MCTS 价值和离线统计排名随之改变；合法动作和其他规则状态保持不变。
 
 #### 0.2 离线补偿估算与迭代闭环
 
@@ -61,7 +61,7 @@ KataGo 把 komi 当作全局条件，是因为同一棋盘在不同 komi 下具�
 - [ ] 为同一 setup seed 生成成组对局，轮换种族和座位；在合法种族组合范围内覆盖全部 14 个种族、先后手和对手组合。
 - [ ] 2、3、4 人局分别采样；小地图/标准地图、地图种子、回合计分、终局计分、科技和助推布局全部记录为上下文，不把不同配置直接混成一个均值。
 - [ ] 所有比较使用相同的 MCTS 模拟数、温度、根噪声方案和最大步数；评估局应关闭会妨碍配对比较的非必要随机项，并保留可复现种子。
-- [ ] 单独写入 `compensation/evaluations/*.npz` 或结构化列式数据，至少包含模型哈希、规则版本、人数、setup hash、座位、种族、原始最终 VP、排名、pairwise WDL 和完整性标记；不进入普通训练 shard。
+- [ ] 单独写入 `compensation/evaluations/*.npz` 或结构化列式数据，至少包含模型哈希、规则版本、人数、setup hash、座位、种族、原始最终 VP、由终局 VP 派生的实际排名、pairwise WDL 和完整性标记；不进入普通训练 shard，实际排名也不作为网络标签。
 - [ ] 为每个种族/座位/人数单元设置最低有效对局数，并报告均值、标准差、置信区间和缺失组合；样本不足时不得发布 offset。
 
 验收：相同 seed 的座位/种族轮换对局能够配对复现，且可以区分种族效应、座位效应和设置噪声。
@@ -81,13 +81,13 @@ KataGo 把 komi 当作全局条件，是因为同一棋盘在不同 komi 下具�
 ##### 0.2.3 C2：带补偿重新 selfplay 和训练
 
 - [ ] C++ selfplay 每局开始时根据人数、种族、座位和 context 读取固定版本补偿表，将 `K_i` 写入初始 VP；模型不执行竞价。
-- [ ] 搜索、最终计分、rank/WDL、value target 和 gatekeeper 全部基于调整后分数；原始分数仅用于公平性分析，不能参与本局策略回传。
+- [ ] 搜索、最终计分、pairwise WDL、由 WDL 聚合的 value target 和 gatekeeper 全部基于调整后分数；原始分数仅用于公平性分析，不能参与本局策略回传。
 - [ ] 新补偿版本只对新开对局生效；进程轮询到更新后，必须等当前对局结束再切换，并在 shard 中写入实际版本和 offset。
 - [ ] 旧 NPZ 保留其原 observation、offset 和 policy target，不把旧策略样本事后改成新 offset。训练窗口逐步提高新补偿版本自产数据权重，直到旧版本退出。
 - [ ] 若保留显式 `starting_vp_offset`，不同补偿版本的完整旧样本可以共同训练；若 observation schema 改变，则必须启动新训练线或进行明确迁移。
 - [ ] compensation 版本变化时重新建立或继续 SWA 的策略写入配置；大幅变化默认重置 SWA，小幅变化可在验证通过后延续，但必须记录选择。
 
-验收：训练样本中的 observation VP、offset、原始分数、调整后分数、value/rank 目标相互一致；从任一 shard 可以重放相同终局效用。
+验收：训练样本中的 observation VP、offset、原始分数、调整后分数、pairwise WDL 和聚合 utility 目标相互一致；从任一 shard 可以重放相同终局效用。统计排名必须能从调整后终局 VP 重算，不进入 label schema。
 
 ##### 0.2.4 C3：公平性守门与收敛
 
@@ -139,13 +139,13 @@ KataGo 把 komi 当作全局条件，是因为同一棋盘在不同 komi 下具�
 #### 2.3 跨代初始化
 
 - [ ] 不直接对 `b10c128` 和 `b20c256` 使用严格 `state_dict` 续载；宽度、残差块数以及优化器张量形状均不兼容。
-- [ ] 默认使用教师-学生过渡：冻结上一代 approved SWA 模型作为 teacher，初始化新一代 student，用现有 NPZ 的策略/价值目标加 teacher 的策略 logits 和价值输出进行预热。
+- [ ] 默认使用教师-学生过渡：冻结上一代 approved SWA 模型作为 teacher，初始化新一代 student，用现有 NPZ 的策略、pairwise WDL 与 VP 目标，加 teacher 的策略 logits、pairwise WDL logits 和 VP 输出进行预热。
 - [ ] 蒸馏损失权重、温度、预热更新数和退出条件均配置化；预热结束后逐步衰减蒸馏权重，回到以自博弈目标为主的 AlphaZero 损失。
 - [ ] 可将“复制公共张量切片并把新增残差路径初始化为近似恒等映射”作为实验选项，但必须先通过同输入数值回归；它不能成为默认迁移方式。
 - [ ] 每次改变网络规模都重新创建优化器、学习率调度器和 SWA 累计器；不得加载上一代不兼容的优化器或 SWA 状态。
 - [ ] 新一代 SWA 只在预热结束并完成规定更新数后开始累计，避免随机初始化和早期蒸馏状态污染平均权重。
 
-验收：相同 NPZ batch 上，新一代 student 完成预热后，其合法动作策略和价值输出与 teacher 的误差达到配置门槛，并能继续使用真实训练目标优化。
+验收：相同 NPZ batch 上，新一代 student 完成预热后，其合法动作策略、pairwise WDL、聚合 utility 和 VP 输出与 teacher 的误差达到配置门槛，并能继续使用真实训练目标优化。
 
 #### 2.4 数据换代与跨代守门
 
@@ -164,7 +164,7 @@ KataGo 把 komi 当作全局条件，是因为同一棋盘在不同 komi 下具�
 - [ ] 分别测量三个网络在训练 batch、TensorRT 叶节点 batch、selfplay 并发局数下的显存、吞吐和延迟，不沿用同一套 batch 参数。
 - [ ] 随网络扩大逐代调整训练 batch size、梯度累积、学习率、权重衰减和 checkpoint 周期，并把有效 batch size 写入训练记录。
 - [ ] 为每一代设置独立资源预算和最低吞吐门槛；若 `b20c256` 达不到门槛，优先降低并发或 batch，不静默退回不同网络结构。
-- [ ] 保留同一固定验证集和固定种子对局集，用于比较各代策略损失、价值误差、守门胜率和单位 GPU 时间的棋力收益。
+- [ ] 保留同一固定验证集和固定种子对局集，用于比较各代策略损失、pairwise WDL log loss/Brier score、聚合 utility 误差、VP MAE/校准、守门结果和单位 GPU 时间的棋力收益。
 
 验收：三个代际都有可复现的训练与推理基准，扩容决策同时依据棋力、数据新鲜度、吞吐和显存，而不是只看训练 loss。
 
@@ -193,30 +193,32 @@ KataGo 把 komi 当作全局条件，是因为同一棋盘在不同 komi 下具�
 
 - [ ] ONNX 的基础 policy 输出为原始 logits `[B,A]`，合法动作过滤在 C++ 搜索端完成，不能把 `legal_masks` 烘焙进网络权重。
 - [ ] 逐动作 Q 标签同时保存 `action_value_masks [A]`，仅训练实际搜索过且访问数达到阈值的动作。
-- [ ] P2 乐观策略只在基础策略、VP head 和跨代守门稳定后启用；多人局先明确“乐观”是追求当前玩家 VP、排名还是风险调整效用。
+- [ ] P2 乐观策略只在基础策略、VP head 和跨代守门稳定后启用；多人局默认追求风险调整后的 pairwise utility 或 VP 分差。若以后改为直接优化第一名率，应新增独立的 `first_place_head [P]` 并做消融验证，而不是恢复完整 rank head。
 
 ##### 2.6.2 多人结果与价值头标签
 
 | NPZ 标签 | Shape | 来源与用途 | 优先级 |
 | --- | --- | --- | --- |
-| `final_utility_targets` | `[P]` | 当前 `returns()` 的平均两两胜负效用，直接供 PIMCTS 回传 | P0 |
-| `final_rank_targets` | `[P,P]` | 每位玩家取得第 1 到第 P 名的分布；并列时在占用名次上均分概率 | P0 |
-| `pairwise_wdl_targets` | `[P,P,3]` | 任意两名玩家的胜/平/负 one-hot，保留多人排名中被单一标量丢失的信息 | P0 |
-| `root_value_targets` | `[P]` | 该位置 selfplay MCTS 根价值，用于重分析、蒸馏和短期价值监督 | P1 |
-| `td_value_targets` | `[H,P]` | 对后续根 MCTS 价值做三种指数衰减平均的短/中/长期目标 | P1 |
+| `pairwise_wdl_targets` | `[P,P,3]` | 行玩家相对列玩家的胜/平/负 one-hot；这是 P0 多人价值真值，必须保留完整矩阵 | P0 |
+| `final_utility_targets` | `[P]` | 从 `pairwise_wdl_targets` 聚合出的平均两两胜负效用，用于训练审计及 PIMCTS 终局回传，不对应独立 utility head | P0 |
+| `root_value_targets` | `[P]` | selfplay MCTS 根节点的聚合多人效用，用于重分析、蒸馏和短期价值监督 | P1 |
+| `td_value_targets` | `[H,P]` | 对后续根 MCTS 聚合效用做三种指数衰减平均的短/中/长期目标 | P1 |
 | `shortterm_value_error_targets` | `[P]` | 当前预测与短期 MCTS 价值目标的平方误差/方差目标，供搜索置信度加权 | P1 |
-| `value_settle_time_targets` | scalar | 从当前位置到排名/效用基本稳定的剩余语义决策数，映射 KataGo variance-time | P2 |
+| `value_settle_time_targets` | scalar | 从当前位置到 pairwise utility 基本稳定的剩余语义决策数，映射 KataGo variance-time | P2 |
 
 - [ ] Gaia 的时间尺度按“语义决策”而不是原始 action 计数；免费兑换、被动充能确认、科技选择等微步骤不能把时间轴无限拉长。先从约 8、24、80 个语义决策的均值范围做基准，再根据完整对局长度校准 lambda。
-- [ ] 正常完成的 Gaia 对局没有 KataGo 的 `no-result` 类别；非法、损坏、超出最大步数或缺少终局的对局标为 `terminal_valid=0`，不得伪装成平局训练。真实同分通过 pairwise draw 和并列 rank 表示。
-- [ ] MCTS 仍消费 `[P]` 多人效用；rank/WDL 是训练辅助头，不能在 C++ 与 Python 中使用不同的效用换算。
+- [ ] 正常完成的 Gaia 对局没有 KataGo 的 `no-result` 类别；非法、损坏、超出最大步数或缺少终局的对局标为 `terminal_valid=0`，不得伪装成平局训练。真实同分通过 pairwise draw 表示，实际并列排名仅由终局 VP 派生用于统计。
+- [ ] 不实现 `final_rank_targets` 或 `rank_head`。2 人局中它与 WDL 完全冗余；3/4 人局所需的期望排名可由 pairwise WDL 计算，完整联合名次分布和第一名概率不属于当前 MCTS 目标。
+- [ ] `pairwise_wdl_logits [B,P,P,3]` 是叶节点的唯一多人结果输出；对角线必须 mask。实现应只预测 `i < j` 的无序玩家对并镜像展开，保证 `win(i,j)=loss(j,i)` 且 `draw(i,j)=draw(j,i)`。
+- [ ] C++ 与 Python 都按同一公式把 WDL 概率聚合成 MCTS 消费的 `[P]` 多人效用：`u_i = sum_{j != i}(p_win(i,j) - p_loss(i,j)) / (P - 1)`；NPZ 中的 `final_utility_targets` 必须逐样本通过这一公式重算校验。
+- [ ] 统计所需的期望排名可按 `E[rank_i] = 1 + sum_{j != i}(p_win(j,i) + 0.5 * p_draw(i,j))` 计算，但两两边缘概率不能恢复完整联合名次分布；守门的第一名率和实际排名直接从完整对局终局 VP 统计，不能伪装成网络预测。
 
 ##### 2.6.3 VP、分数分布和不确定性标签
 
 | NPZ 标签 | Shape | 来源与用途 | 优先级 |
 | --- | --- | --- | --- |
 | `raw_final_vp_targets` | `[P]` | 不包含虚拟竞拍 offset 的每名玩家原始最终 VP，用于补偿重估和审计 | P0 |
-| `final_vp_targets` | `[P]` | 包含 `starting_vp_offsets` 的每名玩家调整后最终 VP，供 value/rank/MCTS 使用 | P0 |
+| `final_vp_targets` | `[P]` | 包含 `starting_vp_offsets` 的每名玩家调整后最终 VP，供 VP head、pairwise WDL 真值和 MCTS 终局效用使用 | P0 |
 | `final_vp_belief_targets` | `[P,V]` | 固定 VP 桶的终局分布，包含下溢/上溢桶，类似 KataGo score belief | P0 |
 | `final_vp_lead_targets` | `[P]` | 每名玩家相对其余玩家均值的最终 VP 差；另由分数计算对领先者差值 | P0 |
 | `final_vp_component_targets` | `[P,6]` | `原始局内VP、开局offset、科技轨终局分、剩余资源分、终局板块1、终局板块2` | P0 |
@@ -225,7 +227,8 @@ KataGo 把 komi 当作全局条件，是因为同一棋盘在不同 komi 下具�
 | `vp_source_targets` | `[P,K]` | 更细 VP 台账：轮次计分、联邦、科技、助推、QIC 行动、种族能力等 | P2 |
 
 - [ ] `V` 的范围和桶宽由完整随机对局统计确定并写入 label manifest；不允许训练脚本和 TensorRT 后处理各自假设不同区间。
-- [ ] VP head 至少输出 mean、stdev 和 belief logits；`lead` 由独立输出校准，不能只用当前 VP 差代替最终预测。
+- [ ] VP head 至少输出 mean、stdev 和 belief logits；`lead` 由独立输出校准，不能只用当前 VP 差代替最终预测。`vp_mean` 只能表达期望分差，必须由 stdev/belief 表达“稳定险胜”和“高波动险胜”的差别。
+- [ ] 任意玩家对的期望终局分差可由 `vp_mean_i - vp_mean_j` 计算；独立的每玩家 VP belief 不包含玩家间相关性，不能据此替代 pairwise WDL head，也不能假设其能精确恢复胜率或第一名率。
 - [ ] P0 的六项分解可以直接从 `final_scores()` 和本局 offset 计算；必须断言 `raw_final_vp_targets + starting_vp_offsets == final_vp_targets`。P2 细分台账要求所有 VP 变化携带稳定 `score_source_id`，不能依赖动作说明文字解析。
 
 ##### 2.6.4 星图控制与建筑头标签
@@ -267,7 +270,7 @@ KataGo 把 komi 当作全局条件，是因为同一棋盘在不同 komi 下具�
 | `moves_to_round_end_targets` | scalar | 距离本轮结束的语义决策数 | P1 |
 | `moves_to_game_end_targets` | scalar | 距离终局的语义决策数 | P1 |
 
-- [ ] 这些 head 是共享 trunk 的辅助监督，不全部进入 MCTS。TensorRT 生产 ONNX 默认保留 policy、多人 value/rank、VP/uncertainty；星图和发展 head 可由 export 配置决定是否保留用于诊断。
+- [ ] 这些 head 是共享 trunk 的辅助监督，不全部进入 MCTS。TensorRT 生产 ONNX 默认保留 policy、pairwise WDL、VP/uncertainty；星图和发展 head 可由 export 配置决定是否保留用于诊断。不导出 rank 输出。
 - [ ] 聚合指标虽可由星图标签推导，仍单独监督，因为终局计分直接依赖这些全局数量；两者必须在标签生成器中做一致性断言。
 - [ ] 不预测当前 observation 已明确给出的资源、轮次、待决策阶段或合法动作；这里只预测轮末/终局未来量，防止网络通过复制输入获得无意义的低 loss。
 
@@ -277,14 +280,14 @@ KataGo 把 komi 当作全局条件，是因为同一棋盘在不同 komi 下具�
 | --- | --- | --- | --- |
 | `policy_head` | `policy_logits [B,A]` | `policy_visit_targets` | 必须保留 |
 | `action_q_head` | `action_value [B,A,P]`、`action_vp [B,A,P]` | 两组 action Q 标签和 mask | P1 启用后保留 |
-| `outcome_head` | `utility [B,P]`、`rank_logits [B,P,P]`、`pairwise_wdl_logits [B,P,P,3]` | utility、rank、pairwise WDL | utility 必须；其余可配置保留 |
+| `pairwise_value_head` | `pairwise_wdl_logits [B,P,P,3]` | pairwise WDL；聚合 utility/root/TD loss 共同约束同一输出 | 必须保留；不导出独立 utility/rank logits |
 | `score_head` | `vp_belief_logits [B,P,V]`、`vp_mean/stdev/lead [B,P]` | VP belief、最终 VP、lead、分解 | belief/mean/lead 必须保留 |
 | `uncertainty_head` | `value_error [B,P]`、`vp_error [B,P]`、`settle_time [B,1]` | 短期误差和稳定时间 | P1 启用后保留并供 MCTS 使用 |
 | `map_head` | planet/satellite/space-station 分类 logits | 星图控制与建筑标签 | 默认训练保留，生产导出可裁剪 |
 | `development_head` | research/resource/tech/federation 输出 | 玩家发展辅助标签 | 默认训练保留，生产导出可裁剪 |
 
-- [ ] ONNX 输出使用原始 logits 或未缩放回归量；softmax、softplus、tanh、合法动作 mask 和数值缩放统一由 C++ 后处理，并把版本及缩放常数写入 manifest。
-- [ ] 训练 checkpoint 保存全部 head，生产 ONNX 可以裁剪不被 MCTS/诊断消费的辅助输出；裁剪前后 policy、utility、VP 和 uncertainty 的 golden fixture 输出必须一致。
+- [ ] ONNX 输出使用原始 logits 或未缩放回归量；softmax、pairwise 镜像展开、utility 聚合、softplus、合法动作 mask 和数值缩放统一由 C++ 后处理，并把版本及缩放常数写入 manifest。
+- [ ] 训练 checkpoint 保存全部已启用 head，生产 ONNX 可以裁剪不被 MCTS/诊断消费的辅助输出；裁剪前后 policy、pairwise WDL、聚合 utility、VP 和 uncertainty 的 golden fixture 输出必须一致。
 - [ ] 每个 head 使用独立 loss、权重、有效样本计数和梯度统计；总 loss 不能掩盖某个 head 没有有效标签或量级失衡。
 
 ##### 2.6.7 样本权重、掩码和审计字段
@@ -293,7 +296,7 @@ KataGo 把 komi 当作全局条件，是因为同一棋盘在不同 komi 下具�
 
 - [ ] `label_schema_version`、`rules_version`、`player_count`、`network_id`、`model_hash`、`game_id`、`setup_seed`、`position_index`、`semantic_turn_index`、`round`、`player_to_move`、`starting_vp_offsets [P]` 和 `compensation_version`。
 - [ ] `legal_masks [A]`、`player_masks [P]`、`pairwise_masks [P,P]`、`planet_masks [N]`、`board_space_masks [S]`、`action_value_masks [A]` 和每个可选 head 的 `*_loss_masks`。
-- [ ] `sample_weights`、`policy_weights`、`value_weights`、`ownership_weights`；其中 sample weight 可结合完整搜索、policy surprise、value surprise、终局距离和是否重分析。
+- [ ] `sample_weights`、`policy_weights`、`pairwise_value_weights`、`vp_weights`、`ownership_weights`；其中 sample weight 可结合完整搜索、policy surprise、pairwise utility surprise、VP surprise、终局距离和是否重分析。
 - [ ] `root_total_visits`、`search_simulations`、`search_temperature`、`root_noise_applied`、`source_generation`、`reanalyzed` 和 `terminal_valid`。
 - [ ] 每局只保存一次终局真值和状态轨迹，位置行通过 `game_id + position_index` 关联；shuffle 后不得丢失标签数组或把逐位置数值塞进 JSON metadata。
 - [ ] 标签生成采用“两阶段写入”：C++ selfplay 先缓存每步 observation、搜索统计与状态摘要，终局后反向生成 outcome、VP、ownership、短期目标和 masks，再原子写入 NPZ。
@@ -343,7 +346,7 @@ KataGo 把 komi 当作全局条件，是因为同一棋盘在不同 komi 下具�
 
 ### 6. C++ PIMCTS Selfplay
 
-- [ ] 实现与当前 PUCT/PIMCTS 相同的多玩家价值回传、根噪声、温度、动作采样和最大步数语义。
+- [ ] 实现与当前 PUCT/PIMCTS 相同的多玩家价值回传、根噪声、温度、动作采样和最大步数语义；叶节点先把 pairwise WDL 按 2.6.2 的唯一公式聚合为 `[P]` utility，再写入树节点并回传。
 - [ ] 将 MCTS 树节点改为紧凑结构，使用线程池运行多局 self-play；每棵树的随机种子必须可追踪。
 - [ ] 将叶节点请求提交给 TensorRT 批量推理队列，支持虚拟损失或等价并发机制。
 - [ ] 按 2.6 节的新版本化 NPZ schema 写入完整训练标签、逐头 masks/weights 和独立复盘 metadata；写入采用临时文件后原子重命名。
