@@ -27,7 +27,7 @@ ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，不引入 ONNX Runti
 | 决策 | G0 最小闭环 | G0 后增强 | 明确不做 |
 | --- | --- | --- | --- |
 | 训练闭环 | 五进程异步闭环、SWA、ONNX、C++ TensorRT selfplay/gatekeeper | 多机共享目录和生产者背压 | TensorFlow、TFRecord、ONNX Runtime、C++ 训练 |
-| 人数模型 | 2/3/4 人共用网络架构、标签语义和 MCTS 实现，但分别训练/发布 checkpoint | 未来另行消融可变人数 padding 模型 | 把 3 人权重直接加载到 2 人局 |
+| 人数模型 | 2/3/4 人只共用代码、标签语义和 MCTS 实现；训练线、数据、SWA、checkpoint、守门和发布完全独立 | 各人数可独立递进网络规模 | 跨人数混训、蒸馏、续载或直接加载权重 |
 | 核心推理头 | policy、pairwise WDL、VP belief | 独立 TD utility/VP、uncertainty、动作 Q | rank head、独立 utility logits |
 | MCTS 效用 | 只使用 pairwise utility，`beta_vp=0` | 小权重、有界、动态居中的 VP utility，消融通过后启用 | 直接把原始 VP 无界加入效用 |
 | 数据 | 完整状态轨迹、终局真值、full/cheap search 标记、可审计窗口 | policy surprise、对称增强、重分析 | 解析前端 JSON 作为训练输入 |
@@ -39,6 +39,13 @@ ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，不引入 ONNX Runti
 - `P0`：首个 G0 闭环前必须完成，范围限于正确性、可恢复性和核心 policy/WDL/VP 训练。
 - `P1`：G0 稳定后加入的低风险效率或样本质量增强；必须有独立开关和基线对照。
 - `P2`：实验功能；只有消融显示守门棋力、样本效率或校准显著改善才保留。
+
+已确认的产品级约束：
+
+- 正式使用离线 VP offset 替代 AI 竞拍，不保留竞拍模型或竞拍动作空间作为并行方案。
+- 所有玩家基础初始 VP 为 10；2 人局 `K_i` 范围为 `[-30,30]`，3/4 人局为 `[-50,50]`；`K_i` 必须是整数且每局严格满足 `sum(K_i)=0`。
+- offset 估算和更新直接在整数零和可行域内完成，不先生成小数再取整，因此不存在余数分配。
+- 2/3/4 人模型分别训练、分别保存、分别守门和发布，训练数据与训练状态完全隔离。
 
 ## 与 KataGo 的适配对照
 
@@ -79,21 +86,21 @@ ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，不引入 ONNX Runti
 
 验收：契约文档、golden fixtures 和基线数据已提交；后续 C++ 或导出改动均能复现这些输入输出。
 
-#### 0.1 虚拟竞拍 VP offset 的 observation 契约
+#### 0.1 离线 VP offset 的 observation 契约（替代竞拍）
 
-本项目不让 AI 参与竞拍，也不把竞拍加入动作空间。改为由离线评估器根据批准模型的对局结果生成每位玩家的开局 VP 补偿，记原始终局分为 `S_i`、开局补偿为 `K_i`，用于排名和训练的调整后终局分为 `S'_i = S_i + K_i`。它是多人向量形式的 komi，而不是一个全局标量。
+本项目已确认正式使用离线 VP offset 替代竞拍：不让 AI 参与竞拍，也不把竞拍加入动作空间。由离线评估器根据批准模型的对局结果生成每位玩家的开局 VP 补偿，记原始终局分为 `S_i`、开局补偿为 `K_i`，用于排名和训练的调整后终局分为 `S'_i = S_i + K_i`。它是多人向量形式的 komi，而不是一个全局标量。
 
 KataGo 把 komi 当作全局条件，是因为同一棋盘在不同 komi 下具有不同效用。盖亚的 `K_i` 在第一步前直接写入每位玩家当前 `vp` 后，当前 observation 已经包含它并满足马尔可夫性；无需保存出价过程。为支持补偿表迭代和跨版本分析，仍建议显式保留 `starting_vp_offset`。
 
 - [ ] 为 `GaiaState.initial()` 增加按座位排列的 `starting_vp_offsets [P]`；初始化 VP 为 `10 + K_i`，且不产生竞拍 phase 或竞拍 action。
 - [ ] observation 保留当前 `vp`，并增加每位玩家的归一化 `starting_vp_offset`。相同局面但 offset 不同必须产生不同 observation hash。
 - [ ] 分别为 2、3、4 人局维护补偿表；禁止把不同人数的 offset 混用。
-- [ ] 每局所有 offset 采用统一规范消除平移自由度，例如先读取所选种族/座位的表值，再减去本局均值使 `sum(K_i)=0`；若最终使用整数 VP，应固定取整、余数分配和上下限规则。
+- [ ] `K_i` 的硬约束为：`K_i` 必须是整数；2 人局 `-30 <= K_i <= 30`；3/4 人局 `-50 <= K_i <= 50`；每局严格满足 `sum(K_i)=0`。补偿拟合器直接输出满足这些约束的整数向量，不经过事后取整，不存在余数分配。
 - [ ] `final_vp_targets`、pairwise WDL、MCTS terminal utility 和守门结果都使用调整后分数；实际排名只由调整后终局 VP 离线派生用于统计，不建立 rank 训练标签或网络头。同时保存未补偿的 `raw_final_vp_targets`，用于重新估算而不污染原始强度数据。
 - [ ] NPZ 和复盘分别记录 `published_vp_offsets [P]`、`vp_offset_perturbations [P]`、实际 `starting_vp_offsets = published + perturbation`、`compensation_version`、原始终局分和调整后终局分；不得只保存调整后结果或无法还原来源的合并 offset。
-- [ ] selfplay 训练使用 `K_used = K_published + delta_K`：`delta_K [P]` 从有界分布采样并强制 `sum(delta_K)=0`，扰动范围、分布和随机种子写入 manifest/NPZ。公平性评估和 gatekeeper 固定 `delta_K=0`，只使用发布表，保证比较可复现。
+- [ ] selfplay 训练使用 `K_used = K_published + delta_K`：`delta_K [P]` 从整数有界分布采样并强制 `sum(delta_K)=0`，同时保证实际 `K_used` 仍满足对应人数的 `+/-30` 或 `+/-50` 硬边界；扰动范围、分布和随机种子写入 manifest/NPZ。公平性评估和 gatekeeper 固定 `delta_K=0`，只使用发布表，保证比较可复现。
 - [ ] offset 扰动必须覆盖同一玩家/种族在多个相邻 VP 条件下的样本，防止网络把固定 offset 当作种族或座位捷径；扰动后的实际 `K_used` 必须进入 observation，并用于本局所有终局目标。
-- [ ] 模型与 ONNX manifest 记录 `compensation_mode=offline-vp-offset`、补偿版本、归一化和取整规则；只有 observation、规则与补偿契约兼容的模型才能直接守门对战。
+- [ ] 模型与 ONNX manifest 记录 `compensation_mode=offline-vp-offset`、补偿版本、归一化和整数零和可行域规则；只有 observation、规则与补偿契约兼容的模型才能直接守门对战。
 
 验收：同一初始设置仅改变 `K_i` 时，初始 `PlayerState.vp`、observation、终局 pairwise WDL、由其聚合的 MCTS 价值和离线统计排名随之改变；合法动作和其他规则状态保持不变。
 
@@ -120,7 +127,7 @@ KataGo 把 komi 当作全局条件，是因为同一棋盘在不同 komi 下具�
 - [ ] 3/4 人局不能只对齐平均 VP；优化目标同时包含第一名率、平均排名和平均 pairwise utility 的偏差，并对 offset 大小施加正则。
 - [ ] 将地图模式、顺位以及影响显著且样本足够的设置因素做成有限 context bucket；不为每一个完整随机 setup 单独拟合，避免表规模爆炸和过拟合。
 - [ ] 在训练集拟合、独立 holdout seed 上验证；报告补偿前后的原始分差、第一名率、平均排名、pairwise WDL、校准误差和 bootstrap 置信区间。
-- [ ] 把连续估计值按固定规则转换为游戏使用的整数 VP，并在取整后重新计算公平性指标；禁止仅报告取整前结果。
+- [ ] 在带 `sum(K_i)=0` 和对应人数上下界的整数可行域内直接求解或投影补偿向量，并对最终整数解重新计算公平性指标；禁止发布小数解、事后独立四舍五入或执行余数分配。
 - [ ] 发布版本化 `compensation/offsets-vNN.json`，包含适用人数、context bucket、每种族/座位 offset、训练模型哈希、数据范围、拟合参数、置信区间、父版本和 SHA-256。
 
 验收：holdout 数据上所有配置化公平性门槛均通过，且任何 offset 都能追溯到模型、对局集合和拟合版本。
@@ -140,7 +147,7 @@ KataGo 把 komi 当作全局条件，是因为同一棋盘在不同 komi 下具�
 
 - [ ] 模型 gatekeeper 比较新旧模型时，双方使用完全相同的补偿表、配对 setup、座位/种族轮换和搜索预算；模型棋力晋级与补偿表公平性验收分别出报告。
 - [ ] 每个新 approved 模型积累足够新数据后重新运行 C0/C1，但以当前 offset 为基线拟合残余补偿 `delta_K_fit`，而不是每次从零估计。
-- [ ] 使用阻尼更新 `K_next=K_current+alpha*delta_K_fit`，`alpha` 配置化；若拟合器输出绝对推荐表 `K_fit`，等价写为 `K_next=(1-alpha)*K_current+alpha*K_fit`。限制单次最大变化，避免模型策略与补偿相互追逐而振荡。
+- [ ] 使用阻尼更新的连续建议值 `K_proposed=K_current+alpha*delta_K_fit`，`alpha` 配置化；若拟合器输出绝对推荐表 `K_fit`，等价写为 `K_proposed=(1-alpha)*K_current+alpha*K_fit`。随后整体投影到对应人数的整数、零和、有界可行域得到 `K_next`，而不是逐项取整或分配余数；同时限制单次最大变化，避免模型策略与补偿相互追逐而振荡。
 - [ ] 新表只有在 holdout 公平性改善、置信区间合格且没有明显伤害其他人数/context 后才发布；失败则保留当前表并归档候选结果。
 - [ ] 配置停止条件：连续多轮最大 offset 变化、第一名率偏差、平均排名偏差和 pairwise utility 偏差均低于阈值；阈值由基准数据确定，不硬编码。
 - [ ] 网络从 G0 扩展到 G1/G2 时继承上一代 offset 作为初值，但新架构通过守门并积累自产数据后必须重新校准，不能假设种族相对强度恒定。
@@ -178,7 +185,7 @@ KataGo 把 komi 当作全局条件，是因为同一棋盘在不同 komi 下具�
 
 - [ ] 在 `pipeline.json` 增加显式的 `architecture_family`、`network_id`、架构参数、`generation` 和训练阶段；向量残差候选使用 `residual_blocks/hidden_size`，其他架构使用各自版本化字段，禁止只根据文件名猜测。
 - [ ] 模型 checkpoint、ONNX manifest、守门记录、训练状态和 Dashboard 都记录同一个 `network_id`，例如 `b10c128-g0`。
-- [ ] 2、3、4 人局采用相同的递进表，但分别训练和晋级；不同玩家数的价值头维度不同，不共享 checkpoint 或 SWA 状态。
+- [ ] 2、3、4 人局是三条完全独立训练线：分别维护 raw/shuffled 数据、训练窗口 manifest、验证集、优化器、调度器、SWA、checkpoint、candidate/approved/rejected、守门统计、TensorRT engine 缓存和 Dashboard 状态。只共享实现代码与版本化 schema，不跨人数混训、采样、蒸馏、续载或回退。
 - [ ] 每个代际使用独立的 candidate、approved、rejected 和 TensorRT engine 缓存记录，同时保留上一代冠军用于跨代守门和回退。
 - [ ] 固定跨代兼容条件：规则版本、观察维度、动作编号和玩家数必须相同；任一条件变化都启动新训练线，不得当作单纯扩容。
 
@@ -247,7 +254,7 @@ KataGo 把 komi 当作全局条件，是因为同一棋盘在不同 komi 下具�
 
 当前 `TrainingExample` 只有 observation、legal mask、MCTS policy 和终局 utility 四组数据。下列字段均属于待实现的新 label schema；在 schema 版本升级前，旧 NPZ 不得被误认为具有缺失 head 的零值标签。
 
-符号约定：`P` 为本模型的玩家数，`Q=P(P-1)/2` 为无序玩家对数量，`A` 为固定动作空间，`N` 为星球槽位，`S` 为可放卫星/空间站的星图位置，`T=6` 为科技轨数量，`H` 为短/中/长三个时间尺度。所有玩家维度必须使用与 observation 相同的座位顺序；2、3、4 人模型分别保存，不通过 padding 混训。
+符号约定：`P` 为本模型固定的玩家数，`Q=P(P-1)/2` 为无序玩家对数量，`A` 为固定动作空间，`N` 为星球槽位，`S` 为可放卫星/空间站的星图位置，`T=6` 为科技轨数量，`H` 为短/中/长三个时间尺度。所有玩家维度必须使用与 observation 相同的座位顺序；2、3、4 人训练线完全独立，不通过 padding 混训，也不共享训练数据或权重。
 
 优先级沿用文档开头定义。G0 的网络输出严格限制为 policy、pairwise WDL 和 VP belief；完整状态轨迹仍需保存，以便 P1/P2 标签以后离线派生，但未启用的辅助标签不要求在 G0 NPZ 中展开为稠密数组。
 
@@ -295,7 +302,7 @@ KataGo 把 komi 当作全局条件，是因为同一棋盘在不同 komi 下具�
 
 | NPZ 标签 | Shape | 来源与用途 | 优先级 |
 | --- | --- | --- | --- |
-| `raw_final_vp_targets` | `[P]` | 不包含虚拟竞拍 offset 的每名玩家原始最终 VP，用于补偿重估和审计 | P0 |
+| `raw_final_vp_targets` | `[P]` | 不包含离线 VP offset 的每名玩家原始最终 VP，用于补偿重估和审计 | P0 |
 | `final_vp_targets` | `[P]` | 包含 `starting_vp_offsets` 的每名玩家调整后最终 VP，供 VP head、pairwise WDL 真值和 MCTS 终局效用使用 | P0 |
 | `final_vp_belief_targets` | `[P,V]` | 固定 VP 桶的终局分布，包含下溢/上溢桶，类似 KataGo score belief | P0 |
 | `final_vp_component_targets` | `[P,6]` | `原始局内VP、开局offset、科技轨终局分、剩余资源分、终局板块1、终局板块2` | P1 |
