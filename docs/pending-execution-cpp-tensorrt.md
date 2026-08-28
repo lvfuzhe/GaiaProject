@@ -29,7 +29,7 @@ ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，不引入 ONNX Runti
 | 训练闭环 | 五进程异步闭环、SWA、ONNX、C++ TensorRT selfplay/gatekeeper | 多机共享目录和生产者背压 | TensorFlow、TFRecord、ONNX Runtime、C++ 训练 |
 | 人数模型 | 2/3/4 人只共用代码、标签语义和 MCTS 实现；训练线、数据、SWA、checkpoint、守门和发布完全独立 | 各人数可独立递进网络规模 | 跨人数混训、蒸馏、续载或直接加载权重 |
 | 核心推理头 | 参数化 policy、pairwise WDL、VP belief | 独立 TD utility/VP、uncertainty、动作 Q | 任何排名头、独立 utility logits |
-| MCTS 效用 | 只使用 pairwise utility，`beta_vp=0` | 小权重、有界、动态居中的 VP utility，消融通过后启用 | 直接把原始 VP 无界加入效用 |
+| MCTS 效用 | 使用 pairwise utility 加配置化、有界的 VP utility（G0 默认 `beta_vp=0.10`） | 校准 `beta_vp`、`vp_scale` 和 root center，并按守门结果调整 | 直接把原始 VP 无界加入效用 |
 | 数据 | 完整状态轨迹、终局真值、full/cheap search 标记、可审计窗口 | policy surprise、对称增强、重分析 | 解析前端 JSON 作为训练输入 |
 | 辅助监督 | G0 只实现核心标签与 loss | 玩家发展 P1；星图/建筑 P2 | 让大量辅助头阻塞 G0 |
 | 模型发布 | 多人配对守门、置信区间、原子发布 | 历史锚点模型池和非传递性检查 | 只按单个平均分点估计晋级 |
@@ -52,6 +52,17 @@ ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，不引入 ONNX Runti
 - VP belief 主桶为 `-200..+200`、步长 1，共 401 个整数桶；额外保留下溢/上溢哨兵桶用于审计，因此输出维度固定为 `V=403`，哨兵不代表额外的有限精度。
 - setup 随机分布完全复刻 BGA 合法随机规则，不使用自定义训练权重改写 BGA 的基础概率；每局记录 BGA 随机规则版本和实际 setup hash。
 
+## 配置文件
+
+9-12 项参数统一写入 [`configs/gaia-g0.json`](../configs/gaia-g0.json)。文件包含 2/3/4 人独立训练 profile；进程启动时必须选择一个 profile，并把解析后的配置快照和 SHA-256 写入本次 run manifest。命令行只允许指定配置文件、profile 和运行目录，不允许覆盖下列策略参数。该文件是下一阶段 C++/TensorRT 目标实现的 canonical 配置；当前五个 Python 进程仍读取各自 `runs/*/pipeline.json`，直到第 8 节的配置加载器完成。
+
+- 搜索 tier 的初始目标占比为 `forced=30%`、`cheap=45%`、`full=25%`。`forced` 是规则自动步骤的观测目标，不是随机抽样；在非 forced 决策中，cheap/full 的抽样比例分别为 `64.28571429%/35.71428571%`，两者合计 100%。G0 的 `lead_estimation` 关闭，比例为 0；所有轮次、动作类别和人数 bucket 仍至少保留 `20%` full-search 覆盖率。
+- VP utility 从 G0 就进入每次非强制 MCTS 的叶节点回传和终局回传。pairwise utility 先按唯一聚合公式得到 `u_pairwise`，VP belief 取每个玩家的 VP 均值；在一次根搜索内固定 `root_center`，使用 `u_i = u_pairwise_i + beta_vp * tanh((vp_i - root_center_i) / vp_scale)`。终局节点的 VP 改用精确终局 VP，非终局节点使用 VP belief；不得把原始 VP 无界相加。默认 `beta_vp=0.10`、`vp_scale=20.0`，均可在配置中调整并由消融和 gatekeeper 验证。
+- gatekeeper 默认至少运行 `200` 个配对统计块，最多 `1000` 个；以 `95%` block-bootstrap 置信区间的候选平均 pairwise utility 为主指标，置信区间下界达到 `+0.02` 才晋级，上界不超过 `0` 才拒绝。配置同时保留 `vp_utility_control`（`beta_vp=0`）作为回归对照。非法动作、崩溃和未完成对局上限为 `0`，超时率上限为 `1%`。这些都是配置项，不能写死在 C++ 中。
+- TensorRT 默认 `FP16` 推理、`FP32` 校验并允许 `TF32`；CUDA 设备、目标 GPU、最低 compute capability、workspace 大小和 engine cache 目录均在配置文件的 `tensorrt.hardware` 中设置。目标 GPU 为 `auto` 时只做能力探测，不假定具体显卡型号。
+
+配置校验必须检查 tier 比例和非 forced 比例各自求和为 1、`beta_vp>=0`、VP 桶为 `403`、`pass_lower_ci > reject_upper_ci`、保护指标在 `[0,1]` 内，以及 TensorRT 精度属于 `fp32/fp16`。配置版本或网络/动作 schema 变化时，禁止复用旧 engine、训练窗口和 gatekeeper 统计。
+
 ## 与 KataGo 的适配对照
 
 参考 KataGo 官方的 [Selfplay Training](https://github.com/lightvector/KataGo/blob/master/SelfplayTraining.md)、[KataGo Methods](https://github.com/lightvector/KataGo/blob/master/docs/KataGoMethods.md)和[训练 selfplay 配置](https://github.com/lightvector/KataGo/blob/master/cpp/configs/training/selfplay1.cfg)。本项目借鉴训练工程和搜索方法，不复用围棋规则、特征或模型文件。
@@ -67,7 +78,7 @@ ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，不引入 ONNX Runti
 | 棋盘尺寸、规则和 komi 随机化 | 版本化 Gaia setup 分布，覆盖地图、板块、种族和座位组合 | P0，随机设置是网络输入且必须监控覆盖率 |
 | Playout Cap Randomization / cheap search | 按语义决策区分 full/cheap search，强制步骤不推理 | P0，避免兑换和确认步骤吞噬算力与样本 |
 | 训练 lookback window 与每份新数据训练上限 | tapered window、fresh-data 下限、train/data ratio、no-repeat shard | P0，避免异步训练反复消费旧分片而过拟合 |
-| 胜负效用 + 动态分差效用 | G0 只用 pairwise；P1 尝试小权重、有界 VP utility | P1，先保证目标稳定，再让险胜/大胜影响同胜率动作 |
+| 胜负效用 + 动态分差效用 | G0 使用 pairwise 加小权重、有界 VP utility | P1 校准权重和中心，并验证险胜/大胜对同胜率动作的影响 |
 | 多个 TD value/score 输出 | 独立 `td_utility_head` 和 `td_vp_head`，不污染终局 WDL/VP head | P1，目标语义不同必须分头 |
 | Policy Surprise Weighting / root policy temperature | 保留原始与加噪 prior，按 KL 重采样；温度按语义阶段衰减 | P1，提升盲点动作学习和探索稳定性 |
 | 棋盘对称增强与多棋盘尺寸 mask | 只使用当前 setup 的合法六角图自同构；2/3/4 人仍分模型 | P1，不应用破坏座位、种族或地图配置语义的伪对称 |
@@ -305,8 +316,8 @@ GNN 混合网络根据节点/关系编码器、消息传递层数、hidden size�
 - [ ] 终局 pairwise WDL 只监督 `pairwise_value_head`；`root_value_targets` 是构造未来指数平均的原始序列，只有 `td_utility_targets` 监督独立 `td_utility_head`。禁止把终局 one-hot、单步根搜索值和不同时间尺度 TD 目标同时回归到同一输出。
 - [ ] `td_utility_head` 每个时间尺度的 `[P]` 输出必须中心化为和为 0，保持与 pairwise 聚合效用一致；不得让独立 TD 输出引入所有玩家同时获益的漂移分量。
 - [ ] `shortterm_utility_error_targets` 使用对应 TD 预测的 `stop_gradient` 误差构造，误差头采用 Huber 等抗异常值损失；不得反向推动 TD 输出去迎合误差预测。
-- [ ] G0 固定 `beta_vp=0`，搜索只使用 pairwise utility。P1 消融可启用 `u_search_i = u_pairwise_i + beta_vp * tanh((vp_lead_i - c_i) / vp_scale)`：`c_i` 是一次根搜索内固定的根 VP lead 中心，`vp_scale`、`beta_vp` 配置化且 score 项必须有界；终局节点使用真实 VP 代入同一公式。
-- [ ] 启用 VP utility 后必须重新校准 cPUCT/FPU 的效用范围，并分别守门 `beta_vp=0` 与候选配置。目标是区分 pairwise 概率近似相同的动作，不允许 VP 项压倒胜负效用。
+- [ ] G0 使用配置化的 `u_search_i = u_pairwise_i + beta_vp * tanh((vp_i - c_i) / vp_scale)`：`c_i` 是一次根搜索内固定的根 VP center，非终局节点的 `vp_i` 来自 VP belief 均值，终局节点使用真实 VP；`vp_scale`、`beta_vp` 配置化且 VP 项必须有界。默认值见 [`configs/gaia-g0.json`](../configs/gaia-g0.json)。
+- [ ] 启用 VP utility 后必须校准 cPUCT/FPU 的效用范围，并在 gatekeeper 中保留 `beta_vp=0` 的控制组与候选配置对照。目标是区分 pairwise 概率近似相同的动作，不允许 VP 项压倒胜负效用。
 
 ##### 2.6.3 VP、分数分布和不确定性标签
 
@@ -379,7 +390,7 @@ GNN 混合网络根据节点/关系编码器、消息传递层数、hidden size�
 | `policy_head` | `action_type_logits [B,C]`、`action_argument_logits [B,R,*]` | 参数化动作类型/参数目标 | 必须保留 |
 | `action_q_head` | 参数化 action tuple 的 value/Q 分量 | 合法 tuple 的两组 action Q 标签和 mask | P1 启用后保留 |
 | `pairwise_value_head` | `pairwise_wdl_logits [B,Q,3]` | 仅终局 pairwise WDL | 必须保留；后处理展开，不导出独立 utility/rank logits |
-| `score_head` | `vp_belief_logits [B,P,V]` | VP belief；mean/stdev/lead 从 belief 派生 | 必须保留 |
+| `vp_belief_head` | `vp_belief_logits [B,P,V]` | VP belief；mean/stdev/lead 从 belief 派生 | 必须保留 |
 | `td_head` | `td_utility [B,H,P]`、`td_vp [B,H,P]` | 独立 TD utility/VP 目标 | P1 启用后保留 |
 | `lead_head` | `vp_lead [B,P]` | 高预算 `root_vp_lead_targets` | P1 数据足够且消融通过后保留 |
 | `uncertainty_head` | `utility_error [B,H,P]`、`vp_error [B,H,P]`、`settle_time [B,1]` | 短期误差和稳定时间 | P1 启用后保留并供 MCTS 使用 |
@@ -389,7 +400,7 @@ GNN 混合网络根据节点/关系编码器、消息传递层数、hidden size�
 - [ ] ONNX 输出使用参数化 policy 的原始 logits 或未缩放回归量；C++ 负责合法 `ActionTuple` 组合、tuple softmax、pairwise 镜像展开、utility 聚合、VP belief moments、softplus、合法参数 mask 和数值缩放，并把版本及缩放常数统一写入 manifest。固定 action ID 不参与推理契约。
 - [ ] 训练 checkpoint 保存全部已启用 head，生产 ONNX 可以裁剪不被 MCTS/诊断消费的辅助输出；裁剪前后 policy、pairwise WDL、聚合 utility、VP 和 uncertainty 的 golden fixture 输出必须一致。
 - [ ] 每个 head 使用独立 loss、权重、有效样本计数和梯度统计；总 loss 不能掩盖某个 head 没有有效标签或量级失衡。
-- [ ] G0 生产 ONNX 只导出参数化 `policy_head`、`pairwise_value_head` 和 `score_head`；`action_q_head`、`td_head`、`lead_head`、`uncertainty_head`、`map_head` 和 `development_head` 必须等对应 P1/P2 阶段明确启用后，才更新输出契约和 TensorRT engine。
+- [ ] G0 生产 ONNX 只导出参数化 `policy_head`、`pairwise_value_head` 和 `vp_belief_head`；`action_q_head`、`td_head`、`lead_head`、`uncertainty_head`、`map_head` 和 `development_head` 必须等对应 P1/P2 阶段明确启用后，才更新输出契约和 TensorRT engine。
 
 ##### 2.6.7 样本权重、掩码和审计字段
 
@@ -419,7 +430,7 @@ Gaia 的一次规则行动可能展开为多次兑换、选板块、充能确认
 - [ ] 规则引擎标记 `semantic_decision_id` 和动作类别。只有一个合法动作且不含玩家真实选择时自动执行，不调用网络、不启动 MCTS、不生成 policy loss；完整状态轨迹仍记录该步骤用于复盘和终局标签。
 - [ ] 发布版本化 `setup_distribution`，完全复刻 BGA 的合法随机规则和概率：2/3/4 人地图限制、小/标准地图、星区排列与旋转、轮次/终局计分、科技/高级科技/助推板块、合法种族组合、座位分配及其随机种子都按 BGA 规则生成。禁止使用自定义权重、均匀重采样或为训练方便修改 BGA 概率；每局记录 BGA 规则版本、随机种子和实际 setup hash。
 - [ ] 按人数、地图模式、种族、座位、板块和主要交互组合持续报告 BGA 分布覆盖率；低频 bucket 只触发数据积累告警，不通过改权重改变 BGA 分布。固定验证集、gatekeeper 和公平性评估使用按 BGA 规则预先生成并冻结的 setup 清单。
-- [ ] 定义 `search_tier = forced | cheap | full | lead_estimation`。关键分支使用 full search；普通分支按配置概率使用 cheap/full；指定小比例位置使用高预算 lead estimation。各轮次、行动类别和玩家人数都设置最低 full-search 覆盖率，避免某类动作长期只有弱标签。
+- [ ] 定义 `search_tier = forced | cheap | full | lead_estimation`，并读取 `configs/gaia-g0.json` 的 tier 配置。G0 初始目标观测占比为 forced `30%`、cheap `45%`、full `25%`；forced 只表示规则自动步骤的目标占比，不做随机抽样。非 forced 决策按 cheap `64.28571429%`、full `35.71428571%` 抽样，lead estimation 关闭。各轮次、行动类别和玩家人数都设置最低 `20%` full-search 覆盖率，避免某类动作长期只有弱标签；实际比例以 telemetry 为准，不能从配置名推断。
 - [ ] full search 默认 `policy_train_mask=1`。cheap search 默认不训练 policy 或显著降权，但仍可提供终局 WDL/VP 标签；P1 可在 cheap search 发现高 KL surprise 时纳入 policy。保存实际访问数和每个 head 的独立权重，不能仅凭配置名推断样本质量。
 - [ ] G0 不允许提前认输或截断终局，保证完整 VP、计分来源和复盘轨迹。P1 可在连续高置信状态降低 visits 并降低对应 policy 权重，但仍必须把对局按规则运行到真实终局。
 - [ ] 根噪声使用固定“总浓度”而不是每合法动作固定 alpha；总浓度先按版本化动作类别权重分配，再在类别内部展开，避免合法兑换动作数量改变探索强度。P1 再消融基于 prior 的 shaped noise 和 policy target pruning。
@@ -447,8 +458,8 @@ Gaia 的一次规则行动可能展开为多次兑换、选板块、充能确认
 
 - [ ] 新建独立 C++ 推理库，负责 ONNX 解析、TensorRT network/engine 构建、上下文创建和资源释放。
 - [ ] 支持动态 batch 或预设 batch profile，并实现多请求合批接口，避免 self-play 每个叶节点单独推理。
-- [ ] 实现 CUDA stream、pinned host memory、异步拷贝和 batch 输出回收；默认提供 FP32 校验模式，再启用 FP16/TF32 优化。
-- [ ] 按 ONNX SHA-256、TensorRT/CUDA 版本和精度配置缓存序列化 engine；缓存失效时自动重建。
+- [ ] 实现 CUDA stream、pinned host memory、异步拷贝和 batch 输出回收；从配置读取 `precision`、`validation_precision`、`allow_tf32`、CUDA device、目标 GPU、最低 compute capability 和 workspace 上限，默认提供 FP32 校验模式，再启用 FP16/TF32 优化。
+- [ ] 按 ONNX SHA-256、TensorRT/CUDA 版本、硬件能力和配置精度缓存序列化 engine；缓存失效时自动重建，不能把一个 GPU 的 engine 复制给不满足目标能力的 GPU。
 - [ ] 增加 TensorRT 输出与 Python PyTorch SWA 输出的逐元素校验工具。
 - [ ] 对非法 shape、动作维度、NaN/Inf、engine 版本不兼容和显存不足提供明确错误。
 
@@ -469,7 +480,7 @@ Gaia 的一次规则行动可能展开为多次兑换、选板块、充能确认
 
 本文所需的是完全信息多人 MCTS：状态中没有待确定化的隐藏信息，价值始终采用绝对玩家顺序。旧讨论中的 `PIMCTS` 在此仅指 perfect-information MCTS，不引入针对手牌或战争迷雾的 determinization；实现和配置统一使用 `multiplayer_mcts` 命名。
 
-- [ ] 实现绝对玩家顺序的多玩家价值回传；叶节点先把 pairwise WDL 按 2.6.2 的唯一公式聚合为 `[P]` utility。G0 只回传 pairwise utility；P1 启用 VP utility 时按同节公式使用一次根搜索内固定的 VP 中心，并对终局/非终局节点保持一致。
+- [ ] 实现绝对玩家顺序的多玩家价值回传；叶节点先把 pairwise WDL 按 2.6.2 的唯一公式聚合为 `[P]` utility，再按配置把 VP belief 的有界项加入同一次回传。G0 即启用 VP utility：非终局使用 VP belief 均值，终局使用精确 VP；一次根搜索内固定 VP center，终局和非终局使用同一公式。不得把 VP utility 延后到 P1，也不得直接加入无界 VP。
 - [ ] 选择阶段由节点状态的实际 `current_player` 使用自己的效用分量；不得使用 KataGo 二人零和的父子符号翻转。被动充能、资源选择等响应节点由响应玩家优化自身动作，完成后再返回原行动流程。
 - [ ] 实现 2.7 节的 forced/cheap/full/lead-estimation 调度、根 policy 温度、动作采样温度和分类总浓度噪声；所有搜索参数按人数、网络代际和语义动作类别版本化，禁止沿用当前单一常数而不重新标定。
 - [ ] 将 MCTS 树节点改为紧凑结构，使用线程池运行多局 self-play；每棵树的随机种子必须可追踪。
@@ -488,7 +499,7 @@ Gaia 的一次规则行动可能展开为多次兑换、选板块、充能确认
 - [ ] 以 `setup seed + 地图/计分/科技/助推配置 + 种族组合` 为配对统计块；每个块让候选依次占据全部座位，其余座位使用冠军，且双方搜索模拟数完全相同。时间和 simulations/s 另作性能指标，不混入棋力主检验。
 - [ ] gatekeeper 固定发布版 VP offset、`delta_K=0`、关闭根噪声、动作温度 0、禁用训练专用 fork/增强；每局记录完整阵容、座位、种族、最终 VP、pairwise WDL、实际排名、搜索参数和模型哈希。
 - [ ] primary 晋级指标是按配对块聚合的候选平均 pairwise utility；使用 block bootstrap 置信区间或预注册顺序检验，不按单个点估计过门。第一名率、平均/分位 VP、非法动作、超步数和崩溃率作为保护指标。
-- [ ] 配置最小/最大配对块数、通过/拒绝边界和多重候选排队策略；任何提前停止都必须保存当时置信区间和完整已测块，不能因偶然连胜立即批准。
+- [ ] 从配置读取最小/最大配对块数、置信区间、通过/拒绝边界、保护指标上限和多重候选排队策略；默认 `min_pairing_blocks=200`、`max_pairing_blocks=1000`、`confidence_level=0.95`、`pass_lower_ci=0.02`、`reject_upper_ci=0`。任何提前停止都必须保存当时置信区间和完整已测块，不能因偶然连胜立即批准；非法动作、崩溃、未完成对局和超时率必须同时满足配置上限。
 - [ ] P1 增加混合阵容测试，让候选分别占 `1..P-1` 个座位，并维护少量历史 approved 锚点模型；若候选只克制当前冠军却对锚点显著退化，标记非传递风险并进入扩展测试，不直接晋级。
 - [ ] 通过后原子发布 `approved/current.onnx` 及 manifest；拒绝模型写入 rejected 目录和结构化日志。
 - [ ] 首个模型没有冠军时定义 bootstrap 规则，并测试重复候选、半成品文件和进程重启恢复。
@@ -499,6 +510,7 @@ Gaia 的一次规则行动可能展开为多次兑换、选板块、充能确认
 
 - [ ] 将进程角色改为：C++ `selfplay`、Python `shuffle`、Python `train`、Python `export`、C++ `gatekeeper`。
 - [ ] 更新 `pipeline.json`、状态文件、日志目录和产物目录协议，区分 `.pt` 训练 checkpoint、`.onnx` 推理模型、TensorRT engine 缓存、不可变训练窗口 manifest 和 reader lease。
+- [ ] 增加 `gaia-g0.json` 的严格配置加载器：按 2/3/4 人选择 profile，校验比例、VP 桶、阈值、精度和硬件字段，把规范化快照/hash 写入所有进程 manifest；除配置路径/profile/root 外拒绝策略参数命令行覆盖。
 - [ ] 所有 raw shard、shuffle pack、candidate 和状态文件使用 `run_id + producer_id + 原子序号/hash` 唯一命名；P1 允许多个 selfplay producer 共享目录，但目录创建、模型轮询和垃圾回收必须保持幂等，不能依赖单进程本地计数器避免冲突。
 - [ ] 让 supervisor 以可配置路径启动 C++ 可执行文件，并检查启动前的 CUDA/TensorRT、模型和规则版本。
 - [ ] supervisor 根据磁盘水位、训练债务、shuffler/gatekeeper 队列长度实施背压；背压只暂停生产或导出，不删除活跃窗口、不跳过守门、不发布半成品。
