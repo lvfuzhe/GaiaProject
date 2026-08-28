@@ -84,6 +84,24 @@
       "lead_estimation_ratio": 0.0,
       "lead_estimation_simulations": 256
     },
+    "policy_targets": {
+      "forced": {
+        "policy_train_mask": 0,
+        "policy_weight": 0.0
+      },
+      "cheap": {
+        "policy_train_mask": 0,
+        "policy_weight": 0.0
+      },
+      "full": {
+        "policy_train_mask": 1,
+        "policy_weight": 1.0
+      },
+      "lead_estimation": {
+        "policy_train_mask": 0,
+        "policy_weight": 0.0
+      }
+    },
     "mcts": {
       "c_puct": 1.5,
       "root_noise_enabled": true,

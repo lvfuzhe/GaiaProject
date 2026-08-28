@@ -76,7 +76,7 @@ ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，不引入 ONNX Runti
 | 二人零和、行动方视角价值回传 | 保留绝对玩家顺序的 `[P]` 效用；每个节点由实际决策玩家选择自身分量 | P0，不能使用二人符号翻转，充能等响应决策也必须切换决策者 |
 | komi 条件与随机化 | 版本化多人 VP offset；训练时加入有界零和扰动 | P0，防止种族与固定 offset 共适应 |
 | 棋盘尺寸、规则和 komi 随机化 | 版本化 Gaia setup 分布，覆盖地图、板块、种族和座位组合 | P0，随机设置是网络输入且必须监控覆盖率 |
-| Playout Cap Randomization / cheap search | 按语义决策区分 full/cheap search，强制步骤不推理 | P0，避免兑换和确认步骤吞噬算力与样本 |
+| Playout Cap Randomization / cheap search | 按语义决策区分 full/cheap search；cheap 屏蔽 policy、保留 WDL/VP，强制步骤不推理 | P0，避免低预算访问分布污染 policy，同时保留终局监督 |
 | 训练 lookback window 与每份新数据训练上限 | tapered window、fresh-data 下限、train/data ratio、no-repeat shard | P0，避免异步训练反复消费旧分片而过拟合 |
 | 胜负效用 + 动态分差效用 | 生产网络使用 pairwise 加小权重、有界 VP utility | P1 校准权重和中心，并验证险胜/大胜对同胜率动作的影响 |
 | 多个 TD value/score 输出 | 独立 `td_utility_head` 和 `td_vp_head`，不污染终局 WDL/VP head | P1，目标语义不同必须分头 |
@@ -391,7 +391,7 @@ KataGo 把 komi 当作全局条件，是因为同一棋盘在不同 komi 下具�
 
 - [ ] `label_schema_version`、`rules_version`、`player_count`、`network_id`、`model_hash`、`game_id`、`setup_seed`、`position_index`、`semantic_turn_index`、`round`、`player_to_move`、`starting_vp_offsets [P]`、`compensation_version`、`search_tier` 和 `symmetry_id`。
 - [ ] `action_tuple_masks [M]`、动作类型/参数槽位 masks、`player_masks [P]`、`pairwise_masks [P,P]`、`planet_masks [N]`、`board_space_masks [S]`、`action_value_masks [M]` 和每个可选 head 的 `*_loss_masks`。
-- [ ] `sample_weights`、`policy_train_masks`、`policy_weights`、`pairwise_value_weights`、`vp_weights`、`ownership_weights`；其中 sample weight 可结合完整/cheap 搜索、policy surprise、pairwise utility surprise、VP surprise、终局距离和是否重分析。
+- [ ] `sample_weights`、`policy_train_masks`、`policy_weights`、`pairwise_value_weights`、`vp_weights`、`ownership_weights`；其中 sample weight 可结合完整/cheap 搜索、pairwise utility surprise、VP surprise、终局距离和是否重分析。必须断言 cheap 样本的 `policy_train_masks=0` 且 `policy_weights=0`，其他 head 的 mask/weight 独立计算。
 - [ ] `root_total_visits`、`search_simulations`、`search_temperature`、`root_noise_applied`、`source_network_config_hash`、`reanalyzed` 和 `terminal_valid`。
 - [ ] 每个 raw NPZ 只保存一局，并只保存一次终局真值和完整状态轨迹；位置行通过 `game_id + position_index` 关联。shuffle pack 可以包含多局的位置，但不得丢失标签数组、局边界、来源 raw hash，或把逐位置数值塞进 JSON metadata。
 - [ ] 标签生成采用“两阶段写入”：C++ selfplay 先缓存每步 observation、搜索统计与状态摘要，终局后反向生成 outcome、VP、ownership、短期目标和 masks，再原子写入 NPZ。
@@ -414,7 +414,7 @@ Gaia 的一次规则行动可能展开为多次兑换、选板块、充能确认
 - [ ] 发布版本化 `setup_distribution`，完全复刻 BGA 的合法随机规则和概率：2/3/4 人地图限制、小/标准地图、星区排列与旋转、轮次/终局计分、科技/高级科技/助推板块、合法种族组合、座位分配及其随机种子都按 BGA 规则生成。禁止使用自定义权重、均匀重采样或为训练方便修改 BGA 概率；每局记录 BGA 规则版本、随机种子和实际 setup hash。
 - [ ] 按人数、地图模式、种族、座位、板块和主要交互组合持续报告 BGA 分布覆盖率；低频 bucket 只触发数据积累告警，不通过改权重改变 BGA 分布。固定验证集、gatekeeper 和公平性评估使用按 BGA 规则预先生成并冻结的 setup 清单。
 - [ ] 定义 `search_tier = forced | cheap | full | lead_estimation`，并读取 `configs/gaia-training.json` 的 tier 配置。初始目标观测占比为 forced `30%`、cheap `45%`、full `25%`；forced 只表示规则自动步骤的目标占比，不做随机抽样。非 forced 决策按 cheap `64.28571429%`、full `35.71428571%` 抽样，lead estimation 关闭。各轮次、行动类别和玩家人数都设置最低 `20%` full-search 覆盖率，避免某类动作长期只有弱标签；实际比例以 telemetry 为准，不能从配置名推断。
-- [ ] full search 默认 `policy_train_mask=1`。cheap search 默认不训练 policy 或显著降权，但仍可提供终局 WDL/VP 标签；P1 可在 cheap search 发现高 KL surprise 时纳入 policy。保存实际访问数和每个 head 的独立权重，不能仅凭配置名推断样本质量。
+- [ ] policy 监督固定按搜索层级执行：full search 使用 `policy_train_mask=1`、`policy_weight=1.0`；cheap search 使用 `policy_train_mask=0`、`policy_weight=0.0`，不进入 policy loss，也不因 KL surprise 重新启用。cheap 样本仍保存合法动作、访问次数和原始 visit target 供审计，并正常提供终局 pairwise WDL、VP belief 及其他有效标签。forced 和当前关闭的 lead-estimation 同样使用 policy mask/weight `0/0`。shuffler 不得改写这些掩码，trainer 必须按配置和 NPZ 字段双重断言。
 - [ ] 生产训练不允许提前认输或截断终局，保证完整 VP、计分来源和复盘轨迹。P1 可在连续高置信状态降低 visits 并降低对应 policy 权重，但仍必须把对局按规则运行到真实终局。
 - [ ] 根噪声使用固定“总浓度”而不是每合法动作固定 alpha；总浓度先按版本化动作类别权重分配，再在类别内部展开，避免合法兑换动作数量改变探索强度。P1 再消融基于 prior 的 shaped noise 和 policy target pruning。
 - [ ] 根 policy softmax 温度、落子采样温度和噪声分别配置，并按轮次/语义决策数衰减；gatekeeper 全部关闭根噪声，最终动作温度固定为 0。
