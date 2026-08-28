@@ -60,8 +60,25 @@ ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，不引入 ONNX Runti
 - VP utility 进入每次非强制 MCTS 的叶节点回传和终局回传。pairwise utility 先按唯一聚合公式得到 `u_pairwise`；启动搜索时先对根节点推理一次，令 `root_center_i` 等于根节点 `vp_belief` 的已补偿终局 VP 均值，并在这一次 MCTS 内固定。叶节点的 `vp_i` 在非终局时取该叶节点 VP belief 均值，在终局时取精确的已补偿终局 VP，使用 `u_i = u_pairwise_i + beta_vp * tanh((vp_i - root_center_i) / vp_scale)`。根中心、叶预测和终局真值都必须包含本局实际 `starting_vp_offset`；不得改用根节点当前累计 VP，也不得把原始 VP 无界相加。默认 `beta_vp=0.10`、`vp_scale=20.0`，均可在配置中调整并由消融和 gatekeeper 验证。
 - gatekeeper 默认至少运行 `200` 个配对统计块，最多 `1000` 个；一个 pairing block 固定一个 setup seed、地图/板块/种族/座位配置和补偿表，候选依次轮换占据全部 `P` 个座位，其余座位使用冠军，因此每个 block 实际运行 `P` 局。3 人局运行 `200` 个 block 就是 `600` 局，不能把 block 数当作对局数。以 `95%` block-bootstrap 置信区间的候选平均 pairwise utility 为主指标，置信区间下界达到 `+0.02` 才晋级，上界不超过 `0` 才拒绝。每个主测试达到晋级条件的候选，在正式发布前再运行一次 `vp_utility_control`（`beta_vp=0`）回归对照；对照组复用同一批 pairing block，只承担回归否决，不作为第二个主晋级指标。对照组置信区间上界低于 `-0.02` 时否决发布，否则不阻止主测试晋级。非法动作、崩溃和未完成对局上限为 `0`，超时率上限为 `1%`。这些都是配置项，不能写死在 C++ 中。
 - TensorRT 默认 `FP16` 推理、`FP32` 校验并允许 `TF32`；CUDA 设备、目标 GPU、最低 compute capability、workspace 大小和 engine cache 目录均在配置文件的 `tensorrt.hardware` 中设置。目标 GPU 为 `auto` 时只做能力探测，不假定具体显卡型号。
-- 训练固定使用单 GPU：`training_runtime.mode=single_gpu`、`device=cuda:0`；不启用 DDP、多 GPU 或多机梯度同步。2/3/4 人局仍分别使用独立数据目录和训练状态，单 GPU 按进程/任务顺序或配置的时间片运行。
+- 训练固定使用单 GPU：`training_runtime.mode=single_gpu`、`device=cuda:0`；不启用 DDP、多 GPU 或多机梯度同步。2/3/4 人局仍分别使用独立数据目录和训练状态；推荐由 supervisor 一次只激活一个人数 profile，单 profile 保持五进程闭环，训练与 selfplay 采用协作时间片，gatekeeper 运行时暂停 selfplay 并独占 GPU。
 - setup 随机规则固定为项目配置中的 `setup_distribution.version`，行为完全参考 BGA 随机设置；黄金 setup 清单来自 BGA 设置界面/复盘输出，经过人工核对后写入 `tests/fixtures/bga_setup_golden.json`。规则实现或黄金样本变化必须提升项目版本并重新生成 setup hash，不能静默改变分布。
+
+### 本轮未决项的推荐初始配置
+
+以下值先写入 [`configs/gaia-training.json`](../configs/gaia-training.json)，作为首版闭环的可执行默认值；完成基线测试后才能调整。调整配置必须写入 run manifest，涉及网络、动作或观察 schema 的修改必须新建训练线。
+
+- **进程与 GPU**：`profile_execution=one_profile_at_a_time`、`max_active_profiles=1`、`process_count_per_profile=5`、`gpu_resource_policy=cooperative_time_slicing`；gatekeeper 使用独占 GPU，运行期间暂停 selfplay。
+- **训练器**：AdamW、学习率 `3e-4`、余弦衰减、`50000` 样本 warmup、batch `128`、梯度累积 `4`（有效 batch `512`）、weight decay `1e-4`、AMP FP16、梯度裁剪 `1.0`，每 `10000` 样本保存 checkpoint。
+- **核心 loss**：policy/WDL/VP 权重为 `1.0/1.0/0.5`；首版不使用 label smoothing；验证集按 `setup_hash` 划分，保留 `5%` 且禁止训练局进入 holdout。
+- **观察协议**：`standard-v22`、`float32`、最多 `128` 个图节点、`512` 条边、`16` 种关系、绝对座位顺序、显式 mask；玩家维度按 profile 精确取 `P=2/3/4`，不做跨人数 padding 或混训；GNN 算子采用 edge-conditioned graph transformer，SiLU 激活和 pre-LayerNorm。
+- **动作协议**：`action-tuple-v1`，规则引擎提供 action registry；参数采用按动作类型条件化的独立槽位，最多 `8` 个参数槽位、`256` 个合法 tuple；tuple 先按固定槽位顺序规范化，再对各分量 log-prob 求和并归一化。固定 action ID 只用于审计和缓存。
+- **MCTS 基线**：FPU 使用 parent value 并减少 `0.20`，virtual loss `1.0`，单树最多 `200000` 节点，叶节点 batch `64`、等待 `2ms`；关闭树复用和转置表；按合法 tuple 做 root Dirichlet 噪声，tier 使用配额控制器并允许 `5%` 误差。
+- **VP belief**：下溢/上溢桶代表值为 `-201/+201`，采用硬桶交叉熵，不做 label smoothing；均值使用 softmax expectation 加尾部代表值计算。
+- **数据与 shuffle**：原始格式 `npz-trajectory-v1`，一局一个文件并保存完整状态轨迹；shuffle 输出 `npz-shard-v1`，每片 `4096` 个 position，固定 seed `20260828`，每 `10s` 扫描，按 game id 去重；训练窗口为 `200000..2000000` positions，新数据至少占 `25%`，按线性权重衰减且窗口刷新前不重复消费分片。
+- **SWA/export**：SWA 采用最近 `32` 个快照的等权滚动平均，补偿版本大幅变化时重置；ONNX opset `18`、动态 batch profile `1/64/256`，导出四个核心输出并执行 FP32/FP16 误差校验。
+- **BGA setup**：固定 seed manifest，首版黄金清单至少 `256` 个 setup；`bga-random-v1` 是项目版本名，必须绑定实际采集来源、规则说明和 fixture SHA-256。当前 fixture 尚未生成，不能在 fixture 完成前宣称 setup 契约已验收。
+- **offset**：训练扰动采用整数零和均匀分布，单玩家绝对值不超过 `4`，仅用于新局；拟合使用 ridge（`lambda=0.1`），每个 context 至少 `200` 局，最大 offset 变化连续 `3` 轮不超过 `1` 时停止。
+- **gatekeeper**：以 pairing block 为 bootstrap 单位，固定 seed、FIFO 一次测试一个 candidate；首个 champion 来自零补偿 bootstrap；VP 对照组对 candidate 与 champion 同时关闭 VP utility。
 
 配置校验必须检查 tier 比例和非 forced 比例各自求和为 1、`beta_vp>=0`、VP 桶为 `403`、`pass_lower_ci > reject_upper_ci`、保护指标在 `[0,1]` 内，以及 TensorRT 精度属于 `fp32/fp16`。配置版本或网络/动作 schema 变化时，禁止复用旧 engine、训练窗口和 gatekeeper 统计。
 
@@ -177,7 +194,7 @@ KataGo 把 komi 当作全局条件，是因为同一棋盘在不同 komi 下具�
 
 - [ ] 在 `AlphaZeroTrainer` 中增加可配置的 SWA/平均权重模型和更新周期。
 - [ ] SWA 起始点和更新周期按累计有效训练样本数定义，而不是仅按 optimizer step；梯度累积或 batch size 改变后不得静默改变平均节奏。
-- [ ] 从 `configs/gaia-training.json.swa` 读取 SWA 起始样本数、更新频率、平均算法、设备、平均快照数和 checkpoint 恢复行为；默认在累计 `200000` 个有效样本后开始，每 `1000` 个样本更新一次，采用等权滚动平均最近 `32` 个快照。
+- [ ] 从 `configs/gaia-training.json` 的 `swa` 节点读取 SWA 起始样本数、更新频率、平均算法、设备、平均快照数和 checkpoint 恢复行为；默认在累计 `200000` 个有效样本后开始，每 `1000` 个样本更新一次，采用等权滚动平均最近 `32` 个快照。
 - [ ] SWA 参数只是可配置初始值，调参时必须把规范化配置和快照计数写入 manifest；改变起始点、更新间隔或快照数后重新验证导出模型与守门结果。
 - [ ] checkpoint 同时保存普通 `model_state`、SWA `swa_state`、优化器状态和必要的计数器。
 - [ ] checkpoint 同时保存学习率调度器、AMP GradScaler、累计有效样本数、window manifest/hash、数据游标以及 Python/NumPy/Torch CPU/CUDA RNG 状态；恢复后下一批样本、学习率和 SWA 更新时间必须可复现。

@@ -8,7 +8,73 @@
     "ddp_enabled": false,
     "multi_gpu_enabled": false,
     "multi_node_enabled": false,
-    "data_root_strategy": "local_per_player_count"
+    "data_root_strategy": "local_per_player_count",
+    "profile_execution": "one_profile_at_a_time",
+    "active_profile_source": "supervisor_argument",
+    "gpu_resource_policy": "cooperative_time_slicing",
+    "gatekeeper_gpu_policy": "exclusive",
+    "selfplay_pauses_during_gatekeeper": true,
+    "max_active_profiles": 1,
+    "process_count_per_profile": 5
+  },
+  "training": {
+    "optimizer": "adamw",
+    "learning_rate": 0.0003,
+    "min_learning_rate": 0.00001,
+    "scheduler": "cosine",
+    "warmup_samples": 50000,
+    "batch_size": 128,
+    "gradient_accumulation_steps": 4,
+    "effective_batch_size": 512,
+    "weight_decay": 0.0001,
+    "amp": true,
+    "amp_dtype": "float16",
+    "gradient_clip_norm": 1.0,
+    "checkpoint_every_samples": 10000,
+    "validation_fraction": 0.05,
+    "loss_weights": {
+      "policy": 1.0,
+      "pairwise_wdl": 1.0,
+      "vp_belief": 0.5
+    },
+    "label_smoothing": 0.0,
+    "validation_split_policy": "setup_hash_holdout",
+    "initial_champion_policy": "zero_compensation_bootstrap"
+  },
+  "observation_schema": {
+    "version": "standard-v22",
+    "dtype": "float32",
+    "max_graph_nodes": 128,
+    "max_graph_edges": 512,
+    "relation_type_count": 16,
+    "max_players": 4,
+    "player_dimension_policy": "exact_profile_count",
+    "input_shape_by_profile": true,
+    "global_token_count": 1,
+    "player_order": "absolute_seat_order",
+    "padding": "zero_with_explicit_masks",
+    "gnn_operator": "edge_conditioned_graph_transformer",
+    "activation": "silu",
+    "normalization": "pre_layernorm",
+    "normalization_constants": {
+      "vp_scale": 100.0,
+      "resource_scale": 20.0,
+      "tech_level_scale": 5.0,
+      "round_scale": 6.0
+    },
+    "include_starting_vp_offset": true
+  },
+  "action_schema": {
+    "version": "action-tuple-v1",
+    "action_registry": "rules_engine_action_registry_v1",
+    "parameter_factorization": "conditional_independent_slots",
+    "parameter_slot_count": 8,
+    "max_legal_actions": 256,
+    "tuple_prior_aggregation": "sum_log_prob_then_normalize",
+    "canonicalization": "type_then_fixed_slot_order",
+    "invalid_parameter_logit": -1000000000.0,
+    "empty_slot_policy": "masked",
+    "fixed_action_id_role": "audit_and_cache_only"
   },
   "network": {
     "network_config_id": "graph-hybrid-v1",
@@ -32,7 +98,12 @@
       "step": 1,
       "underflow_bucket": true,
       "overflow_bucket": true,
-      "output_buckets": 403
+      "output_buckets": 403,
+      "underflow_representative": -201,
+      "overflow_representative": 201,
+      "target_encoding": "hard_bucket_cross_entropy",
+      "label_smoothing": 0.0,
+      "moment_method": "softmax_expectation_with_tail_representatives"
     }
   },
   "network_change_policy": {
@@ -46,6 +117,8 @@
     "update_every_samples": 1000,
     "averaging": "equal_weight_rolling",
     "snapshot_count": 32,
+    "window_semantics": "most_recent_snapshots_only",
+    "reset_on_compensation_version_change": "large_change_only",
     "device": "cpu",
     "resume_policy": "restore_state"
   },
@@ -56,7 +129,39 @@
     "version": "bga-random-v1",
     "golden_fixture_manifest": "tests/fixtures/bga_setup_golden.json",
     "golden_fixture_source": "BGA random setup outputs captured from the setup UI/replays and manually verified",
+    "fixture_status": "to_be_generated",
+    "fixture_min_setups": 256,
+    "fixture_seed_policy": "fixed_seed_manifest",
+    "version_source_policy": "project_versioned_from_bga_rule_reference",
     "require_setup_hash": true
+  },
+  "data": {
+    "raw_format": "npz-trajectory-v1",
+    "one_file_per_game": true,
+    "complete_state_trace": true,
+    "compressed_npz": true,
+    "state_trace_encoding": "typed_arrays_v1",
+    "storage_dtype": "float16_for_observations_float32_for_targets",
+    "shuffle": {
+      "output_format": "npz-shard-v1",
+      "positions_per_shard": 4096,
+      "seed": 20260828,
+      "scan_interval_seconds": 10,
+      "deduplicate_by_game_id": true,
+      "preserve_game_boundaries_in_raw": true
+    },
+    "window": {
+      "min_positions": 200000,
+      "max_positions": 2000000,
+      "fresh_data_fraction_min": 0.25,
+      "age_weighting": "linear_taper",
+      "no_repeat_shard_until_window_refresh": true
+    },
+    "validation": {
+      "split_unit": "setup_hash",
+      "holdout_setup_count": 32,
+      "allow_training_games_in_holdout": false
+    }
   },
   "training_isolation": {
     "mode": "independent_by_player_count",
@@ -130,10 +235,22 @@
     },
     "mcts": {
       "c_puct": 1.5,
+      "fpu": "parent_value",
+      "fpu_reduction": 0.20,
+      "virtual_loss": 1.0,
+      "max_tree_nodes": 200000,
+      "leaf_batch_size": 64,
+      "leaf_batch_wait_ms": 2,
+      "tie_break": "canonical_action_tuple_order",
+      "tree_reuse": false,
+      "transposition_table": false,
       "root_noise_enabled": true,
       "root_noise_total_concentration": 10.0,
       "action_temperature": 1.0,
-      "gatekeeper_action_temperature": 0.0
+      "gatekeeper_action_temperature": 0.0,
+      "root_noise_by_action_type": "dirichlet_over_legal_tuples",
+      "tier_scheduler": "quota_controller_with_minimum_coverage",
+      "tier_quota_tolerance": 0.05
     },
     "vp_utility": {
       "enabled": true,
@@ -175,6 +292,12 @@
     "root_noise_enabled": false,
     "action_temperature": 0.0,
     "delta_k": 0,
+    "bootstrap_setup_pool": "bga_golden_fixture_and_fixed_seeds",
+    "bootstrap_seed_policy": "fixed_manifest_seed_per_block",
+    "bootstrap_unit": "pairing_block",
+    "candidate_queue_policy": "fifo_one_candidate_at_a_time",
+    "first_champion_source": "zero_compensation_bootstrap",
+    "control_disable_vp_for_both_models": true,
     "vp_utility_control": {
       "enabled": true,
       "beta_vp": 0.0,
@@ -210,5 +333,46 @@
     },
     "engine_cache_dir": "runs/tensorrt-cache",
     "rebuild_on_onnx_hash_change": true
+  },
+  "export": {
+    "onnx_opset": 18,
+    "dynamic_batch": true,
+    "batch_profile": {
+      "min": 1,
+      "opt": 64,
+      "max": 256
+    },
+    "input_names": ["observation"],
+    "output_names": [
+      "action_type_logits",
+      "action_argument_logits",
+      "pairwise_wdl_logits",
+      "vp_belief_logits"
+    ],
+    "max_abs_error_fp32": 0.0001,
+    "max_relative_error_fp32": 0.001,
+    "max_abs_error_fp16": 0.01,
+    "max_relative_error_fp16": 0.02
+  },
+  "vp_offset": {
+    "mode": "offline_integer_zero_sum",
+    "training_perturbation": {
+      "enabled": true,
+      "distribution": "uniform_integer_zero_sum",
+      "max_abs_per_player": 4,
+      "apply_to_new_games_only": true
+    },
+    "fit": {
+      "min_games_per_context": 200,
+      "regularization": "ridge",
+      "ridge_lambda": 0.1,
+      "objective_weights": {
+        "first_place_rate": 1.0,
+        "mean_rank": 1.0,
+        "pairwise_utility": 1.0
+      },
+      "stop_max_abs_delta": 1,
+      "stop_consecutive_rounds": 3
+    }
   }
 }
