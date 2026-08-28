@@ -24,20 +24,20 @@ ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，不引入 ONNX Runti
 
 ## 方案决策摘要
 
-| 决策 | G0 最小闭环 | G0 后增强 | 明确不做 |
+| 决策 | 统一生产网络 | 后续可选增强 | 明确不做 |
 | --- | --- | --- | --- |
 | 训练闭环 | 五进程异步闭环、SWA、ONNX、C++ TensorRT selfplay/gatekeeper | 多机共享目录和生产者背压 | TensorFlow、TFRecord、ONNX Runtime、C++ 训练 |
-| 人数模型 | 2/3/4 人只共用代码、标签语义和 MCTS 实现；训练线、数据、SWA、checkpoint、守门和发布完全独立 | 各人数可独立递进网络规模 | 跨人数混训、蒸馏、续载或直接加载权重 |
+| 人数模型 | 2/3/4 人只共用代码、标签语义和 MCTS 实现；训练线、数据、SWA、checkpoint、守门和发布完全独立 | 各人数可手动调整同一网络配置 | 跨人数混训、蒸馏、续载或直接加载权重 |
 | 核心推理头 | 参数化 policy、pairwise WDL、VP belief | 独立 TD utility/VP、uncertainty、动作 Q | 任何排名头、独立 utility logits |
-| MCTS 效用 | 使用 pairwise utility 加配置化、有界的 VP utility（G0 默认 `beta_vp=0.10`） | 校准 `beta_vp`、`vp_scale` 和 root center，并按守门结果调整 | 直接把原始 VP 无界加入效用 |
+| MCTS 效用 | 使用 pairwise utility 加配置化、有界的 VP utility（默认 `beta_vp=0.10`） | 校准 `beta_vp`、`vp_scale` 和 root center，并按守门结果调整 | 直接把原始 VP 无界加入效用 |
 | 数据 | 完整状态轨迹、终局真值、full/cheap search 标记、可审计窗口 | policy surprise、对称增强、重分析 | 解析前端 JSON 作为训练输入 |
-| 辅助监督 | G0 只实现核心标签与 loss | 玩家发展 P1；星图/建筑 P2 | 让大量辅助头阻塞 G0 |
+| 辅助监督 | 生产网络只实现核心标签与 loss | 玩家发展 P1；星图/建筑 P2 | 让大量辅助头阻塞生产闭环 |
 | 模型发布 | 多人配对守门、置信区间、原子发布 | 历史锚点模型池和非传递性检查 | 只按单个平均分点估计晋级 |
 
 优先级统一解释如下，全文不再把“标签可保存”和“网络头必须启用”混为一件事：
 
-- `P0`：首个 G0 闭环前必须完成，范围限于正确性、可恢复性和核心 policy/WDL/VP 训练。
-- `P1`：G0 稳定后加入的低风险效率或样本质量增强；必须有独立开关和基线对照。
+- `P0`：首个统一生产闭环前必须完成，范围限于正确性、可恢复性和核心 policy/WDL/VP 训练。
+- `P1`：生产闭环稳定后加入的低风险效率或样本质量增强；必须有独立开关和基线对照。
 - `P2`：实验功能；只有消融显示守门棋力、样本效率或校准显著改善才保留。
 
 已确认的产品级约束：
@@ -48,16 +48,16 @@ ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，不引入 ONNX Runti
 - 2/3/4 人模型分别训练、分别保存、分别守门和发布，训练数据与训练状态完全隔离。
 - 最终网络表示架构采用星图 GNN + 玩家/科技/公共板块混合网络；不评估或实现其他网络表示架构。
 - policy 采用参数化动作头：网络预测动作类型和参数分量，C++ 组合成规范化 `ActionTuple/ActionKey`，由规则引擎枚举并过滤合法动作；GNN 和网络都不依赖固定 action ID，固定编号最多作为复盘/缓存的可选审计键。
-- G0 核心网络头严格只有参数化 policy、pairwise WDL 和 VP belief；删除 rank head，排名和第一名率只从完整终局 VP 离线统计派生。
+- 生产网络严格只有参数化 policy、pairwise WDL 和 VP belief 三个核心 head；删除 rank head，排名和第一名率只从完整终局 VP 离线统计派生。
 - VP belief 主桶为 `-200..+200`、步长 1，共 401 个整数桶；额外保留下溢/上溢哨兵桶用于审计，因此输出维度固定为 `V=403`，哨兵不代表额外的有限精度。
 - setup 随机分布完全复刻 BGA 合法随机规则，不使用自定义训练权重改写 BGA 的基础概率；每局记录 BGA 随机规则版本和实际 setup hash。
 
 ## 配置文件
 
-9-12 项参数统一写入 [`configs/gaia-g0.json`](../configs/gaia-g0.json)。文件包含 2/3/4 人独立训练 profile；进程启动时必须选择一个 profile，并把解析后的配置快照和 SHA-256 写入本次 run manifest。命令行只允许指定配置文件、profile 和运行目录，不允许覆盖下列策略参数。该文件是下一阶段 C++/TensorRT 目标实现的 canonical 配置；当前五个 Python 进程仍读取各自 `runs/*/pipeline.json`，直到第 8 节的配置加载器完成。
+9-12 项参数统一写入 [`configs/gaia-training.json`](../configs/gaia-training.json)。文件包含唯一的网络容量配置和 2/3/4 人独立训练 profile；进程启动时必须选择一个 profile，并把解析后的配置快照、网络配置哈希和 SHA-256 写入本次 run manifest。命令行只允许指定配置文件、profile 和运行目录，不允许覆盖下列策略参数。容量字段可在该文件中手动调整；任何容量、架构或 schema 修改都必须创建新的独立训练线，不能续载旧 checkpoint。该文件是下一阶段 C++/TensorRT 目标实现的 canonical 配置；当前五个 Python 进程仍读取各自 `runs/*/pipeline.json`，直到第 8 节的配置加载器完成。
 
-- 搜索 tier 的初始目标占比为 `forced=30%`、`cheap=45%`、`full=25%`。`forced` 是规则自动步骤的观测目标，不是随机抽样；在非 forced 决策中，cheap/full 的抽样比例分别为 `64.28571429%/35.71428571%`，两者合计 100%。G0 的 `lead_estimation` 关闭，比例为 0；所有轮次、动作类别和人数 bucket 仍至少保留 `20%` full-search 覆盖率。
-- VP utility 从 G0 就进入每次非强制 MCTS 的叶节点回传和终局回传。pairwise utility 先按唯一聚合公式得到 `u_pairwise`，VP belief 取每个玩家的 VP 均值；在一次根搜索内固定 `root_center`，使用 `u_i = u_pairwise_i + beta_vp * tanh((vp_i - root_center_i) / vp_scale)`。终局节点的 VP 改用精确终局 VP，非终局节点使用 VP belief；不得把原始 VP 无界相加。默认 `beta_vp=0.10`、`vp_scale=20.0`，均可在配置中调整并由消融和 gatekeeper 验证。
+- 搜索 tier 的初始目标占比为 `forced=30%`、`cheap=45%`、`full=25%`。`forced` 是规则自动步骤的观测目标，不是随机抽样；在非 forced 决策中，cheap/full 的抽样比例分别为 `64.28571429%/35.71428571%`，两者合计 100%。`lead_estimation` 关闭，比例为 0；所有轮次、动作类别和人数 bucket 仍至少保留 `20%` full-search 覆盖率。
+- VP utility 进入每次非强制 MCTS 的叶节点回传和终局回传。pairwise utility 先按唯一聚合公式得到 `u_pairwise`，VP belief 取每个玩家的 VP 均值；在一次根搜索内固定 `root_center`，使用 `u_i = u_pairwise_i + beta_vp * tanh((vp_i - root_center_i) / vp_scale)`。终局节点的 VP 改用精确终局 VP，非终局节点使用 VP belief；不得把原始 VP 无界相加。默认 `beta_vp=0.10`、`vp_scale=20.0`，均可在配置中调整并由消融和 gatekeeper 验证。
 - gatekeeper 默认至少运行 `200` 个配对统计块，最多 `1000` 个；以 `95%` block-bootstrap 置信区间的候选平均 pairwise utility 为主指标，置信区间下界达到 `+0.02` 才晋级，上界不超过 `0` 才拒绝。配置同时保留 `vp_utility_control`（`beta_vp=0`）作为回归对照。非法动作、崩溃和未完成对局上限为 `0`，超时率上限为 `1%`。这些都是配置项，不能写死在 C++ 中。
 - TensorRT 默认 `FP16` 推理、`FP32` 校验并允许 `TF32`；CUDA 设备、目标 GPU、最低 compute capability、workspace 大小和 engine cache 目录均在配置文件的 `tensorrt.hardware` 中设置。目标 GPU 为 `auto` 时只做能力探测，不假定具体显卡型号。
 
@@ -78,7 +78,7 @@ ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，不引入 ONNX Runti
 | 棋盘尺寸、规则和 komi 随机化 | 版本化 Gaia setup 分布，覆盖地图、板块、种族和座位组合 | P0，随机设置是网络输入且必须监控覆盖率 |
 | Playout Cap Randomization / cheap search | 按语义决策区分 full/cheap search，强制步骤不推理 | P0，避免兑换和确认步骤吞噬算力与样本 |
 | 训练 lookback window 与每份新数据训练上限 | tapered window、fresh-data 下限、train/data ratio、no-repeat shard | P0，避免异步训练反复消费旧分片而过拟合 |
-| 胜负效用 + 动态分差效用 | G0 使用 pairwise 加小权重、有界 VP utility | P1 校准权重和中心，并验证险胜/大胜对同胜率动作的影响 |
+| 胜负效用 + 动态分差效用 | 生产网络使用 pairwise 加小权重、有界 VP utility | P1 校准权重和中心，并验证险胜/大胜对同胜率动作的影响 |
 | 多个 TD value/score 输出 | 独立 `td_utility_head` 和 `td_vp_head`，不污染终局 WDL/VP head | P1，目标语义不同必须分头 |
 | Policy Surprise Weighting / root policy temperature | 保留原始与加噪 prior，按 KL 重采样；温度按语义阶段衰减 | P1，提升盲点动作学习和探索稳定性 |
 | 棋盘对称增强与多棋盘尺寸 mask | 只使用当前 setup 的合法六角图自同构；2/3/4 人仍分模型 | P1，不应用破坏座位、种族或地图配置语义的伪对称 |
@@ -87,15 +87,15 @@ ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，不引入 ONNX Runti
 | ownership 辅助头 | Gaia 拆为主建筑、Lantids 共存、卫星、空间站等可选头 | P2，保存可派生标签，但不阻塞首轮训练 |
 | 可选 gatekeeper | 本项目早期保留多人守门 | P0，当前规则和 C++ 迁移风险较高，先作为回归保护 |
 | selfplay 中途切换新模型 | Gaia 只在新对局边界切换 | P0，保证一局的生成模型、offset 和复盘审计单一可追踪 |
-| soft resignation / 胜势降 visits | G0 不截断；P1 只降 visits 并完成真实终局 | P1，Gaia 需要完整 VP、计分来源和规则复盘 |
-| opening fork、side positions、非对称 playout | 先不进入 G0；按动作类别覆盖不足时再做分支续局实验 | P2，多玩家分支会改变阵容交互分布，必须单独消融 |
+| soft resignation / 胜势降 visits | 生产网络不截断；P1 只降 visits 并完成真实终局 | P1，Gaia 需要完整 VP、计分来源和规则复盘 |
+| opening fork、side positions、非对称 playout | 首版不进入；按动作类别覆盖不足时再做分支续局实验 | P2，多玩家分支会改变阵容交互分布，必须单独消融 |
 
 ## 执行顺序
 
 ### 0. 冻结跨进程契约与基线
 
 - [ ] 固定 `standard-v22` 的观察向量、合法 `ActionTuple` 枚举和参数化策略输出、pairwise WDL 输出及 VP 输出的 shape、dtype、动作类型/参数 schema 和玩家顺序。
-- [ ] 固定 NPZ 训练样本格式：`raw/*.npz` 一文件只表示一局从初始设置到真实终局的完整对局，包含输入、掩码、G0 启用的稠密监督标签、逐头 loss mask/weight，以及可派生 P1/P2 标签的完整状态轨迹和复盘 metadata；未启用标签不得用全零数组伪装存在。`shuffle` 输出的训练 pack 可以跨局混排 position，但必须保留 `game_id + position_index`、终局标签关联和来源 raw hash。
+- [ ] 固定 NPZ 训练样本格式：`raw/*.npz` 一文件只表示一局从初始设置到真实终局的完整对局，包含输入、掩码、当前启用的稠密监督标签、逐头 loss mask/weight，以及可派生 P1/P2 标签的完整状态轨迹和复盘 metadata；未启用标签不得用全零数组伪装存在。`shuffle` 输出的训练 pack 可以跨局混排 position，但必须保留 `game_id + position_index`、终局标签关联和来源 raw hash。
 - [ ] 固定模型清单格式：规则版本、标签 schema/head 版本、玩家数、观察维度、参数化动作类型/参数维度、`ActionTuple` canonicalization/schema 版本、VP belief 桶范围/步长/哨兵配置、网络架构、SWA 是否可用、导出 opset、TensorRT 精度模式和权重 SHA-256。
 - [ ] 为 Python 参考实现增加一组固定种子状态和网络输出 golden fixtures，作为 C++ 对齐基准。
 - [ ] 记录当前 Python self-play、单次 MCTS、网络 batch=1/batch=N 的吞吐和显存基线。
@@ -122,11 +122,11 @@ KataGo 把 komi 当作全局条件，是因为同一棋盘在不同 komi 下具�
 
 #### 0.2 离线补偿估算与迭代闭环
 
-补偿评估是五进程之外的离线任务，在模型代际边界运行，不增加第六个常驻训练进程。补偿表只有完成独立验收并原子发布后，才会被后续新对局读取；运行中的对局不得切换版本。
+补偿评估是五进程之外的离线任务，在规则、补偿或网络配置版本边界运行，不增加第六个常驻训练进程。补偿表只有完成独立验收并原子发布后，才会被后续新对局读取；运行中的对局不得切换版本。
 
 ##### 0.2.1 C0：零补偿基准采样
 
-- [ ] 先完成一个可稳定对局的 G0 bootstrap 模型，所有玩家使用 `K_i=0`；随机网络产生的结果不得用于估算种族补偿。
+- [ ] 先完成一个可稳定对局的统一网络 bootstrap 模型，所有玩家使用 `K_i=0`；随机网络产生的结果不得用于估算种族补偿。
 - [ ] 冻结一个 approved 模型作为评估器，评估期间不更新权重、搜索参数或规则版本。
 - [ ] 为同一 setup seed 生成成组对局，轮换种族和座位；在合法种族组合范围内覆盖全部 14 个种族、先后手和对手组合。
 - [ ] 2、3、4 人局分别采样；小地图/标准地图、地图种子、回合计分、终局计分、科技和助推布局全部记录为上下文，不把不同配置直接混成一个均值。
@@ -166,7 +166,7 @@ KataGo 把 komi 当作全局条件，是因为同一棋盘在不同 komi 下具�
 - [ ] 使用阻尼更新的连续建议值 `K_proposed=K_current+alpha*delta_K_fit`，`alpha` 配置化；若拟合器输出绝对推荐表 `K_fit`，等价写为 `K_proposed=(1-alpha)*K_current+alpha*K_fit`。随后整体投影到对应人数的整数、零和、有界可行域得到 `K_next`，而不是逐项取整或分配余数；同时限制单次最大变化，避免模型策略与补偿相互追逐而振荡。
 - [ ] 新表只有在 holdout 公平性改善、置信区间合格且没有明显伤害其他人数/context 后才发布；失败则保留当前表并归档候选结果。
 - [ ] 配置停止条件：连续多轮最大 offset 变化、第一名率偏差、平均排名偏差和 pairwise utility 偏差均低于阈值；阈值由基准数据确定，不硬编码。
-- [ ] 网络从 G0 扩展到 G1/G2 时继承上一代 offset 作为初值，但新架构通过守门并积累自产数据后必须重新校准，不能假设种族相对强度恒定。
+- [ ] 网络容量、规则、观察或动作 schema 发生变化后，可使用上一版 offset 作为估算初值，但新训练线通过守门并积累自产数据后必须重新校准，不能假设种族相对强度恒定。
 - [ ] Dashboard 增加非进程型的“补偿评估”报告页，显示当前/候选版本、样本覆盖、各人数种族 offset、补偿前后公平性、置信区间和收敛历史；不加入五进程一键启动。
 
 验收：至少演练一次 `零补偿 -> offsets-v1 -> 带补偿训练 -> 残差评估 -> offsets-v2`，以及一次候选补偿被拒绝并回退的流程。只有满足配置门槛的表才成为新对局默认值。
@@ -192,78 +192,60 @@ KataGo 把 komi 当作全局条件，是因为同一棋盘在不同 komi 下具�
 - [ ] 当前 Python 的 `action_size`、`legal_action_mask()` 和固定动作数组属于旧接口；GNN 目标实现必须改为规则引擎返回带类型参数的合法 `ActionTuple` 列表，MCTS 边直接保存 tuple 和统计量，不以 action ID 数组作为网络输入/输出。
 - [ ] 只实现星图 GNN + 玩家/科技/公共板块混合网络：每个合法小六角位置都是地图节点，包括空位、星球和可放卫星/空间站的位置；节点特征包含坐标、星区、地形、所有者、建筑、Gaiaformer、卫星/空间站和联邦状态，六角相邻关系作为边。玩家个人板块、科技轨、轮次/终局计分及其他公共板块使用类型化实体和全局 token，与地图 pooled 表示融合。
 - [ ] GNN 使用固定最大节点/边槽位、按 setup 生成的邻接索引、关系类型 embedding 和 mask，保证 ONNX/TensorRT 不依赖动态 Python 图对象；先实现 2/3/4 人各自独立模型，再分别测量参数量和吞吐。
-- [ ] GNN trunk 和 G0 核心 head 一次性实现；策略输出必须组合为结构化 `ActionTuple` 并交给规则引擎的合法 tuple/参数 mask，不允许网络输出绕过规则引擎。固定 action ID 只可在日志或缓存层按版本化规则生成。
-- [ ] 只在 GNN 方案上进行 G0/G1/G2 训练、自博弈和 gatekeeper；不维护其他架构的 candidate、窗口、SWA 或 approved 模型。
+- [ ] GNN trunk 和三个核心 head 一次性实现；策略输出必须组合为结构化 `ActionTuple` 并交给规则引擎的合法 tuple/参数 mask，不允许网络输出绕过规则引擎。固定 action ID 只可在日志或缓存层按版本化规则生成。
+- [ ] 只在 GNN 方案上进行训练、自博弈和 gatekeeper；不维护其他架构的 candidate、窗口、SWA 或 approved 模型。
 - [ ] 写入 `architecture_family=graph_hybrid`、实体/关系/动作 schema 版本、参数量和 ONNX 输出契约；表示或动作 schema 变化视为新训练线，不能加载不兼容 checkpoint。
 
-验收：完成 GNN 表示、编码器、mask、ONNX/TensorRT 输出和 Python/C++ golden fixture 对齐；生产只保留 GNN 混合网络一套实现，并据其实测容量定义 G0/G1/G2。
+验收：完成 GNN 表示、编码器、mask、ONNX/TensorRT 输出和 Python/C++ golden fixture 对齐；生产只保留 GNN 混合网络一套实现，容量始终从配置文件读取。
 
-#### 2.1 固定代际配置与产物
+#### 2.1 统一网络配置与产物
 
-- [ ] 在 `pipeline.json` 增加显式的 `architecture_family=graph_hybrid`、`network_id`、节点/关系/隐藏层参数、`generation` 和训练阶段；禁止只根据文件名猜测架构。
-- [ ] 模型 checkpoint、ONNX manifest、守门记录、训练状态和 Dashboard 都记录同一个 `network_id`，例如 `graph-hybrid-g0-2p`；2/3/4 人后缀必须不同。
+- [ ] 在 `pipeline.json` 和运行 manifest 中写入 `architecture_family=graph_hybrid`、`network_config_id`、节点/关系/隐藏层参数、规则版本、训练 schema 版本和输出契约；禁止只根据文件名猜测架构。
+- [ ] 模型 checkpoint、ONNX manifest、守门记录、训练状态和 Dashboard 都记录同一个 `network_config_id` 与规范化配置 SHA-256；2/3/4 人的 `network_id` 仅用于标识独立训练线，例如 `graph-hybrid-2p`。
 - [ ] 2、3、4 人局是三条完全独立训练线：分别维护 raw/shuffled 数据、训练窗口 manifest、验证集、优化器、调度器、SWA、checkpoint、candidate/approved/rejected、守门统计、TensorRT engine 缓存和 Dashboard 状态。只共享实现代码与版本化 schema，不跨人数混训、采样、蒸馏、续载或回退。
-- [ ] 每个代际使用独立的 candidate、approved、rejected 和 TensorRT engine 缓存记录，同时保留上一代冠军用于跨代守门和回退。
-- [ ] 固定跨代兼容条件：规则版本、观察维度、`ActionTuple` schema/canonicalization 和玩家数必须相同；任一条件变化都启动新训练线，不得当作单纯扩容。
+- [ ] 每个产物必须记录玩家数、网络配置哈希、消息传递层数、关系编码配置、隐藏宽度、规则版本、父模型和模型哈希；配置哈希不一致的文件不得进入同一训练窗口。
 
-验收：任一 `.pt` 或 `.onnx` 都能仅通过 manifest 确定玩家数、代际、消息传递层数、关系编码配置、隐藏宽度、规则版本、父模型和模型哈希。
+验收：任一 `.pt` 或 `.onnx` 都能仅通过 manifest 确定完整网络配置、玩家数、规则/schema 版本和模型哈希，并能拒绝不匹配的 checkpoint、窗口或 TensorRT engine。
 
-#### 2.2 递进阶段
+#### 2.2 统一网络容量配置
 
-GNN 混合网络根据节点/关系编码器、消息传递层数、hidden size、参数量和 TensorRT 实测定义 G0/G1/G2 容量表。
+- [ ] 网络容量只从 `configs/gaia-training.json` 的 `network.capacity` 读取；当前默认值为 `hidden_size=256`、`hybrid_blocks=12`、`attention_heads=8`、`ffn_hidden_size=512`、`relation_embedding_size=64`、`global_token_count=1`、`dropout=0.0`。
+- [ ] 2/3/4 人训练线使用同一组容量字段和三个核心 head；分别测量训练 batch、TensorRT 叶节点 batch、selfplay 并发局数下的显存、吞吐和延迟，指标按人数独立记录。
+- [ ] 允许维护者直接编辑配置文件中的容量、batch、学习率、搜索预算和 TensorRT 参数；启动时校验类型、范围和字段完整性，并把规范化快照/hash 写入所有进程 manifest。
+- [ ] 不设置自动扩容、阶段晋级或网络容量 schedule；训练脚本不得根据步数、样本量或 loss 自动改写网络结构。
 
-| 阶段 | 网络 | 目标 | 进入下一阶段的条件 |
-| --- | --- | --- | --- |
-| G0 | `graph-hybrid-g0` | 验证 GNN 完整闭环，以可控规模积累首批有效自博弈数据 | 达到最低新鲜样本数和更新数；训练/验证指标不再快速改善；连续候选可稳定通过同代守门 |
-| G1 | `graph-hybrid-g1` | 在 G0 基础上扩大消息传递容量或全局 token 容量 | 对 G0 冠军达到跨代守门阈值；吞吐、显存和延迟在预算内；新模型自产数据占比达到配置要求 |
-| G2 | `graph-hybrid-g2` | 目标主力 GNN 网络，进入长期自博弈和持续优化 | 不再自动扩容；后续扩容必须重新增加代际、基准和资源预算 |
+验收：只修改配置文件即可生成一条容量明确、可复现的训练线；相同配置 hash 的进程可以恢复，不同 hash 的进程会在启动时明确拒绝混用。
 
-- [ ] 将默认阶段表写入可版本化的 `network_schedule` 配置，而不是硬编码；实测证明过渡代无收益时可以删除 G1，但仍必须执行跨代预热、守门和回退检查。
-- [ ] 把最低样本数、最低更新数、指标平台窗口、跨代守门局数、通过阈值和资源上限写成配置，初始值通过 G0 基准测试确定，不能硬编码在训练脚本中。
-- [ ] 阶段切换必须人工确认或由明确的自动晋级开关触发；仅达到训练步数不得自动替换生产模型。
-- [ ] Dashboard 显示当前代际、下一代际、阶段条件完成度、当前数据代际分布和预计扩容资源需求。
+#### 2.3 配置变更与训练线边界
 
-#### 2.3 跨代初始化
+- [ ] 网络容量、架构、规则、观察或动作 schema 发生变化时，使用 `network_change_policy` 创建新的独立训练线；不得对旧模型做隐式扩容、部分 `state_dict` 加载或自动教师-学生蒸馏。
+- [ ] 配置变更后重新创建优化器、学习率调度器、SWA 累计器、训练窗口和 TensorRT engine；旧 checkpoint 只作为审计/对照文件，不能作为新线的可恢复状态。
+- [ ] 新训练线必须从自己的 bootstrap 数据和 checkpoint 开始，完成同配置的固定验证集、规则回归和 gatekeeper；旧 approved 模型保持在线，直到人工确认新线的独立结果。
+- [ ] 只有 `network_config_id`、规范化配置 hash、规则/schema 版本和玩家数全部一致时，才允许续训、合并 replay、复用窗口或复用守门统计。
 
-- [ ] 不直接在 `graph-hybrid-g0` 和 `graph-hybrid-g2` 之间使用严格 `state_dict` 续载；消息传递层数、关系编码器、隐藏宽度以及优化器张量形状变化时，必须使用明确的跨代初始化或重新初始化策略。
-- [ ] 默认使用教师-学生过渡：冻结上一代 approved SWA 模型作为 teacher，初始化新一代 student，用现有 NPZ 的策略、pairwise WDL 与 VP 目标，加 teacher 的策略 logits、pairwise WDL logits 和 VP 输出进行预热。
-- [ ] 蒸馏损失权重、温度、预热更新数和退出条件均配置化；预热结束后逐步衰减蒸馏权重，回到以自博弈目标为主的 AlphaZero 损失。
-- [ ] 可将“复制公共张量切片并把新增残差路径初始化为近似恒等映射”作为实验选项，但必须先通过同输入数值回归；它不能成为默认迁移方式。
-- [ ] 每次改变网络规模都重新创建优化器、学习率调度器和 SWA 累计器；不得加载上一代不兼容的优化器或 SWA 状态。
-- [ ] 新一代 SWA 只在预热结束并完成规定更新数后开始累计，避免随机初始化和早期蒸馏状态污染平均权重。
+验收：配置变更会留下新的 run root、manifest 和模型 hash，旧线可继续运行；不存在无记录的容量迁移或跨配置晋级。
 
-验收：相同 NPZ batch 上，新一代 student 完成预热后，其合法动作策略、pairwise WDL、聚合 utility 和 VP 输出与 teacher 的误差达到配置门槛，并能继续使用真实训练目标优化。
+#### 2.4 训练窗口与同配置守门
 
-#### 2.4 训练窗口、数据换代与跨代守门
+- [ ] 每个 raw/shuffled shard 必须记录生成它的 `network_config_id`、配置 hash、玩家数和模型 hash；shuffler 拒绝把不匹配的 shard 放入同一窗口。
+- [ ] shuffler 每轮发布不可变 `window-manifest.json`，记录纳入的 shard、位置数、按年龄衰减权重、配置 hash 和 SHA-256；trainer 只读取一个完整 manifest，不边训练边观察变化目录。
+- [ ] replay 使用 tapered/lookback window，配置最小/最大位置数、年龄衰减、最新 approved 模型自产数据最低占比和 `max_train_samples_per_new_position`；训练债务耗尽后必须等待新 selfplay 数据。
+- [ ] 固定独立 validation seed/shard，不参与 selfplay replay 采样或参数更新；窗口变化时验证集保持稳定，同时另报最新数据指标。
+- [ ] 同一训练线内，C++ selfplay 只读取与当前 approved 完全匹配配置 hash 的 ONNX；gatekeeper 候选与冠军必须同配置 hash。不同容量配置的实验必须作为新线单独评估，不自动替换现有生产模型。
+- [ ] 通过后原子更新 `approved/current.onnx` 与 manifest；失败、NaN/Inf、崩溃、未完成对局或吞吐低于门槛时保持旧冠军在线，并保留失败候选和可复现日志。
 
-- [ ] 新一代训练初期可以读取旧代 NPZ，因为观察、动作和训练目标契约不变；每个 shard 必须记录生成它的 `network_id` 和模型哈希。
-- [ ] shuffler 每轮发布不可变 `window-manifest.json`，记录纳入的 shard、最早/最新模型代、位置数、按年龄衰减权重、各代占比和 SHA-256；trainer 只读取一个完整 manifest，不边训练边观察变化目录。
-- [ ] replay 使用 tapered/lookback window：配置最小/最大位置数、年龄衰减和最新 approved 模型自产数据的最低占比。扩容初期可保留旧数据稳定训练，通过跨代守门后逐步提高新一代自产数据权重，避免旧数据永久主导。
-- [ ] 配置 `max_train_samples_per_new_position` 和单周期训练上限；训练债务耗尽后必须等待新 selfplay 数据，不能因 GPU 空闲无限重复旧窗口。
-- [ ] 同一个 window manifest 内启用 no-repeat shard：完整遍历一次后等待 shuffler 重新随机化并发布新 manifest；批内、分片内和跨分片随机种子必须可追踪。
-- [ ] shuffler/trainer 使用 reader lease 或引用清单；垃圾回收只能删除不在当前/回滚窗口且没有活跃 reader 的 raw/shuffled shard。设置磁盘高低水位和生产者背压，禁止删除正在训练的数据来解除磁盘压力。
-- [ ] 固定独立 validation seed/shard，不参与 selfplay replay 采样或参数更新；窗口变化时验证集保持稳定，同时另报最新代数据指标。
-- [ ] 新一代未通过守门前，C++ selfplay 继续使用上一代 `approved/current.onnx`，不得因 train 已切换网络尺寸而提前切换生产模型。
-- [ ] C++ gatekeeper 同时加载上一代冠军和新一代候选各自的 TensorRT engine；二者只要求输入/输出契约相同，不要求内部块数和宽度相同。
-- [ ] 跨代比赛固定初始设置、座位轮换、随机种子和思考预算；MCTS 应按相同模拟次数比较，同时额外记录实际耗时和每秒模拟数。
-- [ ] 新一代通过跨代守门后，原子更新 `approved/current.onnx` 与 manifest；旧冠军归档为 rollback 模型，selfplay 从下一局开始切换。
-- [ ] 若新一代连续失败、训练发散、出现 NaN/Inf 或吞吐低于资源门槛，则保持旧冠军在线，并允许重新预热或调整网络阶段，不能跳过守门。
-
-验收：可以完整演练一次 G0 -> G1 -> G2 晋级和一次失败回退；任何时刻 selfplay 都只读取已经通过守门且产物完整的模型。断开 selfplay 后，trainer 在训练债务耗尽时停止更新；重启 shuffler/train 不会重复消费、误删或泄漏 validation 数据。
+验收：可以演练同配置候选的守门、原子发布和失败回退；重启 shuffler/train 不会重复消费、误删或泄漏 validation 数据。
 
 #### 2.5 训练资源与超参数适配
 
-- [ ] 分别测量三个网络在训练 batch、TensorRT 叶节点 batch、selfplay 并发局数下的显存、吞吐和延迟，不沿用同一套 batch 参数。
-- [ ] 随网络扩大逐代调整训练 batch size、梯度累积、学习率、权重衰减和 checkpoint 周期，并把有效 batch size 写入训练记录。
-- [ ] G0 冻结优化器、按有效训练样本数推进的 warmup/decay 调度、梯度裁剪、AMP 动态缩放和非有限梯度处理契约；配置变化必须进入训练 manifest，不能仅存在进程命令行。
-- [ ] 每个 head 的 loss 先除以实际有效元素/玩家对数量，再乘显式权重；记录未加权 loss、加权 loss、有效标签数和 trunk/head 梯度范数，避免玩家数、合法动作数或某组稠密辅助标签隐式改变总 loss 尺度。
+- [ ] 固定优化器、按有效训练样本数推进的 warmup/decay 调度、梯度裁剪、AMP 动态缩放和非有限梯度处理契约；所有配置变化必须进入训练 manifest，不能仅存在命令行。
+- [ ] 随手动容量配置调整测量 batch size、梯度累积、学习率、权重衰减和 checkpoint 周期，并把有效 batch size、显存、吞吐和延迟写入训练记录。
+- [ ] 每个 head 的 loss 先除以实际有效元素/玩家对数量，再乘显式权重；记录未加权 loss、加权 loss、有效标签数和 trunk/head 梯度范数，避免玩家数或合法动作数隐式改变总 loss 尺度。
 - [ ] 训练出现 NaN/Inf、GradScaler 连续回退、梯度范数异常或固定验证集明显退化时不生成可守门候选；保留最后有效 checkpoint 和失败批次的 shard/hash 供复现。
 - [ ] 配置并监控 `selfplay_positions_generated / train_samples_consumed`、窗口新鲜度、训练债务、推理队列等待和 gatekeeper 队列长度；通过实测调节 selfplay/train 算力比例，不硬编码照搬 KataGo 的硬件比例。
-- [ ] export 周期同时受累计新 selfplay 样本数、最小训练样本数和 gatekeeper 队列上限约束；后期模型变化变慢时降低候选导出频率，避免守门排队和 selfplay 频繁切换模型。
-- [ ] 为每一代设置独立资源预算和最低吞吐门槛；若 `graph-hybrid-g2` 达不到门槛，优先降低并发或 batch，不静默退回不同网络结构。
-- [ ] 保留同一固定验证集和固定种子对局集，用于比较各代策略损失、pairwise WDL log loss/Brier score、聚合 utility 误差、VP MAE/校准、守门结果和单位 GPU 时间的棋力收益。
+- [ ] export 周期同时受累计新 selfplay 样本数、最小训练样本数和 gatekeeper 队列上限约束；模型变化变慢时降低候选导出频率，避免守门排队和 selfplay 频繁切换模型。
 
-验收：三个代际都有可复现的训练与推理基准，扩容决策同时依据棋力、数据新鲜度、吞吐和显存，而不是只看训练 loss。
+验收：统一网络配置下的训练与推理基准可复现，容量调整决策同时依据棋力、数据新鲜度、吞吐和显存，而不是只看训练 loss。
 
 #### 2.6 KataGo 风格神经网络头与 Gaia 训练标签
 
@@ -273,7 +255,7 @@ GNN 混合网络根据节点/关系编码器、消息传递层数、hidden size�
 
 符号约定：`P` 为本模型固定的玩家数，`Q=P(P-1)/2` 为无序玩家对数量，`M` 为当前状态由规则引擎枚举出的合法 `ActionTuple` 数量（随状态变化，不是网络固定输出维度），`C` 为动作类型数量，`R` 为参数槽位数量，`N` 为星球槽位，`S` 为可放卫星/空间站的星图位置，`T=6` 为科技轨数量，`H` 为短/中/长三个时间尺度。所有玩家维度必须使用与 observation 相同的座位顺序；2、3、4 人训练线完全独立，不通过 padding 混训，也不共享训练数据或权重。
 
-优先级沿用文档开头定义。G0 的网络输出严格限制为 policy、pairwise WDL 和 VP belief；完整状态轨迹仍需保存，以便 P1/P2 标签以后离线派生，但未启用的辅助标签不要求在 G0 NPZ 中展开为稠密数组。
+优先级沿用文档开头定义。统一网络的输出严格限制为 policy、pairwise WDL 和 VP belief 三个核心 head；完整状态轨迹仍需保存，以便 P1/P2 标签以后离线派生，但未启用的辅助标签不要求在 NPZ 中展开为稠密数组。
 
 ##### 2.6.1 策略头标签
 
@@ -293,8 +275,8 @@ GNN 混合网络根据节点/关系编码器、消息传递层数、hidden size�
 
 - [ ] ONNX 的基础 policy 输出为参数化 logits：`action_type_logits [B,C]`、按已选动作类型条件化的参数槽位 logits `action_argument_logits [B,R,*]` 及其类型/槽位 mask；C++ 根据规则引擎枚举的合法 `ActionTuple` 计算组合先验并应用参数合法性过滤，不能把固定动作列表或 `legal_masks` 烘焙进网络权重。
 - [ ] 参数化 tuple 必须包含稳定的 `action_type_id`、参数槽位顺序、参数类型和 canonicalization 版本；同一规范化 tuple 只能出现一次，组合概率、类型/参数 loss mask 和 tuple visit target 必须能相互重算。固定 action ID 不属于网络、GNN、ONNX 或训练标签契约。
-- [ ] 逐动作 Q 标签保存 `action_value_masks [M]`，仅训练实际搜索过且访问数达到阈值的合法 tuple；Q 头属于 P1，不是 G0 核心头。
-- [ ] P2 乐观策略只在基础策略、VP head 和跨代守门稳定后启用；多人局默认追求风险调整后的 pairwise utility 或 VP 分差。第一名率只由完整终局 VP 离线统计，不增加任何排名或第一名网络输出。
+- [ ] 逐动作 Q 标签保存 `action_value_masks [M]`，仅训练实际搜索过且访问数达到阈值的合法 tuple；Q 头属于 P1，不是三个核心 head 的一部分。
+- [ ] P2 乐观策略只在基础策略、VP head 和同配置守门稳定后启用；多人局默认追求风险调整后的 pairwise utility 或 VP 分差。第一名率只由完整终局 VP 离线统计，不增加任何排名或第一名网络输出。
 
 ##### 2.6.2 多人结果与价值头标签
 
@@ -316,7 +298,7 @@ GNN 混合网络根据节点/关系编码器、消息传递层数、hidden size�
 - [ ] 终局 pairwise WDL 只监督 `pairwise_value_head`；`root_value_targets` 是构造未来指数平均的原始序列，只有 `td_utility_targets` 监督独立 `td_utility_head`。禁止把终局 one-hot、单步根搜索值和不同时间尺度 TD 目标同时回归到同一输出。
 - [ ] `td_utility_head` 每个时间尺度的 `[P]` 输出必须中心化为和为 0，保持与 pairwise 聚合效用一致；不得让独立 TD 输出引入所有玩家同时获益的漂移分量。
 - [ ] `shortterm_utility_error_targets` 使用对应 TD 预测的 `stop_gradient` 误差构造，误差头采用 Huber 等抗异常值损失；不得反向推动 TD 输出去迎合误差预测。
-- [ ] G0 使用配置化的 `u_search_i = u_pairwise_i + beta_vp * tanh((vp_i - c_i) / vp_scale)`：`c_i` 是一次根搜索内固定的根 VP center，非终局节点的 `vp_i` 来自 VP belief 均值，终局节点使用真实 VP；`vp_scale`、`beta_vp` 配置化且 VP 项必须有界。默认值见 [`configs/gaia-g0.json`](../configs/gaia-g0.json)。
+- [ ] 统一网络使用配置化的 `u_search_i = u_pairwise_i + beta_vp * tanh((vp_i - c_i) / vp_scale)`：`c_i` 是一次根搜索内固定的根 VP center，非终局节点的 `vp_i` 来自 VP belief 均值，终局节点使用真实 VP；`vp_scale`、`beta_vp` 配置化且 VP 项必须有界。默认值见 [`configs/gaia-training.json`](../configs/gaia-training.json)。
 - [ ] 启用 VP utility 后必须校准 cPUCT/FPU 的效用范围，并在 gatekeeper 中保留 `beta_vp=0` 的控制组与候选配置对照。目标是区分 pairwise 概率近似相同的动作，不允许 VP 项压倒胜负效用。
 
 ##### 2.6.3 VP、分数分布和不确定性标签
@@ -335,7 +317,7 @@ GNN 混合网络根据节点/关系编码器、消息传递层数、hidden size�
 
 - [ ] VP belief 的主范围固定为 `-200..+200`，步长为 1，共 401 个有限桶；`V=403` 的第 0/402 类分别表示小于 -200 和大于 +200，仅用于保留尾部信息和审计，不改变主范围精度。
 - [ ] manifest 固定 401 个主桶中心、上下溢哨兵的代表值和 moments 算法；训练和验证持续记录 underflow/overflow 比例，超过配置门槛时暂停发布并重新审查 VP schema。
-- [ ] G0 的 VP head 只直接输出 `vp_belief_logits [B,P,403]`。softmax 后用 `-200..+200` 固定桶中心及上下溢代表值计算 `vp_mean` 和 `vp_stdev`，再计算 `vp_lead_i = vp_mean_i - mean(vp_mean_{j != i})`；三者是确定性后处理，不再建立互相可能矛盾的独立 G0 回归输出。
+- [ ] VP head 只直接输出 `vp_belief_logits [B,P,403]`。softmax 后用 `-200..+200` 固定桶中心及上下溢代表值计算 `vp_mean` 和 `vp_stdev`，再计算 `vp_lead_i = vp_mean_i - mean(vp_mean_{j != i})`；三者是确定性后处理，不再建立互相可能矛盾的独立回归输出。
 - [ ] 可在 belief loss 之外对派生 `vp_mean` 增加小权重 Huber 校准 loss，但这不增加 ONNX 输出。只有 `root_vp_lead_targets` 的高预算数据足够且消融有效时，P1 才增加独立 `lead_head`；它不能用当前局面 VP 差冒充预计终局 lead。
 - [ ] 任意玩家对的期望终局分差可由 `vp_mean_i - vp_mean_j` 计算；独立的每玩家 VP belief 不包含玩家间相关性，不能据此替代 pairwise WDL head，也不能假设其能精确恢复胜率或第一名率。
 - [ ] 必须断言 `raw_final_vp_targets + starting_vp_offsets == final_vp_targets`。P1 六项分解可直接从 `final_scores()` 和本局 offset 计算；P2 细分台账要求所有 VP 变化携带稳定 `score_source_id`，不能依赖动作说明文字解析。
@@ -379,7 +361,7 @@ GNN 混合网络根据节点/关系编码器、消息传递层数、hidden size�
 | `moves_to_round_end_targets` | scalar | 距离本轮结束的语义决策数 | P1 |
 | `moves_to_game_end_targets` | scalar | 距离终局的语义决策数 | P1 |
 
-- [ ] 这些 head 是共享 trunk 的可选辅助监督，不进入 G0 MCTS。完整状态轨迹先保证以后可离线派生标签；玩家发展 head 从 P1 开始逐组消融，星图/建筑 head 保持 P2。生产 ONNX 默认裁剪未被搜索消费的辅助输出，不导出 rank 输出。
+- [ ] 这些 head 是共享 trunk 的可选辅助监督，不进入基础 MCTS。完整状态轨迹先保证以后可离线派生标签；玩家发展 head 从 P1 开始逐组消融，星图/建筑 head 保持 P2。生产 ONNX 默认裁剪未被搜索消费的辅助输出，不导出 rank 输出。
 - [ ] 聚合指标虽可由星图标签推导，仍单独监督，因为终局计分直接依赖这些全局数量；两者必须在标签生成器中做一致性断言。
 - [ ] 不预测当前 observation 已明确给出的资源、轮次、待决策阶段或合法动作；这里只预测轮末/终局未来量，防止网络通过复制输入获得无意义的低 loss。
 
@@ -400,7 +382,7 @@ GNN 混合网络根据节点/关系编码器、消息传递层数、hidden size�
 - [ ] ONNX 输出使用参数化 policy 的原始 logits 或未缩放回归量；C++ 负责合法 `ActionTuple` 组合、tuple softmax、pairwise 镜像展开、utility 聚合、VP belief moments、softplus、合法参数 mask 和数值缩放，并把版本及缩放常数统一写入 manifest。固定 action ID 不参与推理契约。
 - [ ] 训练 checkpoint 保存全部已启用 head，生产 ONNX 可以裁剪不被 MCTS/诊断消费的辅助输出；裁剪前后 policy、pairwise WDL、聚合 utility、VP 和 uncertainty 的 golden fixture 输出必须一致。
 - [ ] 每个 head 使用独立 loss、权重、有效样本计数和梯度统计；总 loss 不能掩盖某个 head 没有有效标签或量级失衡。
-- [ ] G0 生产 ONNX 只导出参数化 `policy_head`、`pairwise_value_head` 和 `vp_belief_head`；`action_q_head`、`td_head`、`lead_head`、`uncertainty_head`、`map_head` 和 `development_head` 必须等对应 P1/P2 阶段明确启用后，才更新输出契约和 TensorRT engine。
+- [ ] 生产 ONNX 只导出参数化 `policy_head`、`pairwise_value_head` 和 `vp_belief_head`；`action_q_head`、`td_head`、`lead_head`、`uncertainty_head`、`map_head` 和 `development_head` 必须等对应 P1/P2 阶段明确启用后，才更新输出契约和 TensorRT engine。
 
 ##### 2.6.7 样本权重、掩码和审计字段
 
@@ -409,7 +391,7 @@ GNN 混合网络根据节点/关系编码器、消息传递层数、hidden size�
 - [ ] `label_schema_version`、`rules_version`、`player_count`、`network_id`、`model_hash`、`game_id`、`setup_seed`、`position_index`、`semantic_turn_index`、`round`、`player_to_move`、`starting_vp_offsets [P]`、`compensation_version`、`search_tier` 和 `symmetry_id`。
 - [ ] `action_tuple_masks [M]`、动作类型/参数槽位 masks、`player_masks [P]`、`pairwise_masks [P,P]`、`planet_masks [N]`、`board_space_masks [S]`、`action_value_masks [M]` 和每个可选 head 的 `*_loss_masks`。
 - [ ] `sample_weights`、`policy_train_masks`、`policy_weights`、`pairwise_value_weights`、`vp_weights`、`ownership_weights`；其中 sample weight 可结合完整/cheap 搜索、policy surprise、pairwise utility surprise、VP surprise、终局距离和是否重分析。
-- [ ] `root_total_visits`、`search_simulations`、`search_temperature`、`root_noise_applied`、`source_generation`、`reanalyzed` 和 `terminal_valid`。
+- [ ] `root_total_visits`、`search_simulations`、`search_temperature`、`root_noise_applied`、`source_network_config_hash`、`reanalyzed` 和 `terminal_valid`。
 - [ ] 每个 raw NPZ 只保存一局，并只保存一次终局真值和完整状态轨迹；位置行通过 `game_id + position_index` 关联。shuffle pack 可以包含多局的位置，但不得丢失标签数组、局边界、来源 raw hash，或把逐位置数值塞进 JSON metadata。
 - [ ] 标签生成采用“两阶段写入”：C++ selfplay 先缓存每步 observation、搜索统计与状态摘要，终局后反向生成 outcome、VP、ownership、短期目标和 masks，再原子写入 NPZ。
 
@@ -421,7 +403,7 @@ GNN 混合网络根据节点/关系编码器、消息传递层数、hidden size�
 - Gaia 没有隐藏手牌或战争迷雾，不增加 opponent-belief/hidden-information head。
 - 动作文字、BGA 通知文本和素材 ID 不进入损失；规则事件必须先映射为稳定的枚举 ID。
 
-实施顺序：G0 前只完成 policy、pairwise WDL、VP belief 及其审计字段和 loss；完整状态轨迹负责保留未来派生 P1/P2 标签的能力。P1 在 C++ selfplay 能稳定输出完整搜索统计后逐项启用；P2 必须分别做消融实验，只有提升守门结果或样本效率时才保留。每个 head 都需要独立 loss 曲线、有效样本数、梯度量级和开关，不能只记录总 loss。
+实施顺序：首版只完成 policy、pairwise WDL、VP belief 及其审计字段和 loss；完整状态轨迹负责保留未来派生 P1/P2 标签的能力。P1 在 C++ selfplay 能稳定输出完整搜索统计后逐项启用；P2 必须分别做消融实验，只有提升守门结果或样本效率时才保留。每个 head 都需要独立 loss 曲线、有效样本数、梯度量级和开关，不能只记录总 loss。
 
 #### 2.7 语义决策、搜索预算与数据增强
 
@@ -430,9 +412,9 @@ Gaia 的一次规则行动可能展开为多次兑换、选板块、充能确认
 - [ ] 规则引擎标记 `semantic_decision_id` 和动作类别。只有一个合法动作且不含玩家真实选择时自动执行，不调用网络、不启动 MCTS、不生成 policy loss；完整状态轨迹仍记录该步骤用于复盘和终局标签。
 - [ ] 发布版本化 `setup_distribution`，完全复刻 BGA 的合法随机规则和概率：2/3/4 人地图限制、小/标准地图、星区排列与旋转、轮次/终局计分、科技/高级科技/助推板块、合法种族组合、座位分配及其随机种子都按 BGA 规则生成。禁止使用自定义权重、均匀重采样或为训练方便修改 BGA 概率；每局记录 BGA 规则版本、随机种子和实际 setup hash。
 - [ ] 按人数、地图模式、种族、座位、板块和主要交互组合持续报告 BGA 分布覆盖率；低频 bucket 只触发数据积累告警，不通过改权重改变 BGA 分布。固定验证集、gatekeeper 和公平性评估使用按 BGA 规则预先生成并冻结的 setup 清单。
-- [ ] 定义 `search_tier = forced | cheap | full | lead_estimation`，并读取 `configs/gaia-g0.json` 的 tier 配置。G0 初始目标观测占比为 forced `30%`、cheap `45%`、full `25%`；forced 只表示规则自动步骤的目标占比，不做随机抽样。非 forced 决策按 cheap `64.28571429%`、full `35.71428571%` 抽样，lead estimation 关闭。各轮次、行动类别和玩家人数都设置最低 `20%` full-search 覆盖率，避免某类动作长期只有弱标签；实际比例以 telemetry 为准，不能从配置名推断。
+- [ ] 定义 `search_tier = forced | cheap | full | lead_estimation`，并读取 `configs/gaia-training.json` 的 tier 配置。初始目标观测占比为 forced `30%`、cheap `45%`、full `25%`；forced 只表示规则自动步骤的目标占比，不做随机抽样。非 forced 决策按 cheap `64.28571429%`、full `35.71428571%` 抽样，lead estimation 关闭。各轮次、行动类别和玩家人数都设置最低 `20%` full-search 覆盖率，避免某类动作长期只有弱标签；实际比例以 telemetry 为准，不能从配置名推断。
 - [ ] full search 默认 `policy_train_mask=1`。cheap search 默认不训练 policy 或显著降权，但仍可提供终局 WDL/VP 标签；P1 可在 cheap search 发现高 KL surprise 时纳入 policy。保存实际访问数和每个 head 的独立权重，不能仅凭配置名推断样本质量。
-- [ ] G0 不允许提前认输或截断终局，保证完整 VP、计分来源和复盘轨迹。P1 可在连续高置信状态降低 visits 并降低对应 policy 权重，但仍必须把对局按规则运行到真实终局。
+- [ ] 生产训练不允许提前认输或截断终局，保证完整 VP、计分来源和复盘轨迹。P1 可在连续高置信状态降低 visits 并降低对应 policy 权重，但仍必须把对局按规则运行到真实终局。
 - [ ] 根噪声使用固定“总浓度”而不是每合法动作固定 alpha；总浓度先按版本化动作类别权重分配，再在类别内部展开，避免合法兑换动作数量改变探索强度。P1 再消融基于 prior 的 shaped noise 和 policy target pruning。
 - [ ] 根 policy softmax 温度、落子采样温度和噪声分别配置，并按轮次/语义决策数衰减；gatekeeper 全部关闭根噪声，最终动作温度固定为 0。
 - [ ] 保存 raw prior、实际加噪 prior 和 visit target。P1 policy surprise 使用 visit target 相对实际搜索 prior 的 KL，并同时保留均匀基础采样权重，禁止让极少数高 surprise 样本占满窗口。
@@ -480,12 +462,12 @@ Gaia 的一次规则行动可能展开为多次兑换、选板块、充能确认
 
 本文所需的是完全信息多人 MCTS：状态中没有待确定化的隐藏信息，价值始终采用绝对玩家顺序。旧讨论中的 `PIMCTS` 在此仅指 perfect-information MCTS，不引入针对手牌或战争迷雾的 determinization；实现和配置统一使用 `multiplayer_mcts` 命名。
 
-- [ ] 实现绝对玩家顺序的多玩家价值回传；叶节点先把 pairwise WDL 按 2.6.2 的唯一公式聚合为 `[P]` utility，再按配置把 VP belief 的有界项加入同一次回传。G0 即启用 VP utility：非终局使用 VP belief 均值，终局使用精确 VP；一次根搜索内固定 VP center，终局和非终局使用同一公式。不得把 VP utility 延后到 P1，也不得直接加入无界 VP。
+- [ ] 实现绝对玩家顺序的多玩家价值回传；叶节点先把 pairwise WDL 按 2.6.2 的唯一公式聚合为 `[P]` utility，再按配置把 VP belief 的有界项加入同一次回传。生产网络启用 VP utility：非终局使用 VP belief 均值，终局使用精确 VP；一次根搜索内固定 VP center，终局和非终局使用同一公式。不得把 VP utility 延后到 P1，也不得直接加入无界 VP。
 - [ ] 选择阶段由节点状态的实际 `current_player` 使用自己的效用分量；不得使用 KataGo 二人零和的父子符号翻转。被动充能、资源选择等响应节点由响应玩家优化自身动作，完成后再返回原行动流程。
-- [ ] 实现 2.7 节的 forced/cheap/full/lead-estimation 调度、根 policy 温度、动作采样温度和分类总浓度噪声；所有搜索参数按人数、网络代际和语义动作类别版本化，禁止沿用当前单一常数而不重新标定。
+- [ ] 实现 2.7 节的 forced/cheap/full/lead-estimation 调度、根 policy 温度、动作采样温度和分类总浓度噪声；所有搜索参数按人数、网络配置 hash 和语义动作类别版本化，禁止沿用当前单一常数而不重新标定。
 - [ ] 将 MCTS 树节点改为紧凑结构，使用线程池运行多局 self-play；每棵树的随机种子必须可追踪。
 - [ ] 将叶节点请求提交给 TensorRT 批量推理队列，支持虚拟损失或等价并发机制。
-- [ ] G0 先实现可审计的 PUCT/FPU/根噪声基线；P1 再分别加入 NN eval cache、树复用、转置图、root LCB、policy surprise；动态 cPUCT、subtree value bias、uncertainty-weighted playout 和 optimistic policy 保持 P2，不能打包一次启用。
+- [ ] 先实现可审计的 PUCT/FPU/根噪声基线；P1 再分别加入 NN eval cache、树复用、转置图、root LCB、policy surprise；动态 cPUCT、subtree value bias、uncertainty-weighted playout 和 optimistic policy 保持 P2，不能打包一次启用。
 - [ ] 按 2.6 节的新版本化 NPZ schema 为每个真实完成的对局写入一个 raw NPZ，包含完整训练标签、逐头 masks/weights、初始 setup、逐步状态轨迹、终局结果和独立复盘 metadata；写入采用临时文件后原子重命名，损坏或未到真实终局的文件不得进入 shuffle 窗口。
 - [ ] C++ selfplay 轮询 `approved/current.onnx`，只在完整模型发布后切换，不读取未完成文件。
 - [ ] 进程状态、对局数、语义决策数、forced/cheap/full 比例、推理 batch、positions/s、模型哈希、错误和最近 shard 写入现有五进程监控协议。
@@ -510,7 +492,7 @@ Gaia 的一次规则行动可能展开为多次兑换、选板块、充能确认
 
 - [ ] 将进程角色改为：C++ `selfplay`、Python `shuffle`、Python `train`、Python `export`、C++ `gatekeeper`。
 - [ ] 更新 `pipeline.json`、状态文件、日志目录和产物目录协议，区分 `.pt` 训练 checkpoint、`.onnx` 推理模型、TensorRT engine 缓存、不可变训练窗口 manifest 和 reader lease。
-- [ ] 增加 `gaia-g0.json` 的严格配置加载器：按 2/3/4 人选择 profile，校验比例、VP 桶、阈值、精度和硬件字段，把规范化快照/hash 写入所有进程 manifest；除配置路径/profile/root 外拒绝策略参数命令行覆盖。
+- [ ] 增加 `gaia-training.json` 的严格配置加载器：按 2/3/4 人选择 profile，校验网络容量、比例、VP 桶、阈值、精度和硬件字段，把规范化快照/hash 写入所有进程 manifest；除配置路径/profile/root 外拒绝策略参数命令行覆盖。
 - [ ] 所有 raw shard、shuffle pack、candidate 和状态文件使用 `run_id + producer_id + 原子序号/hash` 唯一命名；P1 允许多个 selfplay producer 共享目录，但目录创建、模型轮询和垃圾回收必须保持幂等，不能依赖单进程本地计数器避免冲突。
 - [ ] 让 supervisor 以可配置路径启动 C++ 可执行文件，并检查启动前的 CUDA/TensorRT、模型和规则版本。
 - [ ] supervisor 根据磁盘水位、训练债务、shuffler/gatekeeper 队列长度实施背压；背压只暂停生产或导出，不删除活跃窗口、不跳过守门、不发布半成品。
@@ -537,7 +519,7 @@ Gaia 的一次规则行动可能展开为多次兑换、选板块、充能确认
 0 契约冻结
   ├─> 1 SWA checkpoint
   ├─> 2.0 GNN 表示契约
-  │       └─> 2.1-2.6 G0 核心网络、标签、窗口与迁移契约
+  │       └─> 2.1-2.6 统一网络配置、标签与窗口契约
   │               └─> 3 SWA -> ONNX export
   │                       └─> 4 TensorRT adapter
   └─> 5 C++ Gaia rules
@@ -549,13 +531,13 @@ Gaia 的一次规则行动可能展开为多次兑换、选板块、充能确认
 2 + 3 + 4 + 5 + 6 + 7
   └─> 8 五进程编排与 Dashboard
           └─> 9 性能、正确性与发布
-                  └─> G0 bootstrap（K=0）
+                  └─> 统一网络 bootstrap（K=0）
                           └─> C0 基准采样 -> C1 拟合 offsets-v1
-                                  └─> C2 带补偿 G0 训练 -> C3 收敛
-                                          └─> P1 逐项消融 -> G1 -> 重新校准 -> G2 -> 重新校准
+                                  └─> C2 带补偿训练 -> C3 收敛
+                                          └─> P1/P2 逐项消融与持续训练
 ```
 
-步骤 1、2.0 和步骤 5 可以在步骤 0 完成后并行。2.0 先冻结 GNN 的节点、关系、mask 和输出契约，再定义 G0/G1/G2 容量表；2.6 先交付 G0 三个核心 head，P1/P2 不能阻塞闭环。步骤 6 和步骤 7 必须共用同一套 C++ 规则、搜索效用与 TensorRT 适配层，不能分别实现两套逻辑。步骤 0.1/0.2 先冻结补偿 schema、拟合器和发布契约；实际 C0-C3 必须等混合语言流水线通过步骤 9，并产生一个非随机的零补偿 G0 bootstrap 模型后执行。G1/G2 每次晋级后都需要重新校准 offset。步骤 8 不应在模型格式、训练窗口和 C++ 状态契约未稳定前提前替换现有流水线。
+步骤 1、2.0 和步骤 5 可以在步骤 0 完成后并行。2.0 先冻结 GNN 的节点、关系、mask 和输出契约，再从 `gaia-training.json` 读取统一容量；2.6 先交付三个核心 head，P1/P2 不能阻塞闭环。步骤 6 和步骤 7 必须共用同一套 C++ 规则、搜索效用与 TensorRT 适配层，不能分别实现两套逻辑。步骤 0.1/0.2 先冻结补偿 schema、拟合器和发布契约；实际 C0-C3 必须等混合语言流水线通过步骤 9，并产生一个非随机的零补偿 bootstrap 模型后执行。手动修改容量、规则或 schema 后必须新建训练线并重新校准 offset。步骤 8 不应在模型格式、训练窗口和 C++ 状态契约未稳定前提前替换现有流水线。
 
 ## 非目标
 

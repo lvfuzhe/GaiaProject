@@ -1,9 +1,18 @@
 {
-  "config_version": 1,
-  "profile": "g0",
+  "config_version": 2,
+  "profile": "training",
   "architecture_family": "graph_hybrid",
   "network": {
-    "generation": "g0",
+    "network_config_id": "graph-hybrid-v1",
+    "capacity": {
+      "hidden_size": 256,
+      "hybrid_blocks": 12,
+      "attention_heads": 8,
+      "ffn_hidden_size": 512,
+      "relation_embedding_size": 64,
+      "global_token_count": 1,
+      "dropout": 0.0
+    },
     "heads": [
       "parameterized_policy",
       "pairwise_wdl",
@@ -17,6 +26,11 @@
       "overflow_bucket": true,
       "output_buckets": 403
     }
+  },
+  "network_change_policy": {
+    "capacity_change": "start_new_training_line",
+    "architecture_or_schema_change": "start_new_training_line",
+    "checkpoint_resume": "exact_network_config_hash_only"
   },
   "training_isolation": {
     "mode": "independent_by_player_count",
@@ -32,17 +46,17 @@
   "player_profiles": {
     "2": {
       "player_count": 2,
-      "network_id": "graph-hybrid-g0-2p",
+      "network_id": "graph-hybrid-2p",
       "pipeline_root": "runs/pipeline-2p"
     },
     "3": {
       "player_count": 3,
-      "network_id": "graph-hybrid-g0-3p",
+      "network_id": "graph-hybrid-3p",
       "pipeline_root": "runs/pipeline-3p"
     },
     "4": {
       "player_count": 4,
-      "network_id": "graph-hybrid-g0-4p",
+      "network_id": "graph-hybrid-4p",
       "pipeline_root": "runs/pipeline-4p"
     }
   },
@@ -80,7 +94,7 @@
     "vp_utility": {
       "enabled": true,
       "apply_in": [
-        "g0_mcts_leaf_backup",
+        "mcts_leaf_backup",
         "terminal_backup"
       ],
       "pairwise_weight": 1.0,
