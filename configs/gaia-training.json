@@ -125,12 +125,12 @@
   "setup_distribution": {
     "provider": "boardgamearena",
     "game": "gaia_project",
-    "rules_reference": "bga_random_setup",
-    "version": "bga-random-v1",
+    "rules_reference": "bga_random_map_only",
+    "version": "setup-seed-stream-v1",
     "golden_fixture_manifest": "tests/fixtures/bga_setup_golden.json",
-    "golden_fixture_source": "BGA random setup outputs captured from the setup UI/replays and manually verified",
+    "golden_fixture_source": "BGA random map outputs captured from the setup UI/replays and manually verified",
     "fixture_status": "to_be_generated",
-    "fixture_scope": "map_only_bga_contract_plus_seeded_component_contracts",
+    "fixture_scope": "map_only_bga_contract",
     "fixture_min_setups_per_variant": 256,
     "fixture_variants": [
       "2p-reduced",
@@ -139,7 +139,24 @@
       "4p-normal"
     ],
     "fixture_seed_policy": "fixed_seed_manifest",
-    "version_source_policy": "project_versioned_from_bga_rule_reference",
+    "seed_stream": {
+      "version": "setup-seed-stream-v1",
+      "derivation": "sha256(root_seed|stream_version|stream_name) first_uint64_little_endian",
+      "independent_streams": [
+        "map",
+        "factions",
+        "boosters",
+        "round_scoring",
+        "final_scoring",
+        "standard_technology",
+        "advanced_technology",
+        "terraforming_federation"
+      ],
+      "map_stream_policy": "root_seed_compatibility_stream",
+      "first_player_policy": "root_seed_modulo_player_count",
+      "no_shared_rng_state": true
+    },
+    "version_source_policy": "project_versioned_from_bga_map_rule_reference",
     "require_setup_hash": true,
     "map_contract": {
       "randomizer": "seeded_sector_permutation_rotation_with_rejection",
@@ -170,6 +187,8 @@
     },
     "recorded_setup_fields": [
       "seed",
+      "seed_stream_version",
+      "seed_streams",
       "player_count",
       "map_size",
       "sector_tiles",

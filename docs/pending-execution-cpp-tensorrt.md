@@ -50,7 +50,7 @@ ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，不引入 ONNX Runti
 - policy 采用参数化动作头：网络预测动作类型和参数分量，C++ 组合成规范化 `ActionTuple/ActionKey`，由规则引擎枚举并过滤合法动作；GNN 和网络都不依赖固定 action ID，固定编号最多作为复盘/缓存的可选审计键。
 - 生产网络严格只有参数化 policy、pairwise WDL 和 VP belief 三个核心 head；删除 rank head，排名和第一名率只从完整终局 VP 离线统计派生。
 - VP belief 主桶为 `-200..+200`、步长 1，共 401 个整数桶；额外保留下溢/上溢哨兵桶用于审计，因此输出维度固定为 `V=403`，哨兵不代表额外的有限精度。
-- setup 随机分布完全复刻 BGA 合法随机规则，不使用自定义训练权重改写 BGA 的基础概率；每局记录 BGA 随机规则版本和实际 setup hash。
+- setup 只对星图复刻 BGA 合法随机规则；种族、科技、计分片、助推片和联邦片使用版本化 seed stream 驱动的通用无放回随机，不使用自定义训练权重改写组件分布；地图流使用 root seed 兼容策略以保持现有星图算法的布局复现，每局记录流版本、各流 seed 和实际 setup hash。
 
 ## 配置文件
 
@@ -61,9 +61,9 @@ ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，不引入 ONNX Runti
 - gatekeeper 默认至少运行 `200` 个配对统计块，最多 `1000` 个；一个 pairing block 固定一个 setup seed、地图/板块/种族/座位配置和补偿表，候选依次轮换占据全部 `P` 个座位，其余座位使用冠军，因此每个 block 实际运行 `P` 局。3 人局运行 `200` 个 block 就是 `600` 局，不能把 block 数当作对局数。以 `95%` block-bootstrap 置信区间的候选平均 pairwise utility 为主指标，置信区间下界达到 `+0.02` 才晋级，上界不超过 `0` 才拒绝。每个主测试达到晋级条件的候选，在正式发布前再运行一次 `vp_utility_control`（`beta_vp=0`）回归对照；对照组复用同一批 pairing block，只承担回归否决，不作为第二个主晋级指标。对照组置信区间上界低于 `-0.02` 时否决发布，否则不阻止主测试晋级。非法动作、崩溃和未完成对局上限为 `0`，超时率上限为 `1%`。这些都是配置项，不能写死在 C++ 中。
 - TensorRT 默认 `FP16` 推理、`FP32` 校验并允许 `TF32`；CUDA 设备、目标 GPU、最低 compute capability、workspace 大小和 engine cache 目录均在配置文件的 `tensorrt.hardware` 中设置。目标 GPU 为 `auto` 时只做能力探测，不假定具体显卡型号。
 - 训练固定使用单 GPU：`training_runtime.mode=single_gpu`、`device=cuda:0`；不启用 DDP、多 GPU 或多机梯度同步。2/3/4 人局仍分别使用独立数据目录和训练状态；推荐由 supervisor 一次只激活一个人数 profile，单 profile 保持五进程闭环，训练与 selfplay 采用协作时间片，gatekeeper 运行时暂停 selfplay 并独占 GPU。
-- setup 随机规则固定为项目配置中的 `setup_distribution.version`，行为完全参考 BGA 随机设置；黄金 setup 清单来自 BGA 设置界面/复盘输出，经过人工核对后写入 `tests/fixtures/bga_setup_golden.json`。规则实现或黄金样本变化必须提升项目版本并重新生成 setup hash，不能静默改变分布。
+- setup 随机规则固定为项目配置中的 `setup_distribution.version`：星图行为保持当前随机算法并以 BGA 规则作合法性参考；种族、科技、计分片、助推片和联邦片使用 `seed_stream` 中定义的独立通用随机流。黄金 setup 清单只验证星图 BGA 契约，来自 BGA 设置界面/复盘输出，经过人工核对后写入 `tests/fixtures/bga_setup_golden.json`。规则实现或黄金样本变化必须提升项目版本并重新生成 setup hash，不能静默改变分布。
 
-### 本轮未决项的推荐初始配置
+### 首版推荐配置（已确定，待实现）
 
 以下值先写入 [`configs/gaia-training.json`](../configs/gaia-training.json)，作为首版闭环的可执行默认值；完成基线测试后才能调整。调整配置必须写入 run manifest，涉及网络、动作或观察 schema 的修改必须新建训练线。
 
@@ -76,12 +76,24 @@ ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，不引入 ONNX Runti
 - **VP belief**：下溢/上溢桶代表值为 `-201/+201`，采用硬桶交叉熵，不做 label smoothing；均值使用 softmax expectation 加尾部代表值计算。
 - **数据与 shuffle**：原始格式 `npz-trajectory-v1`，一局一个文件并保存完整状态轨迹；shuffle 输出 `npz-shard-v1`，每片 `4096` 个 position，固定 seed `20260828`，每 `10s` 扫描，按 game id 去重；训练窗口为 `200000..2000000` positions，新数据至少占 `25%`，按线性权重衰减且窗口刷新前不重复消费分片。
 - **SWA/export**：SWA 采用最近 `32` 个快照的等权滚动平均，补偿版本大幅变化时重置；ONNX opset `18`、动态 batch profile `1/64/256`，导出四个核心输出并执行 FP32/FP16 误差校验。
-- **BGA setup**：固定 seed manifest；黄金清单按 `2p-reduced`、`3p-reduced`、`3p-normal`、`4p-normal` 四种变体分别至少采集 `256` 个 setup。fixture 只承担星图 BGA 契约（人数地图规模、星区排列/旋转、描边面、印刷星球地形、三格边缘相邻和合法性约束）及随机种子/哈希审计；种族、助推、轮次计分、终局计分、科技和联邦片按配置中的通用无放回随机即可，不需要逐一从 BGA 复盘固化。`bga-random-v1` 是项目版本名，必须绑定实际采集来源、规则说明和 fixture SHA-256。当前 fixture 尚未生成，不能在 fixture 完成前宣称 setup 契约已验收。
+- **BGA setup**：固定 seed manifest；黄金清单按 `2p-reduced`、`3p-reduced`、`3p-normal`、`4p-normal` 四种变体分别至少采集 `256` 个 setup。fixture 只承担星图 BGA 契约（人数地图规模、星区排列/旋转、描边面、印刷星球地形、三格边缘相邻和合法性约束）及随机种子/哈希审计；种族、助推、轮次计分、终局计分、科技和联邦片按配置中的通用无放回随机即可，不需要逐一从 BGA 复盘固化。星图算法保持当前实现不变；`setup-seed-stream-v1` 负责各随机组件的独立可复现 seed stream，地图流固定使用 root seed 兼容策略。当前 fixture 尚未生成，不能在 fixture 完成前宣称 setup 契约已验收。
 - **当前星图实现状态**：`src/gaiazero/game/gaia_setup.py` 已实现星区排列/旋转、2 人 7 星区描边面、3 人 8 星区小地图、3 人标准地图和 4 人标准地图，并用重复坐标及相同母星相邻约束拒绝非法布局；但尚未完成 BGA 黄金 fixture 的分布校验，因此只能称为“已有可复现随机生成器”，不能称为“完全复刻 BGA 概率”。
 - **offset**：训练扰动采用整数零和均匀分布，单玩家绝对值不超过 `4`，仅用于新局；拟合使用 ridge（`lambda=0.1`），每个 context 至少 `200` 局，最大 offset 变化连续 `3` 轮不超过 `1` 时停止。
 - **gatekeeper**：以 pairing block 为 bootstrap 单位，固定 seed、FIFO 一次测试一个 candidate；首个 champion 来自零补偿 bootstrap；VP 对照组对 candidate 与 champion 同时关闭 VP utility。
 
-配置校验必须检查 tier 比例和非 forced 比例各自求和为 1、`beta_vp>=0`、VP 桶为 `403`、`pass_lower_ci > reject_upper_ci`、保护指标在 `[0,1]` 内，以及 TensorRT 精度属于 `fp32/fp16`。配置版本或网络/动作 schema 变化时，禁止复用旧 engine、训练窗口和 gatekeeper 统计。
+配置校验必须检查 tier 比例和非 forced 比例各自求和为 1、`beta_vp>=0`、VP 桶为 `403`、`pass_lower_ci > reject_upper_ci`、保护指标在 `[0,1]` 内，以及 TensorRT 精度属于 `fp32/fp16`。配置版本或网络/动作 schema 变化时，禁止复用旧 engine、训练窗口和 gatekeeper 统计。`setup_distribution.seed_stream.version` 必须与实现和每局快照一致；`map_stream_policy` 必须明确为 `root_seed_compatibility_stream`，禁止把地图流静默改回共享 RNG。
+
+### 本次检查结论
+
+本轮 setup 决策已经闭合，不再存在需要产品确认的分布冲突：星图沿用当前随机算法并按 BGA 合法性参考；种族、科技、计分片、助推片和联邦片使用 `setup-seed-stream-v1` 的通用无放回随机；地图流使用 root seed 兼容策略，其余流按名称独立派生。
+
+仍需完善的是工程验收，不是规则选择：
+
+- 生成并冻结四种人数/地图变体的 BGA 星图 golden fixture；在完成前只能声称“当前算法可复现”，不能声称已验证 BGA 统计等价。
+- 把配置加载器接入运行时，确保代码使用的 seed stream 版本与 `gaia-training.json` 一致，禁止代码常量和配置漂移。
+- 在 raw NPZ、C++ 状态摘要和历史回放中统一写入 `setup_seed_stream_version`、各流 seed、`setup_hash`，并验证 Python/C++ hash 完全一致。
+- 修订依赖旧随机样本的规则测试：测试应显式固定种族/板块，或只断言规则不变量，不能假设默认 seed 的助推片和随机种族；当前完整测试仍有 5 个此类 fixture 失败（其余 `200 passed, 69 subtests passed`）。
+- 完成 C++ 初始设置、组件随机、状态哈希和 golden fixture 对齐后，才可勾选第 5、6、7 步的跨语言验收。
 
 ## 与 KataGo 的适配对照
 
@@ -410,7 +422,7 @@ KataGo 把 komi 当作全局条件，是因为同一棋盘在不同 komi 下具�
 
 以下字段不对应网络输出，但缺少时无法正确训练或定位标签错误：
 
-- [ ] `label_schema_version`、`rules_version`、`player_count`、`network_id`、`model_hash`、`game_id`、`setup_seed`、`position_index`、`semantic_turn_index`、`round`、`player_to_move`、`starting_vp_offsets [P]`、`compensation_version`、`search_tier` 和 `symmetry_id`。
+- [ ] `label_schema_version`、`rules_version`、`player_count`、`network_id`、`model_hash`、`game_id`、`setup_seed`、`setup_seed_stream_version`、`setup_stream_seeds`、`setup_hash`、`position_index`、`semantic_turn_index`、`round`、`player_to_move`、`starting_vp_offsets [P]`、`compensation_version`、`search_tier` 和 `symmetry_id`。
 - [ ] `action_tuple_masks [M]`、动作类型/参数槽位 masks、`player_masks [P]`、`pairwise_masks [P,P]`、`planet_masks [N]`、`board_space_masks [S]`、`action_value_masks [M]` 和每个可选 head 的 `*_loss_masks`。
 - [ ] `sample_weights`、`policy_train_masks`、`policy_weights`、`pairwise_value_weights`、`vp_weights`、`ownership_weights`；其中 sample weight 可结合完整/cheap 搜索、pairwise utility surprise、VP surprise、终局距离和是否重分析。必须断言 cheap 样本的 `policy_train_masks=0` 且 `policy_weights=0`，其他 head 的 mask/weight 独立计算。
 - [ ] `root_total_visits`、`search_simulations`、`search_temperature`、`root_noise_applied`、`source_network_config_hash`、`reanalyzed` 和 `terminal_valid`。
@@ -432,8 +444,8 @@ KataGo 把 komi 当作全局条件，是因为同一棋盘在不同 komi 下具�
 Gaia 的一次规则行动可能展开为多次兑换、选板块、充能确认或自动收入步骤。原始 action 数不能直接等同于值得训练 policy 的决策数。
 
 - [ ] 规则引擎标记 `semantic_decision_id` 和动作类别。只有一个合法动作且不含玩家真实选择时自动执行，不调用网络、不启动 MCTS、不生成 policy loss；完整状态轨迹仍记录该步骤用于复盘和终局标签。
-- [ ] 发布版本化 `setup_distribution`：星图必须用 BGA 黄金 fixture 验证 2/3/4 人地图限制、小/标准地图、星区排列与旋转、描边面、印刷星球地形及合法性约束；种族、助推、轮次/终局计分、科技/高级科技和改造联邦片使用配置化、可复现、无放回的通用随机，不以 BGA 复盘逐项校准概率。每局记录随机规则版本、随机种子和实际 setup hash；禁止为训练方便使用偏置权重或静默改写配置。
-- [ ] 按人数、地图模式、种族、座位、板块和主要交互组合持续报告 BGA 分布覆盖率；低频 bucket 只触发数据积累告警，不通过改权重改变 BGA 分布。固定验证集、gatekeeper 和公平性评估使用按 BGA 规则预先生成并冻结的 setup 清单。
+- [ ] 发布版本化 `setup_distribution`：保持当前星图随机算法不变，并用 BGA 黄金 fixture 验证 2/3/4 人地图限制、小/标准地图、星区排列与旋转、描边面、印刷星球地形及合法性约束；种族、助推、轮次/终局计分、科技/高级科技和改造联邦片使用配置化、可复现、无放回的通用随机，不以 BGA 复盘逐项校准概率。地图流采用 `root_seed_compatibility_stream`，其余组件必须使用 `seed_stream` 的独立派生 RNG；每局记录 seed stream 版本、根 seed、各流实际 seed 和实际 setup hash；禁止为训练方便使用偏置权重或静默改写配置。
+- [ ] 按人数、地图模式、星区位置/旋转和主要交互组合持续报告星图 BGA 契约覆盖率；对种族、科技、计分片、助推片和联邦片分别报告通用无放回随机的覆盖率。低频 bucket 只触发数据积累告警，不通过改权重改变任何已确认分布。固定验证集、gatekeeper 和公平性评估使用冻结的地图 fixture 与组件随机 manifest。
 - [ ] 定义 `search_tier = forced | cheap | full | lead_estimation`，并读取 `configs/gaia-training.json` 的 tier 配置。初始目标观测占比为 forced `30%`、cheap `45%`、full `25%`；forced 只表示规则自动步骤的目标占比，不做随机抽样。非 forced 决策按 cheap `64.28571429%`、full `35.71428571%` 抽样，lead estimation 关闭。各轮次、行动类别和玩家人数都设置最低 `20%` full-search 覆盖率，避免某类动作长期只有弱标签；实际比例以 telemetry 为准，不能从配置名推断。
 - [ ] policy 监督固定按搜索层级执行：full search 使用 `policy_train_mask=1`、`policy_weight=1.0`；cheap search 使用 `policy_train_mask=0`、`policy_weight=0.0`，不进入 policy loss，也不因 KL surprise 重新启用。cheap 样本仍保存合法动作、访问次数和原始 visit target 供审计，并正常提供终局 pairwise WDL、VP belief 及其他有效标签。forced 和当前关闭的 lead-estimation 同样使用 policy mask/weight `0/0`。shuffler 不得改写这些掩码，trainer 必须按配置和 NPZ 字段双重断言。
 - [ ] 生产训练不允许提前认输或截断终局，保证完整 VP、计分来源和复盘轨迹。P1 可在连续高置信状态降低 visits 并降低对应 policy 权重，但仍必须把对局按规则运行到真实终局。
@@ -472,7 +484,7 @@ Gaia 的一次规则行动可能展开为多次兑换、选板块、充能确认
 ### 5. C++ Gaia 规则状态与编码器
 
 - [ ] 将 `GaiaState` 的状态字段、玩家顺序、地图坐标、资源、科技、联邦、助推和待决策状态映射为 C++ 数据结构。
-- [ ] 实现与 Python 一致的初始设置、随机种子、合法动作生成、动作应用、终局返回值和观察编码。
+- [ ] 实现与 Python 一致的初始设置、版本化 seed stream、随机种子、合法动作生成、动作应用、终局返回值和观察编码。
 - [ ] 实现与 Python 共用定义的 `semantic_decision_id`、动作类别和 forced-step 判定；自动执行只消除无选择步骤，不能越过充能接受/拒绝、资源组合、板块选择等真实决策。
 - [ ] 明确 C++ 状态复制/撤销策略，优先使用紧凑数组、结构共享或可回滚状态，避免每个节点深拷贝大对象。
 - [ ] 为每一类动作建立 Python/C++ 双向序列化和逐状态对比测试。

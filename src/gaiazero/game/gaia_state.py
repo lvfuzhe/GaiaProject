@@ -14,6 +14,7 @@ from gaiazero.game.gaia_setup import (
     MAX_BOARD_SPACES,
     MAX_PLANETS,
     MAX_SECTORS,
+    SETUP_SEED_STREAM_VERSION,
     assembled_board_spaces,
     generate_setup,
     hex_distance,
@@ -522,6 +523,9 @@ class GaiaState:
 
     player_count: int
     setup_seed: int
+    setup_seed_stream_version: str
+    setup_seed_streams: tuple[tuple[str, int], ...]
+    setup_hash: str
     round_number: int
     player_to_move: int
     first_player: int
@@ -592,6 +596,7 @@ class GaiaState:
         num_players: int = 2,
         seed: int = 0,
         *,
+        seed_stream_version: str = SETUP_SEED_STREAM_VERSION,
         faction_indices: tuple[int, ...] | None = None,
         first_player: int | None = None,
         sector_tiles: tuple[int, ...] | None = None,
@@ -612,6 +617,7 @@ class GaiaState:
         setup = generate_setup(
             num_players,
             seed,
+            seed_stream_version=seed_stream_version,
             faction_boards=FACTION_BOARDS,
             faction_homes=tuple(int(faction.home) for faction in FACTIONS),
             faction_starting_structures=tuple(
@@ -644,6 +650,9 @@ class GaiaState:
         state = cls(
             player_count=num_players,
             setup_seed=seed,
+            setup_seed_stream_version=setup.seed_stream_version,
+            setup_seed_streams=setup.seed_stream_seeds,
+            setup_hash=setup.setup_hash,
             round_number=0,
             player_to_move=setup.placement_order[0],
             first_player=first,
@@ -4841,6 +4850,16 @@ class GaiaState:
             ],
             "setup": {
                 "seed": self.setup_seed,
+                "hash": self.setup_hash,
+                "seed_stream": {
+                    "version": self.setup_seed_stream_version,
+                    "streams": [
+                        {"name": name, "seed": seed}
+                        for name, seed in self.setup_seed_streams
+                    ],
+                    "map_policy": "root_seed_compatibility_stream",
+                    "first_player_policy": "root_seed_modulo_player_count",
+                },
                 "map": {
                     "method": self.map_mode,
                     "size": self.map_size,

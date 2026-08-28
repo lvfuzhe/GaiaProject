@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 
 import numpy as np
@@ -16,6 +18,40 @@ SECTOR_HEXES: tuple[tuple[int, int], ...] = tuple(
 )
 MAX_BOARD_SPACES = MAX_SECTORS * len(SECTOR_HEXES)
 BOOSTER_COUNT = 10
+SETUP_SEED_STREAM_VERSION = "setup-seed-stream-v1"
+SETUP_STREAM_NAMES: tuple[str, ...] = (
+    "map",
+    "factions",
+    "boosters",
+    "round_scoring",
+    "final_scoring",
+    "standard_technology",
+    "advanced_technology",
+    "terraforming_federation",
+)
+
+
+def _derive_stream_seed(root_seed: int, stream_version: str, stream_name: str) -> int:
+    """Derive a stable uint64 seed for one versioned setup stream."""
+    if not stream_version or "|" in stream_version:
+        raise ValueError("stream_version must be non-empty and may not contain '|'")
+    if not stream_name or "|" in stream_name:
+        raise ValueError("stream_name must be non-empty and may not contain '|'")
+    material = f"{int(root_seed)}|{stream_version}|{stream_name}".encode("ascii")
+    digest = hashlib.sha256(material).digest()
+    return int.from_bytes(digest[:8], byteorder="little", signed=False)
+
+
+def _seed_stream(root_seed: int, stream_version: str, stream_name: str) -> np.random.Generator:
+    """Derive a stable independent RNG from the versioned setup seed stream."""
+    return np.random.default_rng(_derive_stream_seed(root_seed, stream_version, stream_name))
+
+
+def _setup_hash(payload: dict[str, object]) -> str:
+    """Hash the canonical setup payload used by replay and training manifests."""
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
 
 # Terrain integers mirror gaia_state.Terrain without introducing a circular import.
 # Each entry is (q, r, terrain) in the printed sector's zero-degree orientation.
@@ -93,6 +129,9 @@ def assembled_board_spaces(
 @dataclass(frozen=True, slots=True)
 class GaiaSetup:
     seed: int
+    seed_stream_version: str
+    seed_stream_seeds: tuple[tuple[str, int], ...]
+    setup_hash: str
     first_player: int
     faction_indices: tuple[int, ...]
     starting_planets: tuple[tuple[int, ...], ...]
@@ -122,6 +161,7 @@ def generate_setup(
     num_players: int,
     seed: int,
     *,
+    seed_stream_version: str = SETUP_SEED_STREAM_VERSION,
     faction_boards: tuple[tuple[int, int], ...],
     faction_homes: tuple[int, ...],
     faction_starting_structures: tuple[int, ...],
@@ -143,7 +183,24 @@ def generate_setup(
 ) -> GaiaSetup:
     if not 2 <= num_players <= 4:
         raise ValueError("num_players must be between two and four")
-    rng = np.random.default_rng(seed)
+    stream_version = str(seed_stream_version)
+    if not stream_version or "|" in stream_version:
+        raise ValueError("seed_stream_version must be non-empty and may not contain '|'")
+    # Keep the map stream on the root seed so the existing map algorithm and
+    # its reproducible layouts remain unchanged; all other components use
+    # independently derived streams below.
+    map_rng = np.random.default_rng(seed)
+    faction_rng = _seed_stream(seed, stream_version, "factions")
+    booster_rng = _seed_stream(seed, stream_version, "boosters")
+    round_scoring_rng = _seed_stream(seed, stream_version, "round_scoring")
+    final_scoring_rng = _seed_stream(seed, stream_version, "final_scoring")
+    standard_technology_rng = _seed_stream(seed, stream_version, "standard_technology")
+    advanced_technology_rng = _seed_stream(seed, stream_version, "advanced_technology")
+    federation_rng = _seed_stream(seed, stream_version, "terraforming_federation")
+    stream_seeds = tuple(
+        (name, int(seed) if name == "map" else _derive_stream_seed(seed, stream_version, name))
+        for name in SETUP_STREAM_NAMES
+    )
     if map_mode not in ("bga-random", "manual"):
         raise ValueError("map_mode must be 'bga-random' or 'manual'")
     selected_map_size = (
@@ -168,7 +225,7 @@ def generate_setup(
         tile_count = MAX_SECTORS
     tile_pool = np.arange(tile_count)
     outlined = num_players == 2
-    random_map = _random_map(rng, tile_pool, centers, outlined=outlined)
+    random_map = _random_map(map_rng, tile_pool, centers, outlined=outlined)
     if (sector_tiles is None) != (sector_rotations is None):
         raise ValueError("sector_tiles and sector_rotations must be provided together")
     if map_mode == "manual" and sector_tiles is None:
@@ -243,9 +300,9 @@ def generate_setup(
         map_data = (map_data[0], planet_q, planet_r, *map_data[3:])
 
     if faction_indices is None:
-        board_choices = rng.choice(len(faction_boards), size=num_players, replace=False)
+        board_choices = faction_rng.choice(len(faction_boards), size=num_players, replace=False)
         selected_factions = tuple(
-            int(faction_boards[int(board)][int(rng.integers(0, 2))])
+            int(faction_boards[int(board)][int(faction_rng.integers(0, 2))])
             for board in board_choices
         )
     else:
@@ -286,7 +343,7 @@ def generate_setup(
     )
     random_boosters = tuple(
         int(value)
-        for value in rng.choice(BOOSTER_COUNT, size=num_players + 3, replace=False)
+        for value in booster_rng.choice(BOOSTER_COUNT, size=num_players + 3, replace=False)
     )
     selected_boosters = random_boosters if booster_tiles is None else _validate_selection(
         booster_tiles,
@@ -299,16 +356,16 @@ def generate_setup(
         booster_owner[booster] = -1
 
     random_round_scoring = tuple(
-        int(value) for value in rng.choice(10, size=6, replace=False)
+        int(value) for value in round_scoring_rng.choice(10, size=6, replace=False)
     )
     random_final_scoring = tuple(
-        int(value) for value in rng.choice(6, size=2, replace=False)
+        int(value) for value in final_scoring_rng.choice(6, size=2, replace=False)
     )
-    random_standard_tech = tuple(int(value) for value in rng.permutation(9))
+    random_standard_tech = tuple(int(value) for value in standard_technology_rng.permutation(9))
     random_advanced_tech = tuple(
-        int(value) for value in rng.choice(15, size=6, replace=False)
+        int(value) for value in advanced_technology_rng.choice(15, size=6, replace=False)
     )
-    random_federation = int(rng.integers(0, 6))
+    random_federation = int(federation_rng.integers(0, 6))
     selected_round_scoring = (
         random_round_scoring
         if round_scoring_tiles is None
@@ -358,8 +415,41 @@ def generate_setup(
     if not 0 <= selected_federation < 6:
         raise ValueError("terraforming federation tile is out of range")
 
+    setup_hash = _setup_hash(
+        {
+            "seed": int(seed),
+            "seed_stream_version": stream_version,
+            "seed_streams": [[name, value] for name, value in stream_seeds],
+            "first_player": selected_first_player,
+            "faction_indices": list(selected_factions),
+            "placement_order": list(placement_order),
+            "active_planets": list(map_data[0]),
+            "planet_q": list(map_data[1]),
+            "planet_r": list(map_data[2]),
+            "planet_source_q": list(planet_source_q),
+            "planet_source_r": list(planet_source_r),
+            "planet_source_ids": list(planet_source_ids),
+            "planet_source_catalog": [list(item) for item in planet_source_catalog],
+            "terrains": list(map_data[3]),
+            "planet_sectors": list(map_data[4]),
+            "sector_tiles": list(map_data[5]),
+            "sector_rotations": list(map_data[6]),
+            "sector_centers": [list(center) for center in centers],
+            "map_mode": map_mode,
+            "booster_tiles": list(selected_boosters),
+            "round_scoring_tiles": list(selected_round_scoring),
+            "final_scoring_tiles": list(selected_final_scoring),
+            "standard_tech_tiles": list(selected_standard_tech),
+            "advanced_tech_tiles": list(selected_advanced_tech),
+            "terraforming_federation_tile": selected_federation,
+        }
+    )
+
     return GaiaSetup(
         seed=seed,
+        seed_stream_version=stream_version,
+        seed_stream_seeds=stream_seeds,
+        setup_hash=setup_hash,
         first_player=selected_first_player,
         faction_indices=selected_factions,
         starting_planets=tuple(() for _ in range(num_players)),
