@@ -28,7 +28,7 @@ ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，不引入 ONNX Runti
 | --- | --- | --- | --- |
 | 训练闭环 | 五进程异步闭环、SWA、ONNX、C++ TensorRT selfplay/gatekeeper | 多机共享目录和生产者背压 | TensorFlow、TFRecord、ONNX Runtime、C++ 训练 |
 | 人数模型 | 2/3/4 人只共用代码、标签语义和 MCTS 实现；训练线、数据、SWA、checkpoint、守门和发布完全独立 | 各人数可独立递进网络规模 | 跨人数混训、蒸馏、续载或直接加载权重 |
-| 核心推理头 | policy、pairwise WDL、VP belief | 独立 TD utility/VP、uncertainty、动作 Q | rank head、独立 utility logits |
+| 核心推理头 | 参数化 policy、pairwise WDL、VP belief | 独立 TD utility/VP、uncertainty、动作 Q | 任何排名头、独立 utility logits |
 | MCTS 效用 | 只使用 pairwise utility，`beta_vp=0` | 小权重、有界、动态居中的 VP utility，消融通过后启用 | 直接把原始 VP 无界加入效用 |
 | 数据 | 完整状态轨迹、终局真值、full/cheap search 标记、可审计窗口 | policy surprise、对称增强、重分析 | 解析前端 JSON 作为训练输入 |
 | 辅助监督 | G0 只实现核心标签与 loss | 玩家发展 P1；星图/建筑 P2 | 让大量辅助头阻塞 G0 |
@@ -47,6 +47,10 @@ ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，不引入 ONNX Runti
 - offset 估算和更新直接在整数零和可行域内完成，不先生成小数再取整，因此不存在余数分配。
 - 2/3/4 人模型分别训练、分别保存、分别守门和发布，训练数据与训练状态完全隔离。
 - 最终网络表示架构采用星图 GNN + 玩家/科技/公共板块混合网络；不评估或实现其他网络表示架构。
+- policy 采用参数化动作头：网络预测动作类型和参数分量，C++ 组合后应用规则合法性并无损映射到内部固定 action ID；不使用直接输出 `[A]` logits 的固定动作头。
+- G0 核心网络头严格只有参数化 policy、pairwise WDL 和 VP belief；删除 rank head，排名和第一名率只从完整终局 VP 离线统计派生。
+- VP belief 主桶为 `-200..+200`、步长 1，共 401 个整数桶；额外保留下溢/上溢哨兵桶用于审计，因此输出维度固定为 `V=403`，哨兵不代表额外的有限精度。
+- setup 随机分布完全复刻 BGA 合法随机规则，不使用自定义训练权重改写 BGA 的基础概率；每局记录 BGA 随机规则版本和实际 setup hash。
 
 ## 与 KataGo 的适配对照
 
@@ -79,9 +83,9 @@ ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，不引入 ONNX Runti
 
 ### 0. 冻结跨进程契约与基线
 
-- [ ] 固定 `standard-v22` 的观察向量、合法动作掩码、策略输出、pairwise WDL 输出和 VP 输出的 shape、dtype、动作编号和玩家顺序。
+- [ ] 固定 `standard-v22` 的观察向量、合法动作掩码、参数化策略输出、pairwise WDL 输出和 VP 输出的 shape、dtype、动作参数编号和玩家顺序。
 - [ ] 固定 NPZ 训练样本格式：`raw/*.npz` 一文件只表示一局从初始设置到真实终局的完整对局，包含输入、掩码、G0 启用的稠密监督标签、逐头 loss mask/weight，以及可派生 P1/P2 标签的完整状态轨迹和复盘 metadata；未启用标签不得用全零数组伪装存在。`shuffle` 输出的训练 pack 可以跨局混排 position，但必须保留 `game_id + position_index`、终局标签关联和来源 raw hash。
-- [ ] 固定模型清单格式：规则版本、标签 schema/head 版本、玩家数、观察/动作维度、网络架构、SWA 是否可用、导出 opset、TensorRT 精度模式和权重 SHA-256。
+- [ ] 固定模型清单格式：规则版本、标签 schema/head 版本、玩家数、观察维度、参数化动作类型/参数维度、内部 action ID 映射版本、VP belief 桶范围/步长/哨兵配置、网络架构、SWA 是否可用、导出 opset、TensorRT 精度模式和权重 SHA-256。
 - [ ] 为 Python 参考实现增加一组固定种子状态和网络输出 golden fixtures，作为 C++ 对齐基准。
 - [ ] 记录当前 Python self-play、单次 MCTS、网络 batch=1/batch=N 的吞吐和显存基线。
 
@@ -255,7 +259,7 @@ GNN 混合网络根据节点/关系编码器、消息传递层数、hidden size�
 
 当前 `TrainingExample` 只有 observation、legal mask、MCTS policy 和终局 utility 四组数据。下列字段均属于待实现的新 label schema；在 schema 版本升级前，旧 NPZ 不得被误认为具有缺失 head 的零值标签。
 
-符号约定：`P` 为本模型固定的玩家数，`Q=P(P-1)/2` 为无序玩家对数量，`A` 为固定动作空间，`N` 为星球槽位，`S` 为可放卫星/空间站的星图位置，`T=6` 为科技轨数量，`H` 为短/中/长三个时间尺度。所有玩家维度必须使用与 observation 相同的座位顺序；2、3、4 人训练线完全独立，不通过 padding 混训，也不共享训练数据或权重。
+符号约定：`P` 为本模型固定的玩家数，`Q=P(P-1)/2` 为无序玩家对数量，`A` 为规则引擎内部固定 action ID 数量（不是网络直接输出维度），`C` 为动作类型数量，`R` 为参数槽位数量，`N` 为星球槽位，`S` 为可放卫星/空间站的星图位置，`T=6` 为科技轨数量，`H` 为短/中/长三个时间尺度。所有玩家维度必须使用与 observation 相同的座位顺序；2、3、4 人训练线完全独立，不通过 padding 混训，也不共享训练数据或权重。
 
 优先级沿用文档开头定义。G0 的网络输出严格限制为 policy、pairwise WDL 和 VP belief；完整状态轨迹仍需保存，以便 P1/P2 标签以后离线派生，但未启用的辅助标签不要求在 G0 NPZ 中展开为稠密数组。
 
@@ -263,18 +267,21 @@ GNN 混合网络根据节点/关系编码器、消息传递层数、hidden size�
 
 | NPZ 标签 | Shape | 来源与用途 | 优先级 |
 | --- | --- | --- | --- |
-| `policy_visit_targets` | `[A]` | 根节点访问次数归一化后的主策略目标；非法动作必须为 0 | P0 |
-| `root_visit_counts` | `[A]` | 未归一化访问次数，用于复核温度、重分析和低访问样本降权 | P0 |
-| `root_policy_priors` | `[A]` | 网络输出并经过合法动作过滤的原始先验；用于校准与复现搜索 | P0 |
-| `root_noised_policy_priors` | `[A]` | 加入根噪声后实际用于搜索的先验；用于 policy surprise/KL 采样权重 | P0 |
-| `played_actions` | scalar | selfplay 实际采样动作，用于复盘、行为统计和策略校准 | P0 |
-| `action_value_targets` | `[A,P]` | MCTS 已访问子节点的多人胜负效用 Q；未访问动作由独立 mask 排除 | P1 |
-| `action_vp_targets` | `[A,P]` | 每个已访问动作的预计最终 VP/VP 差 Q，帮助区分同胜率但得分不同的动作 | P1 |
-| `optimistic_policy_targets` | `[A]` | 类似 KataGo optimistic policy；由风险/得分偏好搜索产生，不从基础 visit target 复制 | P2 |
+| `policy_visit_targets_by_id` | `[A]` | 根节点访问次数归一化后的固定 action ID 审计目标；非法动作必须为 0，训练前转换为参数化目标 | P0 |
+| `policy_type_targets` | `[C]` | 按根访问次数聚合的动作类型目标；用于参数化 policy 的类型分量 | P0 |
+| `policy_argument_targets` | `[R,*]` | 按动作 tuple/参数槽位聚合的目标；每个槽位带独立 mask 和参数类别 | P0 |
+| `root_visit_counts_by_id` | `[A]` | 固定 action ID 的未归一化访问次数，用于复核温度、重分析和低访问样本降权 | P0 |
+| `root_policy_priors_by_id` | `[A]` | 参数化 policy 组合并映射到 action ID 后的原始先验，用于校准与复现搜索 | P0 |
+| `root_noised_policy_priors_by_id` | `[A]` | 加入根噪声后映射到 action ID 的实际先验，用于 policy surprise/KL 采样权重 | P0 |
+| `played_action` / `played_action_tuple` | scalar / tuple | selfplay 实际采样的固定 action ID 及其参数化 tuple，用于复盘、行为统计和策略校准 | P0 |
+| `action_value_targets_by_id` | `[A,P]` | MCTS 已访问固定 action ID 子节点的多人胜负效用 Q；未访问动作由独立 mask 排除 | P1 |
+| `action_vp_targets_by_id` | `[A,P]` | 每个已访问固定 action ID 的预计最终 VP/VP 差 Q，帮助区分同胜率但得分不同的动作 | P1 |
+| `optimistic_policy_targets_by_id` | `[A]` | 类似 KataGo optimistic policy；由风险/得分偏好搜索产生，不从基础 visit target 复制 | P2 |
 
-- [ ] ONNX 的基础 policy 输出为原始 logits `[B,A]`，合法动作过滤在 C++ 搜索端完成，不能把 `legal_masks` 烘焙进网络权重。
-- [ ] 逐动作 Q 标签同时保存 `action_value_masks [A]`，仅训练实际搜索过且访问数达到阈值的动作。
-- [ ] P2 乐观策略只在基础策略、VP head 和跨代守门稳定后启用；多人局默认追求风险调整后的 pairwise utility 或 VP 分差。若以后改为直接优化第一名率，应新增独立的 `first_place_head [P]` 并做消融验证，而不是恢复完整 rank head。
+- [ ] ONNX 的基础 policy 输出为参数化 logits：`action_type_logits [B,C]`、按已选动作类型条件化的参数槽位 logits `action_argument_logits [B,R,*]` 及其类型/槽位 mask；C++ 按合法 tuple 组合成内部 `[A]` action ID 先验，再应用精确规则合法性过滤，不能把 `legal_masks` 烘焙进网络权重。
+- [ ] 参数化 tuple 必须包含稳定的 `action_type_id`、参数槽位顺序、参数类型、条件 mask 和内部 action ID 映射版本；同一 tuple 只能映射到一个 action ID，无法无损映射的动作禁止进入训练。组合概率、类型/参数 loss mask 和实际 action ID visit target 必须能相互重算。
+- [ ] 逐动作 Q 标签保存 `action_value_masks [A]`，仅训练实际搜索过且访问数达到阈值的固定 action ID；Q 头属于 P1，不是 G0 核心头。
+- [ ] P2 乐观策略只在基础策略、VP head 和跨代守门稳定后启用；多人局默认追求风险调整后的 pairwise utility 或 VP 分差。第一名率只由完整终局 VP 离线统计，不增加任何排名或第一名网络输出。
 
 ##### 2.6.2 多人结果与价值头标签
 
@@ -289,7 +296,7 @@ GNN 混合网络根据节点/关系编码器、消息传递层数、hidden size�
 
 - [ ] Gaia 的时间尺度按“语义决策”而不是原始 action 计数；免费兑换、被动充能确认、科技选择等微步骤不能把时间轴无限拉长。先从约 8、24、80 个语义决策的均值范围做基准，再根据完整对局长度校准 lambda。
 - [ ] 正常完成的 Gaia 对局没有 KataGo 的 `no-result` 类别；非法、损坏、超出最大步数或缺少终局的对局标为 `terminal_valid=0`，不得伪装成平局训练。真实同分通过 pairwise draw 表示，实际并列排名仅由终局 VP 派生用于统计。
-- [ ] 不实现 `final_rank_targets` 或 `rank_head`。2 人局中它与 WDL 完全冗余；3/4 人局所需的期望排名可由 pairwise WDL 计算，完整联合名次分布和第一名概率不属于当前 MCTS 目标。
+- [ ] 删除并禁止实现 `final_rank_targets`、`rank_head`、`first_place_head` 或其他排名网络输出。2 人局中排名与 WDL 完全冗余；3/4 人局的期望排名由 pairwise WDL 统计计算，实际排名和第一名率由完整终局 VP 离线派生。
 - [ ] 网络只输出 `pairwise_wdl_logits [B,Q,3]`，每个 `i < j` 无序玩家对只计算一次 loss；C++/Python 后处理镜像展开为 `[B,P,P,3]`，保证 `win(i,j)=loss(j,i)` 且 `draw(i,j)=draw(j,i)`。完整目标矩阵的对角线必须 mask，不能双计数非对角 loss。
 - [ ] C++ 与 Python 都按同一公式把 WDL 概率聚合成 MCTS 消费的 `[P]` 多人效用：`u_i = sum_{j != i}(p_win(i,j) - p_loss(i,j)) / (P - 1)`；NPZ 中的 `final_utility_targets` 必须逐样本通过这一公式重算校验。
 - [ ] 统计所需的期望排名可按 `E[rank_i] = 1 + sum_{j != i}(p_win(j,i) + 0.5 * p_draw(i,j))` 计算，但两两边缘概率不能恢复完整联合名次分布；守门的第一名率和实际排名直接从完整对局终局 VP 统计，不能伪装成网络预测。
@@ -305,7 +312,7 @@ GNN 混合网络根据节点/关系编码器、消息传递层数、hidden size�
 | --- | --- | --- | --- |
 | `raw_final_vp_targets` | `[P]` | 不包含离线 VP offset 的每名玩家原始最终 VP，用于补偿重估和审计 | P0 |
 | `final_vp_targets` | `[P]` | 包含 `starting_vp_offsets` 的每名玩家调整后最终 VP，供 VP head、pairwise WDL 真值和 MCTS 终局效用使用 | P0 |
-| `final_vp_belief_targets` | `[P,V]` | 固定 VP 桶的终局分布，包含下溢/上溢桶，类似 KataGo score belief | P0 |
+| `final_vp_belief_targets` | `[P,403]` | VP 终局分布：401 个 `-200..+200` 的整数桶，外加 1 个下溢和 1 个上溢哨兵桶 | P0 |
 | `final_vp_component_targets` | `[P,6]` | `原始局内VP、开局offset、科技轨终局分、剩余资源分、终局板块1、终局板块2` | P1 |
 | `root_vp_targets` | `[P]` | selfplay MCTS 根节点聚合的预计终局 VP 原始记录，用于构造 TD VP、重分析和审计；不直接对应网络头 | P1 |
 | `td_vp_targets` | `[H,P]` | 后续根节点预计终局 VP 的短/中/长期指数平均 | P1 |
@@ -313,9 +320,9 @@ GNN 混合网络根据节点/关系编码器、消息传递层数、hidden size�
 | `shortterm_vp_error_targets` | `[H,P]` | 独立 TD VP 预测与对应未来根 VP 目标之间的误差 | P1 |
 | `vp_source_targets` | `[P,K]` | 更细 VP 台账：轮次计分、联邦、科技、助推、QIC 行动、种族能力等 | P2 |
 
-- [ ] `V` 的范围和桶宽由完整随机对局统计确定并写入 label manifest；不允许训练脚本和 TensorRT 后处理各自假设不同区间。
-- [ ] manifest 固定下溢/上溢桶的代表值和 moments 算法，并设置训练/验证 overflow-rate 门槛；超过门槛必须升级 VP schema 或扩大范围，不能让边界桶长期压扁大分差。
-- [ ] G0 的 VP head 只直接输出 `vp_belief_logits [B,P,V]`。softmax 后用固定 VP 桶中心计算 `vp_mean` 和 `vp_stdev`，再计算 `vp_lead_i = vp_mean_i - mean(vp_mean_{j != i})`；三者是确定性后处理，不再建立互相可能矛盾的独立 G0 回归输出。
+- [ ] VP belief 的主范围固定为 `-200..+200`，步长为 1，共 401 个有限桶；`V=403` 的第 0/402 类分别表示小于 -200 和大于 +200，仅用于保留尾部信息和审计，不改变主范围精度。
+- [ ] manifest 固定 401 个主桶中心、上下溢哨兵的代表值和 moments 算法；训练和验证持续记录 underflow/overflow 比例，超过配置门槛时暂停发布并重新审查 VP schema。
+- [ ] G0 的 VP head 只直接输出 `vp_belief_logits [B,P,403]`。softmax 后用 `-200..+200` 固定桶中心及上下溢代表值计算 `vp_mean` 和 `vp_stdev`，再计算 `vp_lead_i = vp_mean_i - mean(vp_mean_{j != i})`；三者是确定性后处理，不再建立互相可能矛盾的独立 G0 回归输出。
 - [ ] 可在 belief loss 之外对派生 `vp_mean` 增加小权重 Huber 校准 loss，但这不增加 ONNX 输出。只有 `root_vp_lead_targets` 的高预算数据足够且消融有效时，P1 才增加独立 `lead_head`；它不能用当前局面 VP 差冒充预计终局 lead。
 - [ ] 任意玩家对的期望终局分差可由 `vp_mean_i - vp_mean_j` 计算；独立的每玩家 VP belief 不包含玩家间相关性，不能据此替代 pairwise WDL head，也不能假设其能精确恢复胜率或第一名率。
 - [ ] 必须断言 `raw_final_vp_targets + starting_vp_offsets == final_vp_targets`。P1 六项分解可直接从 `final_scores()` 和本局 offset 计算；P2 细分台账要求所有 VP 变化携带稳定 `score_source_id`，不能依赖动作说明文字解析。
@@ -367,8 +374,8 @@ GNN 混合网络根据节点/关系编码器、消息传递层数、hidden size�
 
 | 网络头 | 推理输出 | 训练标签 | 生产 ONNX |
 | --- | --- | --- | --- |
-| `policy_head` | `policy_logits [B,A]` | `policy_visit_targets` | 必须保留 |
-| `action_q_head` | `action_value [B,A,P]`、`action_vp [B,A,P]` | 两组 action Q 标签和 mask | P1 启用后保留 |
+| `policy_head` | `action_type_logits [B,C]`、`action_argument_logits [B,R,*]` | 参数化动作类型/参数目标 | 必须保留 |
+| `action_q_head` | `action_value [B,A,P]`、`action_vp [B,A,P]` | 固定 action ID 的两组 action Q 标签和 mask | P1 启用后保留 |
 | `pairwise_value_head` | `pairwise_wdl_logits [B,Q,3]` | 仅终局 pairwise WDL | 必须保留；后处理展开，不导出独立 utility/rank logits |
 | `score_head` | `vp_belief_logits [B,P,V]` | VP belief；mean/stdev/lead 从 belief 派生 | 必须保留 |
 | `td_head` | `td_utility [B,H,P]`、`td_vp [B,H,P]` | 独立 TD utility/VP 目标 | P1 启用后保留 |
@@ -377,9 +384,10 @@ GNN 混合网络根据节点/关系编码器、消息传递层数、hidden size�
 | `map_head` | planet/satellite/space-station 分类 logits | 星图控制与建筑标签 | P2 消融，生产默认裁剪 |
 | `development_head` | research/resource/tech/federation 输出 | 玩家发展辅助标签 | P1 分组消融，生产默认裁剪 |
 
-- [ ] ONNX 输出使用原始 logits 或未缩放回归量；softmax、pairwise 镜像展开、utility 聚合、VP belief moments、softplus、合法动作 mask 和数值缩放统一由 C++ 后处理，并把版本及缩放常数写入 manifest。
+- [ ] ONNX 输出使用参数化 policy 的原始 logits 或未缩放回归量；C++ 负责参数 tuple 组合、action ID 映射、softmax、pairwise 镜像展开、utility 聚合、VP belief moments、softplus、合法动作 mask 和数值缩放，并把版本及缩放常数统一写入 manifest。
 - [ ] 训练 checkpoint 保存全部已启用 head，生产 ONNX 可以裁剪不被 MCTS/诊断消费的辅助输出；裁剪前后 policy、pairwise WDL、聚合 utility、VP 和 uncertainty 的 golden fixture 输出必须一致。
 - [ ] 每个 head 使用独立 loss、权重、有效样本计数和梯度统计；总 loss 不能掩盖某个 head 没有有效标签或量级失衡。
+- [ ] G0 生产 ONNX 只导出参数化 `policy_head`、`pairwise_value_head` 和 `score_head`；`action_q_head`、`td_head`、`lead_head`、`uncertainty_head`、`map_head` 和 `development_head` 必须等对应 P1/P2 阶段明确启用后，才更新输出契约和 TensorRT engine。
 
 ##### 2.6.7 样本权重、掩码和审计字段
 
@@ -407,8 +415,8 @@ GNN 混合网络根据节点/关系编码器、消息传递层数、hidden size�
 Gaia 的一次规则行动可能展开为多次兑换、选板块、充能确认或自动收入步骤。原始 action 数不能直接等同于值得训练 policy 的决策数。
 
 - [ ] 规则引擎标记 `semantic_decision_id` 和动作类别。只有一个合法动作且不含玩家真实选择时自动执行，不调用网络、不启动 MCTS、不生成 policy loss；完整状态轨迹仍记录该步骤用于复盘和终局标签。
-- [ ] 发布版本化 `setup_distribution`：分别定义 2/3/4 人局、小/标准地图、星区排列与旋转、轮次/终局计分、科技/高级科技/助推板块、合法种族组合及座位分配的采样权重。每局记录分布版本和实际 setup hash，训练时不得依赖未记录的进程默认值。
-- [ ] 按人数、地图模式、种族、座位、板块和主要交互组合持续报告覆盖率；设置最低样本数和最大单 bucket 占比，避免高频配置淹没稀有种族/动作。固定验证集、gatekeeper 和公平性评估使用各自冻结的 setup 清单，不随训练采样器漂移。
+- [ ] 发布版本化 `setup_distribution`，完全复刻 BGA 的合法随机规则和概率：2/3/4 人地图限制、小/标准地图、星区排列与旋转、轮次/终局计分、科技/高级科技/助推板块、合法种族组合、座位分配及其随机种子都按 BGA 规则生成。禁止使用自定义权重、均匀重采样或为训练方便修改 BGA 概率；每局记录 BGA 规则版本、随机种子和实际 setup hash。
+- [ ] 按人数、地图模式、种族、座位、板块和主要交互组合持续报告 BGA 分布覆盖率；低频 bucket 只触发数据积累告警，不通过改权重改变 BGA 分布。固定验证集、gatekeeper 和公平性评估使用按 BGA 规则预先生成并冻结的 setup 清单。
 - [ ] 定义 `search_tier = forced | cheap | full | lead_estimation`。关键分支使用 full search；普通分支按配置概率使用 cheap/full；指定小比例位置使用高预算 lead estimation。各轮次、行动类别和玩家人数都设置最低 full-search 覆盖率，避免某类动作长期只有弱标签。
 - [ ] full search 默认 `policy_train_mask=1`。cheap search 默认不训练 policy 或显著降权，但仍可提供终局 WDL/VP 标签；P1 可在 cheap search 发现高 KL surprise 时纳入 policy。保存实际访问数和每个 head 的独立权重，不能仅凭配置名推断样本质量。
 - [ ] G0 不允许提前认输或截断终局，保证完整 VP、计分来源和复盘轨迹。P1 可在连续高置信状态降低 visits 并降低对应 policy 权重，但仍必须把对局按规则运行到真实终局。
