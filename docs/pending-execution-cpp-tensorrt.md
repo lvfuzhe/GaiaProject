@@ -47,7 +47,7 @@ ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，不引入 ONNX Runti
 - offset 估算和更新直接在整数零和可行域内完成，不先生成小数再取整，因此不存在余数分配。
 - 2/3/4 人模型分别训练、分别保存、分别守门和发布，训练数据与训练状态完全隔离。
 - 最终网络表示架构采用星图 GNN + 玩家/科技/公共板块混合网络；不评估或实现其他网络表示架构。
-- policy 采用参数化动作头：网络预测动作类型和参数分量，C++ 组合后应用规则合法性并无损映射到内部固定 action ID；不使用直接输出 `[A]` logits 的固定动作头。
+- policy 采用参数化动作头：网络预测动作类型和参数分量，C++ 组合成规范化 `ActionTuple/ActionKey`，由规则引擎枚举并过滤合法动作；GNN 和网络都不依赖固定 action ID，固定编号最多作为复盘/缓存的可选审计键。
 - G0 核心网络头严格只有参数化 policy、pairwise WDL 和 VP belief；删除 rank head，排名和第一名率只从完整终局 VP 离线统计派生。
 - VP belief 主桶为 `-200..+200`、步长 1，共 401 个整数桶；额外保留下溢/上溢哨兵桶用于审计，因此输出维度固定为 `V=403`，哨兵不代表额外的有限精度。
 - setup 随机分布完全复刻 BGA 合法随机规则，不使用自定义训练权重改写 BGA 的基础概率；每局记录 BGA 随机规则版本和实际 setup hash。
@@ -83,9 +83,9 @@ ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，不引入 ONNX Runti
 
 ### 0. 冻结跨进程契约与基线
 
-- [ ] 固定 `standard-v22` 的观察向量、合法动作掩码、参数化策略输出、pairwise WDL 输出和 VP 输出的 shape、dtype、动作参数编号和玩家顺序。
+- [ ] 固定 `standard-v22` 的观察向量、合法 `ActionTuple` 枚举和参数化策略输出、pairwise WDL 输出及 VP 输出的 shape、dtype、动作类型/参数 schema 和玩家顺序。
 - [ ] 固定 NPZ 训练样本格式：`raw/*.npz` 一文件只表示一局从初始设置到真实终局的完整对局，包含输入、掩码、G0 启用的稠密监督标签、逐头 loss mask/weight，以及可派生 P1/P2 标签的完整状态轨迹和复盘 metadata；未启用标签不得用全零数组伪装存在。`shuffle` 输出的训练 pack 可以跨局混排 position，但必须保留 `game_id + position_index`、终局标签关联和来源 raw hash。
-- [ ] 固定模型清单格式：规则版本、标签 schema/head 版本、玩家数、观察维度、参数化动作类型/参数维度、内部 action ID 映射版本、VP belief 桶范围/步长/哨兵配置、网络架构、SWA 是否可用、导出 opset、TensorRT 精度模式和权重 SHA-256。
+- [ ] 固定模型清单格式：规则版本、标签 schema/head 版本、玩家数、观察维度、参数化动作类型/参数维度、`ActionTuple` canonicalization/schema 版本、VP belief 桶范围/步长/哨兵配置、网络架构、SWA 是否可用、导出 opset、TensorRT 精度模式和权重 SHA-256。
 - [ ] 为 Python 参考实现增加一组固定种子状态和网络输出 golden fixtures，作为 C++ 对齐基准。
 - [ ] 记录当前 Python self-play、单次 MCTS、网络 batch=1/batch=N 的吞吐和显存基线。
 
@@ -178,9 +178,10 @@ KataGo 把 komi 当作全局条件，是因为同一棋盘在不同 komi 下具�
 
 已确认直接采用 GNN 混合网络，不再进行其他架构的实现或对比。
 
+- [ ] 当前 Python 的 `action_size`、`legal_action_mask()` 和固定动作数组属于旧接口；GNN 目标实现必须改为规则引擎返回带类型参数的合法 `ActionTuple` 列表，MCTS 边直接保存 tuple 和统计量，不以 action ID 数组作为网络输入/输出。
 - [ ] 只实现星图 GNN + 玩家/科技/公共板块混合网络：每个合法小六角位置都是地图节点，包括空位、星球和可放卫星/空间站的位置；节点特征包含坐标、星区、地形、所有者、建筑、Gaiaformer、卫星/空间站和联邦状态，六角相邻关系作为边。玩家个人板块、科技轨、轮次/终局计分及其他公共板块使用类型化实体和全局 token，与地图 pooled 表示融合。
 - [ ] GNN 使用固定最大节点/边槽位、按 setup 生成的邻接索引、关系类型 embedding 和 mask，保证 ONNX/TensorRT 不依赖动态 Python 图对象；先实现 2/3/4 人各自独立模型，再分别测量参数量和吞吐。
-- [ ] GNN trunk 和 G0 核心 head 一次性实现；策略输出必须映射到规则引擎的固定 action ID 和 legal mask，不允许网络输出绕过规则引擎。
+- [ ] GNN trunk 和 G0 核心 head 一次性实现；策略输出必须组合为结构化 `ActionTuple` 并交给规则引擎的合法 tuple/参数 mask，不允许网络输出绕过规则引擎。固定 action ID 只可在日志或缓存层按版本化规则生成。
 - [ ] 只在 GNN 方案上进行 G0/G1/G2 训练、自博弈和 gatekeeper；不维护其他架构的 candidate、窗口、SWA 或 approved 模型。
 - [ ] 写入 `architecture_family=graph_hybrid`、实体/关系/动作 schema 版本、参数量和 ONNX 输出契约；表示或动作 schema 变化视为新训练线，不能加载不兼容 checkpoint。
 
@@ -192,7 +193,7 @@ KataGo 把 komi 当作全局条件，是因为同一棋盘在不同 komi 下具�
 - [ ] 模型 checkpoint、ONNX manifest、守门记录、训练状态和 Dashboard 都记录同一个 `network_id`，例如 `graph-hybrid-g0-2p`；2/3/4 人后缀必须不同。
 - [ ] 2、3、4 人局是三条完全独立训练线：分别维护 raw/shuffled 数据、训练窗口 manifest、验证集、优化器、调度器、SWA、checkpoint、candidate/approved/rejected、守门统计、TensorRT engine 缓存和 Dashboard 状态。只共享实现代码与版本化 schema，不跨人数混训、采样、蒸馏、续载或回退。
 - [ ] 每个代际使用独立的 candidate、approved、rejected 和 TensorRT engine 缓存记录，同时保留上一代冠军用于跨代守门和回退。
-- [ ] 固定跨代兼容条件：规则版本、观察维度、动作编号和玩家数必须相同；任一条件变化都启动新训练线，不得当作单纯扩容。
+- [ ] 固定跨代兼容条件：规则版本、观察维度、`ActionTuple` schema/canonicalization 和玩家数必须相同；任一条件变化都启动新训练线，不得当作单纯扩容。
 
 验收：任一 `.pt` 或 `.onnx` 都能仅通过 manifest 确定玩家数、代际、消息传递层数、关系编码配置、隐藏宽度、规则版本、父模型和模型哈希。
 
@@ -259,7 +260,7 @@ GNN 混合网络根据节点/关系编码器、消息传递层数、hidden size�
 
 当前 `TrainingExample` 只有 observation、legal mask、MCTS policy 和终局 utility 四组数据。下列字段均属于待实现的新 label schema；在 schema 版本升级前，旧 NPZ 不得被误认为具有缺失 head 的零值标签。
 
-符号约定：`P` 为本模型固定的玩家数，`Q=P(P-1)/2` 为无序玩家对数量，`A` 为规则引擎内部固定 action ID 数量（不是网络直接输出维度），`C` 为动作类型数量，`R` 为参数槽位数量，`N` 为星球槽位，`S` 为可放卫星/空间站的星图位置，`T=6` 为科技轨数量，`H` 为短/中/长三个时间尺度。所有玩家维度必须使用与 observation 相同的座位顺序；2、3、4 人训练线完全独立，不通过 padding 混训，也不共享训练数据或权重。
+符号约定：`P` 为本模型固定的玩家数，`Q=P(P-1)/2` 为无序玩家对数量，`M` 为当前状态由规则引擎枚举出的合法 `ActionTuple` 数量（随状态变化，不是网络固定输出维度），`C` 为动作类型数量，`R` 为参数槽位数量，`N` 为星球槽位，`S` 为可放卫星/空间站的星图位置，`T=6` 为科技轨数量，`H` 为短/中/长三个时间尺度。所有玩家维度必须使用与 observation 相同的座位顺序；2、3、4 人训练线完全独立，不通过 padding 混训，也不共享训练数据或权重。
 
 优先级沿用文档开头定义。G0 的网络输出严格限制为 policy、pairwise WDL 和 VP belief；完整状态轨迹仍需保存，以便 P1/P2 标签以后离线派生，但未启用的辅助标签不要求在 G0 NPZ 中展开为稠密数组。
 
@@ -267,20 +268,21 @@ GNN 混合网络根据节点/关系编码器、消息传递层数、hidden size�
 
 | NPZ 标签 | Shape | 来源与用途 | 优先级 |
 | --- | --- | --- | --- |
-| `policy_visit_targets_by_id` | `[A]` | 根节点访问次数归一化后的固定 action ID 审计目标；非法动作必须为 0，训练前转换为参数化目标 | P0 |
+| `action_tuples` | `[M,R]` + 参数类型/有效槽位 | 当前状态的规范化合法动作 tuple 列表；由规则引擎生成，不由网络预测 | P0 |
+| `policy_visit_targets_by_tuple` | `[M]` | 根节点访问次数归一化后的合法 `ActionTuple` 目标；训练前聚合为参数化目标 | P0 |
 | `policy_type_targets` | `[C]` | 按根访问次数聚合的动作类型目标；用于参数化 policy 的类型分量 | P0 |
 | `policy_argument_targets` | `[R,*]` | 按动作 tuple/参数槽位聚合的目标；每个槽位带独立 mask 和参数类别 | P0 |
-| `root_visit_counts_by_id` | `[A]` | 固定 action ID 的未归一化访问次数，用于复核温度、重分析和低访问样本降权 | P0 |
-| `root_policy_priors_by_id` | `[A]` | 参数化 policy 组合并映射到 action ID 后的原始先验，用于校准与复现搜索 | P0 |
-| `root_noised_policy_priors_by_id` | `[A]` | 加入根噪声后映射到 action ID 的实际先验，用于 policy surprise/KL 采样权重 | P0 |
-| `played_action` / `played_action_tuple` | scalar / tuple | selfplay 实际采样的固定 action ID 及其参数化 tuple，用于复盘、行为统计和策略校准 | P0 |
-| `action_value_targets_by_id` | `[A,P]` | MCTS 已访问固定 action ID 子节点的多人胜负效用 Q；未访问动作由独立 mask 排除 | P1 |
-| `action_vp_targets_by_id` | `[A,P]` | 每个已访问固定 action ID 的预计最终 VP/VP 差 Q，帮助区分同胜率但得分不同的动作 | P1 |
-| `optimistic_policy_targets_by_id` | `[A]` | 类似 KataGo optimistic policy；由风险/得分偏好搜索产生，不从基础 visit target 复制 | P2 |
+| `root_visit_counts_by_tuple` | `[M]` | 合法 tuple 的未归一化访问次数，用于复核温度、重分析和低访问样本降权 | P0 |
+| `root_policy_priors_by_tuple` | `[M]` | 参数化 policy 组合到合法 tuple 后的原始先验，用于校准与复现搜索 | P0 |
+| `root_noised_policy_priors_by_tuple` | `[M]` | 加入根噪声后的合法 tuple 先验，用于 policy surprise/KL 采样权重 | P0 |
+| `played_action_tuple` | tuple | selfplay 实际采样的规范化动作 tuple，用于复盘、行为统计和策略校准 | P0 |
+| `action_value_targets_by_tuple` | `[M,P]` | MCTS 已访问合法 tuple 子节点的多人胜负效用 Q；未访问动作由独立 mask 排除 | P1 |
+| `action_vp_targets_by_tuple` | `[M,P]` | 每个已访问合法 tuple 的预计最终 VP/VP 差 Q，帮助区分同胜率但得分不同的动作 | P1 |
+| `optimistic_policy_targets_by_tuple` | `[M]` | 类似 KataGo optimistic policy；由风险/得分偏好搜索产生，不从基础 visit target 复制 | P2 |
 
-- [ ] ONNX 的基础 policy 输出为参数化 logits：`action_type_logits [B,C]`、按已选动作类型条件化的参数槽位 logits `action_argument_logits [B,R,*]` 及其类型/槽位 mask；C++ 按合法 tuple 组合成内部 `[A]` action ID 先验，再应用精确规则合法性过滤，不能把 `legal_masks` 烘焙进网络权重。
-- [ ] 参数化 tuple 必须包含稳定的 `action_type_id`、参数槽位顺序、参数类型、条件 mask 和内部 action ID 映射版本；同一 tuple 只能映射到一个 action ID，无法无损映射的动作禁止进入训练。组合概率、类型/参数 loss mask 和实际 action ID visit target 必须能相互重算。
-- [ ] 逐动作 Q 标签保存 `action_value_masks [A]`，仅训练实际搜索过且访问数达到阈值的固定 action ID；Q 头属于 P1，不是 G0 核心头。
+- [ ] ONNX 的基础 policy 输出为参数化 logits：`action_type_logits [B,C]`、按已选动作类型条件化的参数槽位 logits `action_argument_logits [B,R,*]` 及其类型/槽位 mask；C++ 根据规则引擎枚举的合法 `ActionTuple` 计算组合先验并应用参数合法性过滤，不能把固定动作列表或 `legal_masks` 烘焙进网络权重。
+- [ ] 参数化 tuple 必须包含稳定的 `action_type_id`、参数槽位顺序、参数类型和 canonicalization 版本；同一规范化 tuple 只能出现一次，组合概率、类型/参数 loss mask 和 tuple visit target 必须能相互重算。固定 action ID 不属于网络、GNN、ONNX 或训练标签契约。
+- [ ] 逐动作 Q 标签保存 `action_value_masks [M]`，仅训练实际搜索过且访问数达到阈值的合法 tuple；Q 头属于 P1，不是 G0 核心头。
 - [ ] P2 乐观策略只在基础策略、VP head 和跨代守门稳定后启用；多人局默认追求风险调整后的 pairwise utility 或 VP 分差。第一名率只由完整终局 VP 离线统计，不增加任何排名或第一名网络输出。
 
 ##### 2.6.2 多人结果与价值头标签
@@ -375,7 +377,7 @@ GNN 混合网络根据节点/关系编码器、消息传递层数、hidden size�
 | 网络头 | 推理输出 | 训练标签 | 生产 ONNX |
 | --- | --- | --- | --- |
 | `policy_head` | `action_type_logits [B,C]`、`action_argument_logits [B,R,*]` | 参数化动作类型/参数目标 | 必须保留 |
-| `action_q_head` | `action_value [B,A,P]`、`action_vp [B,A,P]` | 固定 action ID 的两组 action Q 标签和 mask | P1 启用后保留 |
+| `action_q_head` | 参数化 action tuple 的 value/Q 分量 | 合法 tuple 的两组 action Q 标签和 mask | P1 启用后保留 |
 | `pairwise_value_head` | `pairwise_wdl_logits [B,Q,3]` | 仅终局 pairwise WDL | 必须保留；后处理展开，不导出独立 utility/rank logits |
 | `score_head` | `vp_belief_logits [B,P,V]` | VP belief；mean/stdev/lead 从 belief 派生 | 必须保留 |
 | `td_head` | `td_utility [B,H,P]`、`td_vp [B,H,P]` | 独立 TD utility/VP 目标 | P1 启用后保留 |
@@ -384,7 +386,7 @@ GNN 混合网络根据节点/关系编码器、消息传递层数、hidden size�
 | `map_head` | planet/satellite/space-station 分类 logits | 星图控制与建筑标签 | P2 消融，生产默认裁剪 |
 | `development_head` | research/resource/tech/federation 输出 | 玩家发展辅助标签 | P1 分组消融，生产默认裁剪 |
 
-- [ ] ONNX 输出使用参数化 policy 的原始 logits 或未缩放回归量；C++ 负责参数 tuple 组合、action ID 映射、softmax、pairwise 镜像展开、utility 聚合、VP belief moments、softplus、合法动作 mask 和数值缩放，并把版本及缩放常数统一写入 manifest。
+- [ ] ONNX 输出使用参数化 policy 的原始 logits 或未缩放回归量；C++ 负责合法 `ActionTuple` 组合、tuple softmax、pairwise 镜像展开、utility 聚合、VP belief moments、softplus、合法参数 mask 和数值缩放，并把版本及缩放常数统一写入 manifest。固定 action ID 不参与推理契约。
 - [ ] 训练 checkpoint 保存全部已启用 head，生产 ONNX 可以裁剪不被 MCTS/诊断消费的辅助输出；裁剪前后 policy、pairwise WDL、聚合 utility、VP 和 uncertainty 的 golden fixture 输出必须一致。
 - [ ] 每个 head 使用独立 loss、权重、有效样本计数和梯度统计；总 loss 不能掩盖某个 head 没有有效标签或量级失衡。
 - [ ] G0 生产 ONNX 只导出参数化 `policy_head`、`pairwise_value_head` 和 `score_head`；`action_q_head`、`td_head`、`lead_head`、`uncertainty_head`、`map_head` 和 `development_head` 必须等对应 P1/P2 阶段明确启用后，才更新输出契约和 TensorRT engine。
@@ -394,7 +396,7 @@ GNN 混合网络根据节点/关系编码器、消息传递层数、hidden size�
 以下字段不对应网络输出，但缺少时无法正确训练或定位标签错误：
 
 - [ ] `label_schema_version`、`rules_version`、`player_count`、`network_id`、`model_hash`、`game_id`、`setup_seed`、`position_index`、`semantic_turn_index`、`round`、`player_to_move`、`starting_vp_offsets [P]`、`compensation_version`、`search_tier` 和 `symmetry_id`。
-- [ ] `legal_masks [A]`、`player_masks [P]`、`pairwise_masks [P,P]`、`planet_masks [N]`、`board_space_masks [S]`、`action_value_masks [A]` 和每个可选 head 的 `*_loss_masks`。
+- [ ] `action_tuple_masks [M]`、动作类型/参数槽位 masks、`player_masks [P]`、`pairwise_masks [P,P]`、`planet_masks [N]`、`board_space_masks [S]`、`action_value_masks [M]` 和每个可选 head 的 `*_loss_masks`。
 - [ ] `sample_weights`、`policy_train_masks`、`policy_weights`、`pairwise_value_weights`、`vp_weights`、`ownership_weights`；其中 sample weight 可结合完整/cheap 搜索、policy surprise、pairwise utility surprise、VP surprise、终局距离和是否重分析。
 - [ ] `root_total_visits`、`search_simulations`、`search_temperature`、`root_noise_applied`、`source_generation`、`reanalyzed` 和 `terminal_valid`。
 - [ ] 每个 raw NPZ 只保存一局，并只保存一次终局真值和完整状态轨迹；位置行通过 `game_id + position_index` 关联。shuffle pack 可以包含多局的位置，但不得丢失标签数组、局边界、来源 raw hash，或把逐位置数值塞进 JSON metadata。
