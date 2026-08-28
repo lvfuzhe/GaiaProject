@@ -29,7 +29,7 @@ ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，不引入 ONNX Runti
 | 训练闭环 | 五进程异步闭环、SWA、ONNX、C++ TensorRT selfplay/gatekeeper | 多机共享目录和生产者背压 | TensorFlow、TFRecord、ONNX Runtime、C++ 训练 |
 | 人数模型 | 2/3/4 人只共用代码、标签语义和 MCTS 实现；训练线、数据、SWA、checkpoint、守门和发布完全独立 | 各人数可手动调整同一网络配置 | 跨人数混训、蒸馏、续载或直接加载权重 |
 | 核心推理头 | 参数化 policy、pairwise WDL、VP belief | 独立 TD utility/VP、uncertainty、动作 Q | 任何排名头、独立 utility logits |
-| MCTS 效用 | 使用 pairwise utility 加配置化、有界的 VP utility（默认 `beta_vp=0.10`） | 校准 `beta_vp`、`vp_scale` 和 root center，并按守门结果调整 | 直接把原始 VP 无界加入效用 |
+| MCTS 效用 | 使用 pairwise utility 加配置化、有界的 VP utility（默认 `beta_vp=0.10`）；中心采用根节点网络预测的已补偿终局 VP 均值 | 校准 `beta_vp` 和 `vp_scale`，并按守门结果调整 | 直接把原始 VP 无界加入效用，或用根节点当前累计 VP 作为中心 |
 | 数据 | 完整状态轨迹、终局真值、full/cheap search 标记、可审计窗口 | policy surprise、对称增强、重分析 | 解析前端 JSON 作为训练输入 |
 | 辅助监督 | 生产网络只实现核心标签与 loss | 玩家发展 P1；星图/建筑 P2 | 让大量辅助头阻塞生产闭环 |
 | 模型发布 | 多人配对守门、置信区间、原子发布 | 历史锚点模型池和非传递性检查 | 只按单个平均分点估计晋级 |
@@ -57,7 +57,7 @@ ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，不引入 ONNX Runti
 9-12 项参数统一写入 [`configs/gaia-training.json`](../configs/gaia-training.json)。文件包含唯一的网络容量配置和 2/3/4 人独立训练 profile；进程启动时必须选择一个 profile，并把解析后的配置快照、网络配置哈希和 SHA-256 写入本次 run manifest。命令行只允许指定配置文件、profile 和运行目录，不允许覆盖下列策略参数。容量字段可在该文件中手动调整；任何容量、架构或 schema 修改都必须创建新的独立训练线，不能续载旧 checkpoint。该文件是下一阶段 C++/TensorRT 目标实现的 canonical 配置；当前五个 Python 进程仍读取各自 `runs/*/pipeline.json`，直到第 8 节的配置加载器完成。
 
 - 搜索 tier 的初始目标占比为 `forced=30%`、`cheap=45%`、`full=25%`。`forced` 是规则自动步骤的观测目标，不是随机抽样；在非 forced 决策中，cheap/full 的抽样比例分别为 `64.28571429%/35.71428571%`，两者合计 100%。`lead_estimation` 关闭，比例为 0；所有轮次、动作类别和人数 bucket 仍至少保留 `20%` full-search 覆盖率。
-- VP utility 进入每次非强制 MCTS 的叶节点回传和终局回传。pairwise utility 先按唯一聚合公式得到 `u_pairwise`，VP belief 取每个玩家的 VP 均值；在一次根搜索内固定 `root_center`，使用 `u_i = u_pairwise_i + beta_vp * tanh((vp_i - root_center_i) / vp_scale)`。终局节点的 VP 改用精确终局 VP，非终局节点使用 VP belief；不得把原始 VP 无界相加。默认 `beta_vp=0.10`、`vp_scale=20.0`，均可在配置中调整并由消融和 gatekeeper 验证。
+- VP utility 进入每次非强制 MCTS 的叶节点回传和终局回传。pairwise utility 先按唯一聚合公式得到 `u_pairwise`；启动搜索时先对根节点推理一次，令 `root_center_i` 等于根节点 `vp_belief` 的已补偿终局 VP 均值，并在这一次 MCTS 内固定。叶节点的 `vp_i` 在非终局时取该叶节点 VP belief 均值，在终局时取精确的已补偿终局 VP，使用 `u_i = u_pairwise_i + beta_vp * tanh((vp_i - root_center_i) / vp_scale)`。根中心、叶预测和终局真值都必须包含本局实际 `starting_vp_offset`；不得改用根节点当前累计 VP，也不得把原始 VP 无界相加。默认 `beta_vp=0.10`、`vp_scale=20.0`，均可在配置中调整并由消融和 gatekeeper 验证。
 - gatekeeper 默认至少运行 `200` 个配对统计块，最多 `1000` 个；以 `95%` block-bootstrap 置信区间的候选平均 pairwise utility 为主指标，置信区间下界达到 `+0.02` 才晋级，上界不超过 `0` 才拒绝。配置同时保留 `vp_utility_control`（`beta_vp=0`）作为回归对照。非法动作、崩溃和未完成对局上限为 `0`，超时率上限为 `1%`。这些都是配置项，不能写死在 C++ 中。
 - TensorRT 默认 `FP16` 推理、`FP32` 校验并允许 `TF32`；CUDA 设备、目标 GPU、最低 compute capability、workspace 大小和 engine cache 目录均在配置文件的 `tensorrt.hardware` 中设置。目标 GPU 为 `auto` 时只做能力探测，不假定具体显卡型号。
 
@@ -298,7 +298,8 @@ KataGo 把 komi 当作全局条件，是因为同一棋盘在不同 komi 下具�
 - [ ] 终局 pairwise WDL 只监督 `pairwise_value_head`；`root_value_targets` 是构造未来指数平均的原始序列，只有 `td_utility_targets` 监督独立 `td_utility_head`。禁止把终局 one-hot、单步根搜索值和不同时间尺度 TD 目标同时回归到同一输出。
 - [ ] `td_utility_head` 每个时间尺度的 `[P]` 输出必须中心化为和为 0，保持与 pairwise 聚合效用一致；不得让独立 TD 输出引入所有玩家同时获益的漂移分量。
 - [ ] `shortterm_utility_error_targets` 使用对应 TD 预测的 `stop_gradient` 误差构造，误差头采用 Huber 等抗异常值损失；不得反向推动 TD 输出去迎合误差预测。
-- [ ] 统一网络使用配置化的 `u_search_i = u_pairwise_i + beta_vp * tanh((vp_i - c_i) / vp_scale)`：`c_i` 是一次根搜索内固定的根 VP center，非终局节点的 `vp_i` 来自 VP belief 均值，终局节点使用真实 VP；`vp_scale`、`beta_vp` 配置化且 VP 项必须有界。默认值见 [`configs/gaia-training.json`](../configs/gaia-training.json)。
+- [ ] 统一网络使用配置化的 `u_search_i = u_pairwise_i + beta_vp * tanh((vp_i - c_i) / vp_scale)`：`c_i` 是根节点网络 `vp_belief` 计算出的已补偿终局 VP 均值，在一次 MCTS 内固定；它不是根节点当前累计 VP。非终局叶节点的 `vp_i` 来自叶节点 VP belief 均值，终局叶节点使用精确的已补偿终局 VP。`c_i`、`vp_i` 和训练目标必须使用相同的 offset 口径；`vp_scale`、`beta_vp` 配置化且 VP 项必须有界。默认值见 [`configs/gaia-training.json`](../configs/gaia-training.json)。
+- [ ] 每次新建 MCTS 根都重新计算一次 `c_i [P]`，树内子节点不得更新中心，树复用到新根后也必须重新计算。根 VP belief 缺失、维度错误或包含 NaN/Inf 时终止本次搜索并记录错误，不得静默退回当前累计 VP。
 - [ ] 启用 VP utility 后必须校准 cPUCT/FPU 的效用范围，并在 gatekeeper 中保留 `beta_vp=0` 的控制组与候选配置对照。目标是区分 pairwise 概率近似相同的动作，不允许 VP 项压倒胜负效用。
 
 ##### 2.6.3 VP、分数分布和不确定性标签
@@ -462,7 +463,7 @@ Gaia 的一次规则行动可能展开为多次兑换、选板块、充能确认
 
 本文所需的是完全信息多人 MCTS：状态中没有待确定化的隐藏信息，价值始终采用绝对玩家顺序。旧讨论中的 `PIMCTS` 在此仅指 perfect-information MCTS，不引入针对手牌或战争迷雾的 determinization；实现和配置统一使用 `multiplayer_mcts` 命名。
 
-- [ ] 实现绝对玩家顺序的多玩家价值回传；叶节点先把 pairwise WDL 按 2.6.2 的唯一公式聚合为 `[P]` utility，再按配置把 VP belief 的有界项加入同一次回传。生产网络启用 VP utility：非终局使用 VP belief 均值，终局使用精确 VP；一次根搜索内固定 VP center，终局和非终局使用同一公式。不得把 VP utility 延后到 P1，也不得直接加入无界 VP。
+- [ ] 实现绝对玩家顺序的多玩家价值回传；叶节点先把 pairwise WDL 按 2.6.2 的唯一公式聚合为 `[P]` utility，再按配置把 VP belief 的有界项加入同一次回传。生产网络启用 VP utility：根中心取根节点网络预测的已补偿终局 VP 均值，非终局叶节点使用叶节点 VP belief 均值，终局叶节点使用精确的已补偿终局 VP；一次根搜索内固定中心，终局和非终局使用同一公式。不得使用根节点当前累计 VP 作中心，不得把 VP utility 延后到 P1，也不得直接加入无界 VP。
 - [ ] 选择阶段由节点状态的实际 `current_player` 使用自己的效用分量；不得使用 KataGo 二人零和的父子符号翻转。被动充能、资源选择等响应节点由响应玩家优化自身动作，完成后再返回原行动流程。
 - [ ] 实现 2.7 节的 forced/cheap/full/lead-estimation 调度、根 policy 温度、动作采样温度和分类总浓度噪声；所有搜索参数按人数、网络配置 hash 和语义动作类别版本化，禁止沿用当前单一常数而不重新标定。
 - [ ] 将 MCTS 树节点改为紧凑结构，使用线程池运行多局 self-play；每棵树的随机种子必须可追踪。

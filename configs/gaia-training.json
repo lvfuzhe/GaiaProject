@@ -100,7 +100,12 @@
       "pairwise_weight": 1.0,
       "beta_vp": 0.10,
       "vp_scale": 20.0,
-      "center": "root_fixed",
+      "center": {
+        "source": "root_vp_belief_mean",
+        "score_basis": "adjusted_final_vp",
+        "include_starting_vp_offset": true,
+        "freeze_scope": "single_mcts_search"
+      },
       "transform": "tanh",
       "non_terminal_source": "vp_belief_mean",
       "terminal_source": "exact_final_vp",
