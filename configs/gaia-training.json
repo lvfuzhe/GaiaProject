@@ -130,10 +130,63 @@
     "golden_fixture_manifest": "tests/fixtures/bga_setup_golden.json",
     "golden_fixture_source": "BGA random setup outputs captured from the setup UI/replays and manually verified",
     "fixture_status": "to_be_generated",
-    "fixture_min_setups": 256,
+    "fixture_scope": "map_only_bga_contract_plus_seeded_component_contracts",
+    "fixture_min_setups_per_variant": 256,
+    "fixture_variants": [
+      "2p-reduced",
+      "3p-reduced",
+      "3p-normal",
+      "4p-normal"
+    ],
     "fixture_seed_policy": "fixed_seed_manifest",
     "version_source_policy": "project_versioned_from_bga_rule_reference",
-    "require_setup_hash": true
+    "require_setup_hash": true,
+    "map_contract": {
+      "randomizer": "seeded_sector_permutation_rotation_with_rejection",
+      "sector_rotation_values": [0, 1, 2, 3, 4, 5],
+      "planet_layout_source": "printed_sector_catalog",
+      "planet_terrain_randomization": false,
+      "validity_constraints": [
+        "no_duplicate_playable_coordinates",
+        "no_adjacent_equal_home_terrain",
+        "all_three_hex_edge_adjacencies_preserved"
+      ],
+      "player_count_rules": {
+        "2": {"map_size": "reduced", "sector_count": 7, "outlined_sector_tiles": [4, 5, 6], "active_planets": 40},
+        "3": {"map_sizes": {"reduced": {"sector_count": 8, "active_planets": 49}, "normal": {"sector_count": 10, "active_planets": 61}}},
+        "4": {"map_size": "normal", "sector_count": 10, "active_planets": 61}
+      }
+    },
+    "component_randomization": {
+      "policy": "seeded_generic_without_replacement",
+      "factions": {"selection": "distinct_double_sided_boards_then_random_side", "available_factions": 14},
+      "boosters": {"available": 10, "selected_formula": "player_count_plus_3", "replacement": false},
+      "round_scoring": {"available": 10, "selected": 6, "replacement": false},
+      "final_scoring": {"available": 6, "selected": 2, "replacement": false},
+      "standard_technology": {"available": 9, "selected": 9, "permutation": true},
+      "advanced_technology": {"available": 15, "selected": 6, "replacement": false},
+      "terraforming_federation": {"available": 6, "selected": 1},
+      "first_player": {"policy": "seed_modulo_player_count_for_reproducibility"}
+    },
+    "recorded_setup_fields": [
+      "seed",
+      "player_count",
+      "map_size",
+      "sector_tiles",
+      "sector_rotations",
+      "outlined_sector_side",
+      "planet_terrain_catalog",
+      "faction_indices",
+      "booster_tiles",
+      "round_scoring_tiles",
+      "final_scoring_tiles",
+      "standard_tech_tiles",
+      "advanced_tech_tiles",
+      "terraforming_federation_tile",
+      "first_player",
+      "setup_hash"
+    ],
+    "exclude_from_setup": ["starting_base_placement", "snake_placement_actions"]
   },
   "data": {
     "raw_format": "npz-trajectory-v1",

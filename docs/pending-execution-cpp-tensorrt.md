@@ -76,7 +76,8 @@ ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，不引入 ONNX Runti
 - **VP belief**：下溢/上溢桶代表值为 `-201/+201`，采用硬桶交叉熵，不做 label smoothing；均值使用 softmax expectation 加尾部代表值计算。
 - **数据与 shuffle**：原始格式 `npz-trajectory-v1`，一局一个文件并保存完整状态轨迹；shuffle 输出 `npz-shard-v1`，每片 `4096` 个 position，固定 seed `20260828`，每 `10s` 扫描，按 game id 去重；训练窗口为 `200000..2000000` positions，新数据至少占 `25%`，按线性权重衰减且窗口刷新前不重复消费分片。
 - **SWA/export**：SWA 采用最近 `32` 个快照的等权滚动平均，补偿版本大幅变化时重置；ONNX opset `18`、动态 batch profile `1/64/256`，导出四个核心输出并执行 FP32/FP16 误差校验。
-- **BGA setup**：固定 seed manifest，首版黄金清单至少 `256` 个 setup；`bga-random-v1` 是项目版本名，必须绑定实际采集来源、规则说明和 fixture SHA-256。当前 fixture 尚未生成，不能在 fixture 完成前宣称 setup 契约已验收。
+- **BGA setup**：固定 seed manifest；黄金清单按 `2p-reduced`、`3p-reduced`、`3p-normal`、`4p-normal` 四种变体分别至少采集 `256` 个 setup。fixture 只承担星图 BGA 契约（人数地图规模、星区排列/旋转、描边面、印刷星球地形、三格边缘相邻和合法性约束）及随机种子/哈希审计；种族、助推、轮次计分、终局计分、科技和联邦片按配置中的通用无放回随机即可，不需要逐一从 BGA 复盘固化。`bga-random-v1` 是项目版本名，必须绑定实际采集来源、规则说明和 fixture SHA-256。当前 fixture 尚未生成，不能在 fixture 完成前宣称 setup 契约已验收。
+- **当前星图实现状态**：`src/gaiazero/game/gaia_setup.py` 已实现星区排列/旋转、2 人 7 星区描边面、3 人 8 星区小地图、3 人标准地图和 4 人标准地图，并用重复坐标及相同母星相邻约束拒绝非法布局；但尚未完成 BGA 黄金 fixture 的分布校验，因此只能称为“已有可复现随机生成器”，不能称为“完全复刻 BGA 概率”。
 - **offset**：训练扰动采用整数零和均匀分布，单玩家绝对值不超过 `4`，仅用于新局；拟合使用 ridge（`lambda=0.1`），每个 context 至少 `200` 局，最大 offset 变化连续 `3` 轮不超过 `1` 时停止。
 - **gatekeeper**：以 pairing block 为 bootstrap 单位，固定 seed、FIFO 一次测试一个 candidate；首个 champion 来自零补偿 bootstrap；VP 对照组对 candidate 与 champion 同时关闭 VP utility。
 
@@ -431,7 +432,7 @@ KataGo 把 komi 当作全局条件，是因为同一棋盘在不同 komi 下具�
 Gaia 的一次规则行动可能展开为多次兑换、选板块、充能确认或自动收入步骤。原始 action 数不能直接等同于值得训练 policy 的决策数。
 
 - [ ] 规则引擎标记 `semantic_decision_id` 和动作类别。只有一个合法动作且不含玩家真实选择时自动执行，不调用网络、不启动 MCTS、不生成 policy loss；完整状态轨迹仍记录该步骤用于复盘和终局标签。
-- [ ] 发布版本化 `setup_distribution`，完全复刻 BGA 的合法随机规则和概率：2/3/4 人地图限制、小/标准地图、星区排列与旋转、轮次/终局计分、科技/高级科技/助推板块、合法种族组合、座位分配及其随机种子都按 BGA 规则生成。禁止使用自定义权重、均匀重采样或为训练方便修改 BGA 概率；每局记录 BGA 规则版本、随机种子和实际 setup hash。
+- [ ] 发布版本化 `setup_distribution`：星图必须用 BGA 黄金 fixture 验证 2/3/4 人地图限制、小/标准地图、星区排列与旋转、描边面、印刷星球地形及合法性约束；种族、助推、轮次/终局计分、科技/高级科技和改造联邦片使用配置化、可复现、无放回的通用随机，不以 BGA 复盘逐项校准概率。每局记录随机规则版本、随机种子和实际 setup hash；禁止为训练方便使用偏置权重或静默改写配置。
 - [ ] 按人数、地图模式、种族、座位、板块和主要交互组合持续报告 BGA 分布覆盖率；低频 bucket 只触发数据积累告警，不通过改权重改变 BGA 分布。固定验证集、gatekeeper 和公平性评估使用按 BGA 规则预先生成并冻结的 setup 清单。
 - [ ] 定义 `search_tier = forced | cheap | full | lead_estimation`，并读取 `configs/gaia-training.json` 的 tier 配置。初始目标观测占比为 forced `30%`、cheap `45%`、full `25%`；forced 只表示规则自动步骤的目标占比，不做随机抽样。非 forced 决策按 cheap `64.28571429%`、full `35.71428571%` 抽样，lead estimation 关闭。各轮次、行动类别和玩家人数都设置最低 `20%` full-search 覆盖率，避免某类动作长期只有弱标签；实际比例以 telemetry 为准，不能从配置名推断。
 - [ ] policy 监督固定按搜索层级执行：full search 使用 `policy_train_mask=1`、`policy_weight=1.0`；cheap search 使用 `policy_train_mask=0`、`policy_weight=0.0`，不进入 policy loss，也不因 KL surprise 重新启用。cheap 样本仍保存合法动作、访问次数和原始 visit target 供审计，并正常提供终局 pairwise WDL、VP belief 及其他有效标签。forced 和当前关闭的 lead-estimation 同样使用 policy mask/weight `0/0`。shuffler 不得改写这些掩码，trainer 必须按配置和 NPZ 字段双重断言。
