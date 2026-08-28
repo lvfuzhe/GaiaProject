@@ -26,7 +26,7 @@ ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，不引入 ONNX Runti
 
 | 决策 | 统一生产网络 | 后续可选增强 | 明确不做 |
 | --- | --- | --- | --- |
-| 训练闭环 | 五进程异步闭环、SWA、ONNX、C++ TensorRT selfplay/gatekeeper | 多机共享目录和生产者背压 | TensorFlow、TFRecord、ONNX Runtime、C++ 训练 |
+| 训练闭环 | 五进程异步闭环、单 GPU PyTorch 训练、SWA、ONNX、C++ TensorRT selfplay/gatekeeper | 单机多进程数据生产与背压；未来如需多机必须另行设计 | DDP、多 GPU、多机训练、TensorFlow、TFRecord、ONNX Runtime、C++ 训练 |
 | 人数模型 | 2/3/4 人只共用代码、标签语义和 MCTS 实现；训练线、数据、SWA、checkpoint、守门和发布完全独立 | 各人数可手动调整同一网络配置 | 跨人数混训、蒸馏、续载或直接加载权重 |
 | 核心推理头 | 参数化 policy、pairwise WDL、VP belief | 独立 TD utility/VP、uncertainty、动作 Q | 任何排名头、独立 utility logits |
 | MCTS 效用 | 使用 pairwise utility 加配置化、有界的 VP utility（默认 `beta_vp=0.10`）；中心采用根节点网络预测的已补偿终局 VP 均值 | 校准 `beta_vp` 和 `vp_scale`，并按守门结果调整 | 直接把原始 VP 无界加入效用，或用根节点当前累计 VP 作为中心 |
@@ -58,8 +58,10 @@ ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，不引入 ONNX Runti
 
 - 搜索 tier 的初始目标占比为 `forced=30%`、`cheap=45%`、`full=25%`。`forced` 是规则自动步骤的观测目标，不是随机抽样；在非 forced 决策中，cheap/full 的抽样比例分别为 `64.28571429%/35.71428571%`，两者合计 100%。`lead_estimation` 关闭，比例为 0；所有轮次、动作类别和人数 bucket 仍至少保留 `20%` full-search 覆盖率。
 - VP utility 进入每次非强制 MCTS 的叶节点回传和终局回传。pairwise utility 先按唯一聚合公式得到 `u_pairwise`；启动搜索时先对根节点推理一次，令 `root_center_i` 等于根节点 `vp_belief` 的已补偿终局 VP 均值，并在这一次 MCTS 内固定。叶节点的 `vp_i` 在非终局时取该叶节点 VP belief 均值，在终局时取精确的已补偿终局 VP，使用 `u_i = u_pairwise_i + beta_vp * tanh((vp_i - root_center_i) / vp_scale)`。根中心、叶预测和终局真值都必须包含本局实际 `starting_vp_offset`；不得改用根节点当前累计 VP，也不得把原始 VP 无界相加。默认 `beta_vp=0.10`、`vp_scale=20.0`，均可在配置中调整并由消融和 gatekeeper 验证。
-- gatekeeper 默认至少运行 `200` 个配对统计块，最多 `1000` 个；以 `95%` block-bootstrap 置信区间的候选平均 pairwise utility 为主指标，置信区间下界达到 `+0.02` 才晋级，上界不超过 `0` 才拒绝。配置同时保留 `vp_utility_control`（`beta_vp=0`）作为回归对照。非法动作、崩溃和未完成对局上限为 `0`，超时率上限为 `1%`。这些都是配置项，不能写死在 C++ 中。
+- gatekeeper 默认至少运行 `200` 个配对统计块，最多 `1000` 个；一个 pairing block 固定一个 setup seed、地图/板块/种族/座位配置和补偿表，候选依次轮换占据全部 `P` 个座位，其余座位使用冠军，因此每个 block 实际运行 `P` 局。3 人局运行 `200` 个 block 就是 `600` 局，不能把 block 数当作对局数。以 `95%` block-bootstrap 置信区间的候选平均 pairwise utility 为主指标，置信区间下界达到 `+0.02` 才晋级，上界不超过 `0` 才拒绝。每个主测试达到晋级条件的候选，在正式发布前再运行一次 `vp_utility_control`（`beta_vp=0`）回归对照；对照组复用同一批 pairing block，只承担回归否决，不作为第二个主晋级指标。对照组置信区间上界低于 `-0.02` 时否决发布，否则不阻止主测试晋级。非法动作、崩溃和未完成对局上限为 `0`，超时率上限为 `1%`。这些都是配置项，不能写死在 C++ 中。
 - TensorRT 默认 `FP16` 推理、`FP32` 校验并允许 `TF32`；CUDA 设备、目标 GPU、最低 compute capability、workspace 大小和 engine cache 目录均在配置文件的 `tensorrt.hardware` 中设置。目标 GPU 为 `auto` 时只做能力探测，不假定具体显卡型号。
+- 训练固定使用单 GPU：`training_runtime.mode=single_gpu`、`device=cuda:0`；不启用 DDP、多 GPU 或多机梯度同步。2/3/4 人局仍分别使用独立数据目录和训练状态，单 GPU 按进程/任务顺序或配置的时间片运行。
+- setup 随机规则固定为项目配置中的 `setup_distribution.version`，行为完全参考 BGA 随机设置；黄金 setup 清单来自 BGA 设置界面/复盘输出，经过人工核对后写入 `tests/fixtures/bga_setup_golden.json`。规则实现或黄金样本变化必须提升项目版本并重新生成 setup hash，不能静默改变分布。
 
 配置校验必须检查 tier 比例和非 forced 比例各自求和为 1、`beta_vp>=0`、VP 桶为 `403`、`pass_lower_ci > reject_upper_ci`、保护指标在 `[0,1]` 内，以及 TensorRT 精度属于 `fp32/fp16`。配置版本或网络/动作 schema 变化时，禁止复用旧 engine、训练窗口和 gatekeeper 统计。
 
@@ -175,7 +177,8 @@ KataGo 把 komi 当作全局条件，是因为同一棋盘在不同 komi 下具�
 
 - [ ] 在 `AlphaZeroTrainer` 中增加可配置的 SWA/平均权重模型和更新周期。
 - [ ] SWA 起始点和更新周期按累计有效训练样本数定义，而不是仅按 optimizer step；梯度累积或 batch size 改变后不得静默改变平均节奏。
-- [ ] 明确 SWA 起始样本数、更新频率、平均算法、设备和 checkpoint 恢复行为。
+- [ ] 从 `configs/gaia-training.json.swa` 读取 SWA 起始样本数、更新频率、平均算法、设备、平均快照数和 checkpoint 恢复行为；默认在累计 `200000` 个有效样本后开始，每 `1000` 个样本更新一次，采用等权滚动平均最近 `32` 个快照。
+- [ ] SWA 参数只是可配置初始值，调参时必须把规范化配置和快照计数写入 manifest；改变起始点、更新间隔或快照数后重新验证导出模型与守门结果。
 - [ ] checkpoint 同时保存普通 `model_state`、SWA `swa_state`、优化器状态和必要的计数器。
 - [ ] checkpoint 同时保存学习率调度器、AMP GradScaler、累计有效样本数、window manifest/hash、数据游标以及 Python/NumPy/Torch CPU/CUDA RNG 状态；恢复后下一批样本、学习率和 SWA 更新时间必须可复现。
 - [ ] 继续训练时恢复普通权重、SWA 权重和优化器；仅推理时不得加载优化器状态。
@@ -300,7 +303,7 @@ KataGo 把 komi 当作全局条件，是因为同一棋盘在不同 komi 下具�
 - [ ] `shortterm_utility_error_targets` 使用对应 TD 预测的 `stop_gradient` 误差构造，误差头采用 Huber 等抗异常值损失；不得反向推动 TD 输出去迎合误差预测。
 - [ ] 统一网络使用配置化的 `u_search_i = u_pairwise_i + beta_vp * tanh((vp_i - c_i) / vp_scale)`：`c_i` 是根节点网络 `vp_belief` 计算出的已补偿终局 VP 均值，在一次 MCTS 内固定；它不是根节点当前累计 VP。非终局叶节点的 `vp_i` 来自叶节点 VP belief 均值，终局叶节点使用精确的已补偿终局 VP。`c_i`、`vp_i` 和训练目标必须使用相同的 offset 口径；`vp_scale`、`beta_vp` 配置化且 VP 项必须有界。默认值见 [`configs/gaia-training.json`](../configs/gaia-training.json)。
 - [ ] 每次新建 MCTS 根都重新计算一次 `c_i [P]`，树内子节点不得更新中心，树复用到新根后也必须重新计算。根 VP belief 缺失、维度错误或包含 NaN/Inf 时终止本次搜索并记录错误，不得静默退回当前累计 VP。
-- [ ] 启用 VP utility 后必须校准 cPUCT/FPU 的效用范围，并在 gatekeeper 中保留 `beta_vp=0` 的控制组与候选配置对照。目标是区分 pairwise 概率近似相同的动作，不允许 VP 项压倒胜负效用。
+- [ ] 启用 VP utility 后必须校准 cPUCT/FPU 的效用范围。每个主 gatekeeper 达到晋级门槛的候选，在发布前运行 `beta_vp=0` 的 VP utility 对照组；对照组只用于检测 pairwise 能力回归，采用配置的 `regression_reject_upper_ci` 做否决，不作为第二个主晋级指标。目标是区分 pairwise 概率近似相同的动作，不允许 VP 项压倒胜负效用。
 
 ##### 2.6.3 VP、分数分布和不确定性标签
 
@@ -479,10 +482,12 @@ Gaia 的一次规则行动可能展开为多次兑换、选板块、充能确认
 
 - [ ] 将 gatekeeper 输入改为 `exported/candidate-*.onnx`，当前模型改为 `approved/current.onnx`。
 - [ ] 使用与 selfplay 相同的 C++ Gaia 规则、MCTS 和 TensorRT 推理适配层，避免守门与训练数据生成规则分叉。
-- [ ] 以 `setup seed + 地图/计分/科技/助推配置 + 种族组合` 为配对统计块；每个块让候选依次占据全部座位，其余座位使用冠军，且双方搜索模拟数完全相同。时间和 simulations/s 另作性能指标，不混入棋力主检验。
+- [ ] 以 `setup seed + 地图/计分/科技/助推配置 + 种族组合` 为配对统计块；一个 block 内 setup、补偿表、阵容和随机种子固定，候选依次占据全部 `P` 个座位，其余座位使用冠军，且双方搜索模拟数完全相同，因此每个 block 运行 `P` 局（例如 3 人局 200 block = 600 局）。时间和 simulations/s 另作性能指标，不混入棋力主检验。
 - [ ] gatekeeper 固定发布版 VP offset、`delta_K=0`、关闭根噪声、动作温度 0、禁用训练专用 fork/增强；每局记录完整阵容、座位、种族、最终 VP、pairwise WDL、实际排名、搜索参数和模型哈希。
 - [ ] primary 晋级指标是按配对块聚合的候选平均 pairwise utility；使用 block bootstrap 置信区间或预注册顺序检验，不按单个点估计过门。第一名率、平均/分位 VP、非法动作、超步数和崩溃率作为保护指标。
 - [ ] 从配置读取最小/最大配对块数、置信区间、通过/拒绝边界、保护指标上限和多重候选排队策略；默认 `min_pairing_blocks=200`、`max_pairing_blocks=1000`、`confidence_level=0.95`、`pass_lower_ci=0.02`、`reject_upper_ci=0`。任何提前停止都必须保存当时置信区间和完整已测块，不能因偶然连胜立即批准；非法动作、崩溃、未完成对局和超时率必须同时满足配置上限。
+- [ ] 主测试达到晋级条件后，在正式发布前对同一候选运行一次 VP utility 对照组：固定 `beta_vp=0`、复用主测试的同一批 pairing block（包括 setup、座位轮换、随机种子和搜索预算），因此对照组也运行 `P * pairing_blocks` 局；`frequency=every_primary_passing_candidate`，不对未通过主测试的候选额外运行。
+- [ ] 对照组的 `decision=regression_veto_only`：只要其 block-bootstrap 置信区间上界 `< regression_reject_upper_ci`（默认 `-0.02`），即判定 pairwise 能力出现不可接受回归并否决候选；否则对照组不改变主测试的晋级决定。对照组结果、置信区间和否决理由必须写入 gatekeeper manifest。
 - [ ] P1 增加混合阵容测试，让候选分别占 `1..P-1` 个座位，并维护少量历史 approved 锚点模型；若候选只克制当前冠军却对锚点显著退化，标记非传递风险并进入扩展测试，不直接晋级。
 - [ ] 通过后原子发布 `approved/current.onnx` 及 manifest；拒绝模型写入 rejected 目录和结构化日志。
 - [ ] 首个模型没有冠军时定义 bootstrap 规则，并测试重复候选、半成品文件和进程重启恢复。

@@ -2,6 +2,14 @@
   "config_version": 2,
   "profile": "training",
   "architecture_family": "graph_hybrid",
+  "training_runtime": {
+    "mode": "single_gpu",
+    "device": "cuda:0",
+    "ddp_enabled": false,
+    "multi_gpu_enabled": false,
+    "multi_node_enabled": false,
+    "data_root_strategy": "local_per_player_count"
+  },
   "network": {
     "network_config_id": "graph-hybrid-v1",
     "capacity": {
@@ -31,6 +39,24 @@
     "capacity_change": "start_new_training_line",
     "architecture_or_schema_change": "start_new_training_line",
     "checkpoint_resume": "exact_network_config_hash_only"
+  },
+  "swa": {
+    "enabled": true,
+    "start_after_samples": 200000,
+    "update_every_samples": 1000,
+    "averaging": "equal_weight_rolling",
+    "snapshot_count": 32,
+    "device": "cpu",
+    "resume_policy": "restore_state"
+  },
+  "setup_distribution": {
+    "provider": "boardgamearena",
+    "game": "gaia_project",
+    "rules_reference": "bga_random_setup",
+    "version": "bga-random-v1",
+    "golden_fixture_manifest": "tests/fixtures/bga_setup_golden.json",
+    "golden_fixture_source": "BGA random setup outputs captured from the setup UI/replays and manually verified",
+    "require_setup_hash": true
   },
   "training_isolation": {
     "mode": "independent_by_player_count",
@@ -136,6 +162,13 @@
     "confidence_level": 0.95,
     "min_pairing_blocks": 200,
     "max_pairing_blocks": 1000,
+    "pairing": {
+      "block_definition": "fixed_setup_candidate_rotates_all_seats",
+      "same_setup_within_block": true,
+      "candidate_seat_rotation": "all_seats",
+      "games_per_block_formula": "player_count",
+      "total_games_formula": "pairing_blocks * player_count"
+    },
     "pass_lower_ci": 0.02,
     "reject_upper_ci": 0.0,
     "candidate_seat_rotation": "all_seats",
@@ -143,8 +176,17 @@
     "action_temperature": 0.0,
     "delta_k": 0,
     "vp_utility_control": {
-      "enabled": false,
-      "beta_vp": 0.0
+      "enabled": true,
+      "beta_vp": 0.0,
+      "run_when": "after_primary_pass_before_publish",
+      "frequency": "every_primary_passing_candidate",
+      "decision": "regression_veto_only",
+      "regression_reject_upper_ci": -0.02,
+      "reuse_primary_pairing_blocks": true,
+      "pairing_block_definition": "same_as_gatekeeper_primary",
+      "min_pairing_blocks": 200,
+      "max_pairing_blocks": 1000,
+      "confidence_level": 0.95
     },
     "protection_limits": {
       "illegal_action_rate_max": 0.0,
