@@ -56,6 +56,7 @@ from gaiazero.model import (
     PolicyValueNetwork,
     architecture_for_players,
     load_checkpoint,
+    load_checkpoint_swa,
     resolve_device,
     save_checkpoint,
 )
@@ -994,21 +995,42 @@ def run_train(config: PipelineConfig, *, once: bool = False) -> int:
     latest = paths["training"] / "latest.pt"
     approved = _approved_checkpoint(paths)
     starting = latest if latest.is_file() else approved
+    starting_swa_state: dict[str, Any] | None = None
     if starting is None:
         model = PolicyValueNetwork(expected_network)
     else:
-        model, _metadata = load_checkpoint(starting, config.device)
+        model, _metadata, starting_swa_state = load_checkpoint_swa(starting, config.device)
         if model.config != expected_network:
             raise ValueError("training checkpoint does not match this pipeline")
-    trainer = AlphaZeroTrainer(
-        model,
-        TrainerConfig(
+    if config.training_config_path:
+        from gaiazero.config import load_training_config
+
+        loaded_training = load_training_config(config.training_config_path)
+        trainer_config = loaded_training.trainer_config()
+        # The runtime snapshot is authoritative for the selected device; all
+        # optimizer/SWA values come from gaia-training.json.
+        trainer_config = TrainerConfig(
+            batch_size=trainer_config.batch_size,
+            learning_rate=trainer_config.learning_rate,
+            weight_decay=trainer_config.weight_decay,
+            gradient_clip=trainer_config.gradient_clip,
+            device=config.device,
+            swa=trainer_config.swa,
+        )
+    else:
+        trainer_config = TrainerConfig(
             batch_size=config.batch_size,
             learning_rate=config.learning_rate,
             weight_decay=config.weight_decay,
             device=str(resolve_device(config.device)),
-        ),
-    )
+        )
+    trainer = AlphaZeroTrainer(model, trainer_config)
+    if starting_swa_state is not None and trainer.swa is not None:
+        trainer.swa.load_state_dict(starting_swa_state)
+        # SWA cadence is defined in effective samples, so a resumed trainer
+        # must continue from the checkpoint's counter rather than restarting
+        # the schedule at zero.
+        trainer.samples_seen = int(starting_swa_state.get("samples_seen", 0))
     replay = ReplayBuffer(config.replay_capacity, config.seed)
     loaded: set[str] = set()
     state_path = paths["root"] / "train-state.json"
@@ -1065,12 +1087,14 @@ def run_train(config: PipelineConfig, *, once: bool = False) -> int:
                 candidate,
                 model,
                 optimizer=trainer.optimizer,
+                swa=trainer.swa,
                 metadata=metadata,
             )
             _save_checkpoint_atomic(
                 latest,
                 model,
                 optimizer=trainer.optimizer,
+                swa=trainer.swa,
                 metadata=metadata,
             )
             trained_shards.update(loaded)

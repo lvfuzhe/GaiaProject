@@ -157,6 +157,7 @@ def save_checkpoint(
     *,
     optimizer: torch.optim.Optimizer | None = None,
     metadata: dict[str, Any] | None = None,
+    swa: Any | None = None,
 ) -> None:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -168,6 +169,14 @@ def save_checkpoint(
     }
     if optimizer is not None:
         payload["optimizer_state"] = optimizer.state_dict()
+    if swa is not None:
+        payload["swa_state"] = swa.state_dict()
+        payload.setdefault("metadata", {})
+        if hasattr(swa, "metadata"):
+            payload["metadata"] = {
+                **dict(payload["metadata"]),
+                "swa": swa.metadata(),
+            }
     torch.save(payload, destination)
 
 
@@ -190,3 +199,15 @@ def load_checkpoint(
         ) from error
     model.to(resolved)
     return model, dict(payload.get("metadata", {}))
+
+
+def load_checkpoint_swa(
+    path: str | Path,
+    device: str | torch.device = "auto",
+) -> tuple[PolicyValueNetwork, dict[str, Any], dict[str, Any] | None]:
+    """Load a checkpoint and its optional SWA accumulator state."""
+
+    model, metadata = load_checkpoint(path, device)
+    payload = torch.load(Path(path), map_location="cpu", weights_only=False)
+    swa_state = payload.get("swa_state")
+    return model, metadata, dict(swa_state) if isinstance(swa_state, dict) else None

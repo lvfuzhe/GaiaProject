@@ -184,6 +184,11 @@ class GaiaTrainingConfig:
             architecture=architecture_for_players(int(players)),
         )
 
+    def graph_network_config(self, players: int) -> Any:
+        from gaiazero.gnn import graph_config_from_training
+
+        return graph_config_from_training(self, int(players))
+
     def search_config(self, seed: int = 0) -> Any:
         from gaiazero.mcts import SearchConfig
 
@@ -213,6 +218,7 @@ class GaiaTrainingConfig:
 
     def trainer_config(self) -> Any:
         from gaiazero.training import TrainerConfig
+        from gaiazero.swa import SWAConfig
 
         training = self.training_settings
         return TrainerConfig(
@@ -221,6 +227,7 @@ class GaiaTrainingConfig:
             weight_decay=float(training.get("weight_decay", 1e-4)),
             gradient_clip=float(training.get("gradient_clip_norm", 5.0)),
             device=str(self.runtime_settings.get("device", "auto")),
+            swa=SWAConfig.from_mapping(self.data.get("swa")),
         )
 
     def manifest(self, players: int | None = None) -> dict[str, Any]:

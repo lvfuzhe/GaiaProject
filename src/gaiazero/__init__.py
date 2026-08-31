@@ -7,6 +7,20 @@ from gaiazero.config import (
     load_gaia_training_config,
     load_training_config,
 )
+from gaiazero.gnn import (
+    GraphHybridNetwork,
+    GraphNetworkConfig,
+    graph_inputs_from_state,
+    load_graph_checkpoint,
+    save_graph_checkpoint,
+)
+from gaiazero.onnx_export import (
+    export_graph_onnx,
+    export_swa_checkpoint_to_onnx,
+    export_swa_to_onnx,
+    verify_onnx_cpu_golden,
+)
+from gaiazero.swa import SWAAccumulator, SWAConfig
 from gaiazero.contracts import (
     ACTION_TUPLE_SCHEMA_VERSION,
     ACTION_SCHEMA_VERSION,
@@ -28,6 +42,17 @@ __all__ = [
     "load_training_config",
     "load_gaia_training_config",
     "TrainingConfig",
+    "GraphHybridNetwork",
+    "GraphNetworkConfig",
+    "graph_inputs_from_state",
+    "save_graph_checkpoint",
+    "load_graph_checkpoint",
+    "SWAAccumulator",
+    "SWAConfig",
+    "export_graph_onnx",
+    "export_swa_to_onnx",
+    "export_swa_checkpoint_to_onnx",
+    "verify_onnx_cpu_golden",
     "ActionTuple",
     "ActionRegistry",
     "compose_parameterized_policy",

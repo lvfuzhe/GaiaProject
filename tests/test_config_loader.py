@@ -26,6 +26,9 @@ class TrainingConfigLoaderTests(unittest.TestCase):
         self.assertEqual(pipeline.network_config_id, "graph-hybrid-3p")
         self.assertEqual(pipeline.training_config_hash, config.config_hash)
         self.assertEqual(pipeline.poll_seconds, 10.0)
+        self.assertTrue(config.trainer_config().swa.enabled)
+        self.assertEqual(config.graph_network_config(3).hybrid_blocks, 12)
+        self.assertEqual(config.graph_network_config(3).relation_embedding_size, 64)
 
     def test_loader_rejects_schema_drift(self) -> None:
         source = Path(__file__).parents[1] / "configs" / "gaia-training.json"

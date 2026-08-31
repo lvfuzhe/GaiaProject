@@ -1,0 +1,29 @@
+{
+  "schema_version": "gnn-cpu-golden-v1",
+  "torch_model_seed": 1234,
+  "torch_input_seed": 5678,
+  "config": {
+    "num_players": 3,
+    "node_feature_size": 4,
+    "global_feature_size": 5,
+    "player_feature_size": 6,
+    "max_graph_nodes": 8,
+    "max_graph_edges": 12,
+    "relation_type_count": 16,
+    "hidden_size": 16,
+    "hybrid_blocks": 2,
+    "attention_heads": 8,
+    "ffn_hidden_size": 32,
+    "action_type_count": 54,
+    "parameter_slot_count": 8,
+    "argument_vocab_size": 128,
+    "vp_buckets": 403,
+    "dropout": 0.0,
+    "network_config_id": "graph-hybrid-cpu-golden"
+  },
+  "batch_size": 2,
+  "output_shapes": [[2, 54], [2, 8, 128], [2, 3, 3], [2, 3, 403]],
+  "torch_output_digest": "047ea2278e2196df25f39e82c04e7496a977234d413c3bad891c61fc94ad116a",
+  "max_abs_error": 0.00001,
+  "max_relative_error": 0.0001
+}

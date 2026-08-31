@@ -8,6 +8,7 @@ from torch import nn
 
 from gaiazero.model import PolicyValueNetwork, resolve_device
 from gaiazero.replay import ReplayBuffer
+from gaiazero.swa import SWAAccumulator, SWAConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,6 +18,7 @@ class TrainerConfig:
     weight_decay: float = 1e-4
     gradient_clip: float = 5.0
     device: str = "auto"
+    swa: SWAConfig | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +42,8 @@ class AlphaZeroTrainer:
             lr=self.config.learning_rate,
             weight_decay=self.config.weight_decay,
         )
+        self.swa = SWAAccumulator(self.config.swa) if self.config.swa is not None else None
+        self.samples_seen = 0
 
     def train_updates(
         self,
@@ -70,6 +74,9 @@ class AlphaZeroTrainer:
             loss.backward()
             nn.utils.clip_grad_norm_(self.model.parameters(), self.config.gradient_clip)
             self.optimizer.step()
+            self.samples_seen += int(observations.shape[0])
+            if self.swa is not None:
+                self.swa.maybe_update(self.model, self.samples_seen)
 
             entropy = -(policy * log_policy).sum(dim=1).mean()
             totals["loss"] += float(loss.detach())
@@ -93,3 +100,11 @@ class AlphaZeroTrainer:
             value_loss=totals["value"] / updates,
             policy_entropy=totals["entropy"] / updates,
         )
+
+    def swa_state_dict(self) -> dict[str, object] | None:
+        return None if self.swa is None else self.swa.state_dict()
+
+    def use_swa_weights(self) -> None:
+        if self.swa is None or not self.swa.active:
+            raise ValueError("SWA has no captured snapshots")
+        self.swa.copy_to(self.model)
