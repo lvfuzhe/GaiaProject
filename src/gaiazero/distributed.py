@@ -32,6 +32,19 @@ from typing import Any, Sequence
 import numpy as np
 
 from gaiazero.arena import evaluate_against
+from gaiazero.contracts import (
+    ACTION_TUPLE_SCHEMA_VERSION,
+    ACTION_TYPE_IDS,
+    MAX_ACTION_ARGUMENTS,
+    NPZ_SHARD_SCHEMA_VERSION,
+    NPZ_TRAJECTORY_SCHEMA_VERSION,
+    RULES_VERSION,
+    STATE_HASH_VERSION,
+    canonical_json,
+    state_hash as compute_state_hash,
+    ActionTuple,
+    trajectory_metadata,
+)
 from gaiazero.game import (
     GaiaHeuristicEvaluator,
     GaiaState,
@@ -252,26 +265,188 @@ def write_npz_shard(
     path: Path,
     examples: Sequence[TrainingExample],
     metadata: dict[str, Any] | None = None,
+    *,
+    trajectory: Sequence[dict[str, Any]] | None = None,
 ) -> int:
     """Atomically write a native NumPy shard consumed directly by PyTorch.
 
-    Self-play raw shards may additionally carry a complete replay trace in
-    ``metadata['history']``. Training ignores that field; the explicit NPZ
-    converter uses it to rebuild the dashboard replay.
+    Self-play raw shards pass ``trajectory`` to persist the typed complete
+    replay contract.  The legacy ``metadata['history']`` remains as a UI
+    compatibility trace. Training ignores both replay representations.
     """
     if not examples:
         raise ValueError("cannot write an empty training shard")
+    metadata_payload = dict(metadata or {})
+    fields: dict[str, Any] = {
+        "observations": np.stack([item.observation for item in examples]).astype(np.float32),
+        "legal_masks": np.stack([item.legal_mask for item in examples]).astype(np.bool_),
+        "policy_targets": np.stack([item.policy_target for item in examples]).astype(np.float32),
+        "value_targets": np.stack([item.value_target for item in examples]).astype(np.float32),
+    }
+    if trajectory is None:
+        metadata_payload.setdefault("schema_version", NPZ_SHARD_SCHEMA_VERSION)
+    else:
+        trace = list(trajectory)
+        if len(trace) != len(examples) + 1:
+            raise ValueError(
+                "complete trajectory must contain one terminal row after all positions"
+            )
+        expected_positions = list(range(len(trace)))
+        positions = [int(step.get("position_index", -1)) for step in trace]
+        if positions != expected_positions:
+            raise ValueError("trajectory position_index must be contiguous from zero")
+        terminal = trace[-1]
+        if terminal.get("action_id") is not None or terminal.get("action_tuple") is not None:
+            raise ValueError("trajectory terminal row must not contain an action")
+        if not terminal.get("state_hash") or not terminal.get("state_json"):
+            raise ValueError("trajectory terminal row must contain state and state_hash")
+        state_json = [str(step.get("state_json", "")) for step in trace]
+        state_snapshot_json = [
+            canonical_json(step.get("state") or {}) for step in trace
+        ]
+        state_hashes = [str(step.get("state_hash", "")) for step in trace]
+        if any(not item for item in state_json) or any(not item for item in state_hashes):
+            raise ValueError("every trajectory row must contain state_json and state_hash")
+        action_tuples = [
+            canonical_json(step["action_tuple"])
+            if step.get("action_tuple") is not None
+            else ""
+            for step in trace
+        ]
+        action_type_ids: list[int] = []
+        action_args = np.full(
+            (len(trace), MAX_ACTION_ARGUMENTS), -1, dtype=np.int16
+        )
+        action_arg_mask = np.zeros(
+            (len(trace), MAX_ACTION_ARGUMENTS), dtype=np.bool_
+        )
+        for index, step in enumerate(trace):
+            encoded = step.get("action_tuple")
+            if encoded is None:
+                action_type_ids.append(-1)
+                continue
+            action_tuple = ActionTuple.from_dict(encoded)
+            action_type_ids.append(action_tuple.action_type_id)
+            action_args[index, : len(action_tuple.args)] = action_tuple.args
+            action_arg_mask[index, : len(action_tuple.args)] = True
+        legal_tuples_json = np.asarray(
+            [
+                canonical_json(step.get("legal_action_tuples", []))
+                for step in trace
+            ],
+            dtype=np.str_,
+        )
+        policy_targets_json = np.asarray(
+            [
+                canonical_json(step.get("policy_visit_targets_by_tuple", []))
+                for step in trace
+            ],
+            dtype=np.str_,
+        )
+        type_targets_json: list[str] = []
+        argument_targets_json: list[str] = []
+        root_visits_json: list[str] = []
+        root_priors_json: list[str] = []
+        for step in trace:
+            entries = step.get("policy_visit_targets_by_tuple", [])
+            type_totals: dict[str, float] = {}
+            argument_totals: dict[str, dict[str, float]] = {}
+            visits: list[dict[str, Any]] = []
+            priors: list[dict[str, Any]] = []
+            for entry in entries if isinstance(entries, list) else []:
+                if not isinstance(entry, dict):
+                    continue
+                encoded = entry.get("action_tuple")
+                if not isinstance(encoded, dict):
+                    continue
+                action_tuple = ActionTuple.from_dict(encoded)
+                probability = float(
+                    entry.get("visit_probability", entry.get("visits_probability", 0.0))
+                )
+                type_totals[action_tuple.action_type] = (
+                    type_totals.get(action_tuple.action_type, 0.0) + probability
+                )
+                for slot, argument in enumerate(action_tuple.args):
+                    slot_totals = argument_totals.setdefault(str(slot), {})
+                    slot_totals[str(argument)] = slot_totals.get(str(argument), 0.0) + probability
+                if "visit_count" in entry:
+                    visits.append(
+                        {"action_tuple": action_tuple.to_dict(), "visit_count": int(entry["visit_count"])}
+                    )
+                priors.append(
+                    {"action_tuple": action_tuple.to_dict(), "prior_probability": probability}
+                )
+            type_targets_json.append(canonical_json(type_totals))
+            argument_targets_json.append(canonical_json(argument_totals))
+            root_visits_json.append(canonical_json(visits))
+            root_priors_json.append(canonical_json(priors))
+        fields.update(
+            {
+                "state_trace_json": np.asarray(state_json, dtype=np.str_),
+                "state_snapshot_json": np.asarray(state_snapshot_json, dtype=np.str_),
+                "state_hashes": np.asarray(state_hashes, dtype=np.str_),
+                "action_tuples_json": np.asarray(action_tuples, dtype=np.str_),
+                "action_type_ids": np.asarray(action_type_ids, dtype=np.int16),
+                "action_args": action_args,
+                "action_arg_mask": action_arg_mask,
+                "legal_action_tuples_json": legal_tuples_json,
+                "policy_visit_targets_by_tuple_json": policy_targets_json,
+                "policy_type_targets_json": np.asarray(type_targets_json, dtype=np.str_),
+                "policy_argument_targets_json": np.asarray(argument_targets_json, dtype=np.str_),
+                "root_visit_counts_by_tuple_json": np.asarray(root_visits_json, dtype=np.str_),
+                "root_policy_priors_by_tuple_json": np.asarray(root_priors_json, dtype=np.str_),
+                "action_ids": np.asarray(
+                    [
+                        -1 if step.get("action_id") is None else int(step["action_id"])
+                        for step in trace
+                    ],
+                    dtype=np.int64,
+                ),
+                "position_index": np.asarray(positions, dtype=np.int64),
+                "semantic_turn_index": np.asarray(
+                    [int(step.get("semantic_turn_index", index)) for index, step in enumerate(trace)],
+                    dtype=np.int64,
+                ),
+                "round": np.asarray(
+                    [int(step.get("round", 0)) for step in trace], dtype=np.int16
+                ),
+                "player_to_move": np.asarray(
+                    [int(step.get("player_to_move", -1)) for step in trace], dtype=np.int8
+                ),
+                "terminal_valid": np.asarray(bool(metadata_payload.get("terminal_valid", True))),
+            }
+        )
+        metadata_payload.update(
+            trajectory_metadata(
+                trace_length=len(trace),
+                terminal_valid=bool(metadata_payload.get("terminal_valid", True)),
+                game_id=metadata_payload.get("game_id"),
+            )
+        )
+        metadata_payload["terminal_valid"] = bool(metadata_payload["terminal_valid"])
+        metadata_payload["parameter_slot_count"] = MAX_ACTION_ARGUMENTS
+        metadata_payload["action_type_count"] = len(ACTION_TYPE_IDS)
+        metadata_payload["trace_hash"] = hashlib.sha256(
+            "".join(state_hashes).encode("ascii")
+        ).hexdigest()
+    metadata_payload.setdefault("rules_version", RULES_VERSION)
+    metadata_payload.setdefault(
+        "observation_schema_version", RULES_VERSION
+    )
+    metadata_payload.setdefault("observation_dtype", "float32")
+    metadata_payload.setdefault(
+        "observation_shape", list(np.asarray(examples[0].observation).shape)
+    )
+    metadata_payload.setdefault("action_representation", "parameterized_action_tuple")
+    metadata_payload.setdefault("action_schema_version", ACTION_TUPLE_SCHEMA_VERSION)
+    metadata_payload.setdefault("state_hash_version", STATE_HASH_VERSION)
+    fields["metadata"] = np.asarray(
+        json.dumps(metadata_payload, ensure_ascii=False), dtype=np.str_
+    )
     payload = io.BytesIO()
     np.savez_compressed(
         payload,
-        observations=np.stack([item.observation for item in examples]).astype(np.float32),
-        legal_masks=np.stack([item.legal_mask for item in examples]).astype(np.bool_),
-        policy_targets=np.stack([item.policy_target for item in examples]).astype(np.float32),
-        value_targets=np.stack([item.value_target for item in examples]).astype(np.float32),
-        metadata=np.asarray(
-            json.dumps(metadata or {}, ensure_ascii=False),
-            dtype=np.str_,
-        ),
+        **fields,
     )
     _atomic_bytes(path, payload.getvalue())
     return len(examples)
@@ -317,6 +492,173 @@ def read_npz_shard(
         for index in range(len(observations))
     ]
     return examples, metadata
+
+
+def read_npz_trajectory(path: Path) -> dict[str, Any]:
+    """Read the complete game trace embedded in a raw trajectory NPZ.
+
+    The returned arrays are ordinary Python/NumPy values and can be consumed
+    by the history converter without loading them into the training replay.
+    ``read_npz_shard`` intentionally ignores these fields for shuffle/train.
+    """
+
+    required = {
+        "state_trace_json",
+        "state_snapshot_json",
+        "state_hashes",
+        "action_tuples_json",
+        "action_type_ids",
+        "action_args",
+        "action_arg_mask",
+        "legal_action_tuples_json",
+        "policy_visit_targets_by_tuple_json",
+        "policy_type_targets_json",
+        "policy_argument_targets_json",
+        "root_visit_counts_by_tuple_json",
+        "root_policy_priors_by_tuple_json",
+        "action_ids",
+        "position_index",
+        "semantic_turn_index",
+        "round",
+        "player_to_move",
+        "terminal_valid",
+    }
+    with np.load(path, allow_pickle=False) as values:
+        missing = sorted(required - set(values.files))
+        if missing:
+            raise ValueError(
+                f"NPZ does not contain a complete replay trace; missing {', '.join(missing)}"
+            )
+        raw_metadata = (
+            str(values["metadata"].item()) if "metadata" in values else "{}"
+        )
+        try:
+            metadata = json.loads(raw_metadata)
+        except json.JSONDecodeError as error:
+            raise ValueError(f"invalid shard metadata in {path}") from error
+        schema = metadata.get("schema_version")
+        if schema != NPZ_TRAJECTORY_SCHEMA_VERSION:
+            raise ValueError(
+                f"unsupported trajectory schema {schema!r}; expected {NPZ_TRAJECTORY_SCHEMA_VERSION}"
+            )
+        if metadata.get("rules_version") != RULES_VERSION:
+            raise ValueError("trajectory rules_version is not standard-v22")
+        if metadata.get("action_schema_version") != ACTION_TUPLE_SCHEMA_VERSION:
+            raise ValueError("trajectory action schema is incompatible")
+        if metadata.get("state_hash_version") != STATE_HASH_VERSION:
+            raise ValueError("trajectory state hash schema is incompatible")
+        state_trace = np.asarray(values["state_trace_json"], dtype=np.str_)
+        state_snapshots = np.asarray(values["state_snapshot_json"], dtype=np.str_)
+        state_hashes = np.asarray(values["state_hashes"], dtype=np.str_)
+        action_tuples = np.asarray(values["action_tuples_json"], dtype=np.str_)
+        action_type_ids = np.asarray(values["action_type_ids"], dtype=np.int16)
+        action_args = np.asarray(values["action_args"], dtype=np.int16)
+        action_arg_mask = np.asarray(values["action_arg_mask"], dtype=np.bool_)
+        legal_tuples = np.asarray(values["legal_action_tuples_json"], dtype=np.str_)
+        policy_targets = np.asarray(
+            values["policy_visit_targets_by_tuple_json"], dtype=np.str_
+        )
+        type_targets = np.asarray(values["policy_type_targets_json"], dtype=np.str_)
+        argument_targets = np.asarray(
+            values["policy_argument_targets_json"], dtype=np.str_
+        )
+        root_visits = np.asarray(
+            values["root_visit_counts_by_tuple_json"], dtype=np.str_
+        )
+        root_priors = np.asarray(
+            values["root_policy_priors_by_tuple_json"], dtype=np.str_
+        )
+        action_ids = np.asarray(values["action_ids"], dtype=np.int64)
+        position_index = np.asarray(values["position_index"], dtype=np.int64)
+        semantic_turn_index = np.asarray(values["semantic_turn_index"], dtype=np.int64)
+        rounds = np.asarray(values["round"], dtype=np.int16)
+        players = np.asarray(values["player_to_move"], dtype=np.int8)
+        terminal_valid = bool(np.asarray(values["terminal_valid"]).item())
+        position_count = len(values["observations"])
+    lengths = {
+        len(state_trace),
+        len(state_snapshots),
+        len(state_hashes),
+        len(action_tuples),
+        len(action_type_ids),
+        len(action_args),
+        len(action_arg_mask),
+        len(legal_tuples),
+        len(policy_targets),
+        len(type_targets),
+        len(argument_targets),
+        len(root_visits),
+        len(root_priors),
+        len(action_ids),
+        len(position_index),
+        len(semantic_turn_index),
+        len(rounds),
+        len(players),
+    }
+    if len(lengths) != 1 or not lengths:
+        raise ValueError(f"trajectory array lengths do not match in {path}")
+    if not len(position_index) or not np.array_equal(
+        position_index, np.arange(len(position_index), dtype=np.int64)
+    ):
+        raise ValueError("trajectory position_index must be contiguous from zero")
+    if action_ids[-1] != -1 or action_tuples[-1]:
+        raise ValueError("trajectory terminal row must not contain an action")
+    if action_args.ndim != 2 or action_args.shape[1] != MAX_ACTION_ARGUMENTS:
+        raise ValueError("trajectory action_args must have [trace, 8] shape")
+    if action_arg_mask.shape != action_args.shape:
+        raise ValueError("trajectory action_arg_mask shape does not match action_args")
+    if action_type_ids[-1] != -1 or np.any(action_arg_mask[-1]):
+        raise ValueError("trajectory terminal row must not contain action parameters")
+    for index, encoded in enumerate(action_tuples):
+        if not encoded:
+            if action_type_ids[index] != -1 or np.any(action_arg_mask[index]):
+                raise ValueError("empty action tuple has non-empty encoded parameters")
+            continue
+        item = ActionTuple.from_json(str(encoded))
+        if int(action_type_ids[index]) != item.action_type_id:
+            raise ValueError("action_type_ids disagrees with action_tuples_json")
+        width = len(item.args)
+        if not np.array_equal(action_args[index, :width], np.asarray(item.args, dtype=np.int16)):
+            raise ValueError("action_args disagrees with action_tuples_json")
+        if not np.array_equal(action_arg_mask[index], np.arange(MAX_ACTION_ARGUMENTS) < width):
+            raise ValueError("action_arg_mask disagrees with action_tuples_json")
+    if len(position_index) != position_count + 1:
+        raise ValueError(
+            "trajectory must contain one pre-action row per position plus terminal"
+        )
+    if int(metadata.get("trace_length", -1)) != len(position_index):
+        raise ValueError("trajectory metadata trace_length does not match arrays")
+    if any(not value for value in state_trace) or any(not value for value in state_hashes):
+        raise ValueError("trajectory contains an empty state or state hash")
+    for index, encoded_state in enumerate(state_trace):
+        try:
+            decoded_state = json.loads(str(encoded_state))
+        except json.JSONDecodeError as error:
+            raise ValueError("trajectory contains invalid state_json") from error
+        if compute_state_hash(decoded_state) != str(state_hashes[index]):
+            raise ValueError("trajectory state_hash does not match state_json")
+    return {
+        "metadata": metadata,
+        "state_trace_json": state_trace,
+        "state_snapshot_json": state_snapshots,
+        "state_hashes": state_hashes,
+        "action_tuples_json": action_tuples,
+        "action_type_ids": action_type_ids,
+        "action_args": action_args,
+        "action_arg_mask": action_arg_mask,
+        "legal_action_tuples_json": legal_tuples,
+        "policy_visit_targets_by_tuple_json": policy_targets,
+        "policy_type_targets_json": type_targets,
+        "policy_argument_targets_json": argument_targets,
+        "root_visit_counts_by_tuple_json": root_visits,
+        "root_policy_priors_by_tuple_json": root_priors,
+        "action_ids": action_ids,
+        "position_index": position_index,
+        "semantic_turn_index": semantic_turn_index,
+        "round": rounds,
+        "player_to_move": players,
+        "terminal_valid": terminal_valid,
+    }
 
 
 def run_selfplay(config: PipelineConfig, *, once: bool = False) -> int:
@@ -424,10 +766,21 @@ def run_selfplay(config: PipelineConfig, *, once: bool = False) -> int:
                 destination,
                 result.examples,
                 {
+                    "game_id": destination.stem,
                     "kind": "selfplay-game",
                     "seed": seed,
+                    "setup_seed": initial.setup_seed,
+                    "setup_hash": initial.setup_hash,
+                    "setup_seed_stream_version": initial.setup_seed_stream_version,
+                    "setup_seed_streams": [
+                        {"name": name, "seed": stream_seed}
+                        for name, stream_seed in initial.setup_seed_streams
+                    ],
                     "players": config.players,
-                    "ruleset": "standard-v22",
+                    "player_count": config.players,
+                    "ruleset": RULES_VERSION,
+                    "rules_version": RULES_VERSION,
+                    "terminal_valid": bool(result.final_state.is_terminal),
                     "architecture": expected_network.architecture,
                     "moves": len(result.actions),
                     "weight": source[0],
@@ -445,6 +798,7 @@ def run_selfplay(config: PipelineConfig, *, once: bool = False) -> int:
                         "steps": trace_steps,
                     },
                 },
+                trajectory=result.trajectory,
             )
             _publish_worker_status(
                 paths,
@@ -501,8 +855,19 @@ def run_shuffle(config: PipelineConfig, *, once: bool = False) -> int:
                 processed_games=len(processed),
             )
             examples: list[TrainingExample] = []
+            source_game_ids: list[str] = []
+            source_raw_hashes: list[str] = []
             for path in pending:
-                shard, _metadata = read_npz_shard(path, include_metadata=False)
+                shard, shard_metadata = read_npz_shard(path)
+                if shard_metadata.get("kind") == "selfplay-game":
+                    # A raw self-play game is admitted only after its complete
+                    # typed trace and state hashes pass validation.  Shuffled
+                    # packs remain opaque to this replay validator.
+                    read_npz_trajectory(path)
+                source_game_ids.append(str(shard_metadata.get("game_id", path.stem)))
+                source_raw_hashes.append(
+                    hashlib.sha256(path.read_bytes()).hexdigest()
+                )
                 examples.extend(shard)
             random.Random(config.seed + int(state.get("sequence", 0))).shuffle(examples)
             sequence = int(state.get("sequence", 0))
@@ -516,6 +881,8 @@ def run_shuffle(config: PipelineConfig, *, once: bool = False) -> int:
                         "kind": "shuffled-training-pack",
                         "sequence": sequence,
                         "source_games": len(pending),
+                        "source_game_ids": source_game_ids,
+                        "source_raw_hashes": source_raw_hashes,
                     },
                 )
                 sequence += 1

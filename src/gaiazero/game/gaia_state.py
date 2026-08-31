@@ -9,6 +9,13 @@ from math import exp
 import numpy as np
 
 from gaiazero.core import BoolArray, FloatArray
+from gaiazero.contracts import (
+    ACTION_TUPLE_SCHEMA_VERSION,
+    RULES_VERSION,
+    STATE_HASH_VERSION,
+    ActionTuple,
+    state_hash as compute_state_hash,
+)
 from gaiazero.game.gaia_setup import (
     BOOSTER_COUNT,
     MAX_BOARD_SPACES,
@@ -750,6 +757,33 @@ class GaiaState:
         return int(self.observation().shape[0])
 
     @property
+    def rules_version(self) -> str:
+        return RULES_VERSION
+
+    @property
+    def observation_schema_version(self) -> str:
+        return RULES_VERSION
+
+    @property
+    def action_schema_version(self) -> str:
+        return ACTION_TUPLE_SCHEMA_VERSION
+
+    def contract_metadata(self) -> dict[str, object]:
+        """Describe the state/action tensors without exposing implementation IDs."""
+
+        return {
+            "rules_version": RULES_VERSION,
+            "observation_schema_version": RULES_VERSION,
+            "observation_dtype": "float32",
+            "observation_shape": [self.observation_size],
+            "player_count": self.player_count,
+            "player_order": "absolute_seat_order",
+            "action_schema_version": ACTION_TUPLE_SCHEMA_VERSION,
+            "action_representation": "parameterized_action_tuple",
+            "state_hash_version": STATE_HASH_VERSION,
+        }
+
+    @property
     def is_terminal(self) -> bool:
         return self.round_number > MAX_ROUNDS
 
@@ -828,6 +862,230 @@ class GaiaState:
     @staticmethod
     def pass_booster_action(booster: int) -> int:
         return PASS_BOOSTER_OFFSET + booster
+
+    def action_tuple(self, action: int) -> ActionTuple:
+        """Convert a legacy action index to its canonical semantic tuple.
+
+        The conversion is state-aware for the few shared slots whose meaning
+        depends on the current decision (for example starting placement and
+        the optional technology-research skip action).
+        """
+
+        action = int(action)
+        if action < 0 or action >= ACTION_SIZE:
+            raise ValueError(f"action index out of range: {action}")
+        if BUILD_OFFSET <= action < GAIA_OFFSET:
+            action_type = (
+                "place_starting_structure"
+                if self.is_starting_placement
+                else "build_mine"
+            )
+            return ActionTuple(action_type, (action - BUILD_OFFSET,))
+        if GAIA_OFFSET <= action < UPGRADE_TRADING_OFFSET:
+            return ActionTuple("gaia_project", (action - GAIA_OFFSET,))
+        if UPGRADE_TRADING_OFFSET <= action < UPGRADE_LAB_OFFSET:
+            return ActionTuple("upgrade_trading", (action - UPGRADE_TRADING_OFFSET,))
+        if UPGRADE_LAB_OFFSET <= action < UPGRADE_PI_OFFSET:
+            return ActionTuple("upgrade_lab", (action - UPGRADE_LAB_OFFSET,))
+        if UPGRADE_PI_OFFSET <= action < UPGRADE_ACADEMY_OFFSET:
+            return ActionTuple(
+                "upgrade_planetary_institute", (action - UPGRADE_PI_OFFSET,)
+            )
+        if UPGRADE_ACADEMY_OFFSET <= action < UPGRADE_QIC_ACADEMY_OFFSET:
+            return ActionTuple("upgrade_academy", (action - UPGRADE_ACADEMY_OFFSET,))
+        if UPGRADE_QIC_ACADEMY_OFFSET <= action < RESEARCH_OFFSET:
+            return ActionTuple(
+                "upgrade_qic_academy", (action - UPGRADE_QIC_ACADEMY_OFFSET,)
+            )
+        if RESEARCH_OFFSET <= action < POWER_OFFSET:
+            return ActionTuple("research", (action - RESEARCH_OFFSET,))
+        if POWER_OFFSET <= action < TECH_OFFSET:
+            return ActionTuple("power_action", (action - POWER_OFFSET,))
+        if TECH_OFFSET <= action < FEDERATION_OFFSET:
+            return ActionTuple("tech_take", (action - TECH_OFFSET,))
+        if FEDERATION_OFFSET <= action < PASS_BOOSTER_OFFSET:
+            if action < FEDERATION_OFFSET + FEDERATION_ACTION_COUNT:
+                return ActionTuple("federation", (action - FEDERATION_OFFSET,))
+            if action == QIC_ACADEMY_ACTION:
+                return ActionTuple("qic_academy")
+            if action == STANDARD_TECH_ACTION:
+                return ActionTuple("standard_tech")
+            if ADVANCED_TECH_ACTION_OFFSET <= action < QIC_TECH_ACTION:
+                return ActionTuple("advanced_tech", (action - ADVANCED_TECH_ACTION_OFFSET,))
+            if action == QIC_TECH_ACTION:
+                return ActionTuple("qic_tech")
+            if QIC_FEDERATION_ACTION_OFFSET <= action < QIC_PLANET_TYPES_ACTION:
+                return ActionTuple(
+                    "qic_federation", (action - QIC_FEDERATION_ACTION_OFFSET,)
+                )
+            if action == QIC_PLANET_TYPES_ACTION:
+                return ActionTuple("qic_planet_types")
+            if action == BOOSTER_TERRAFORM_ACTION:
+                return ActionTuple("booster_terraform")
+            if action == BOOSTER_RANGE_ACTION:
+                return ActionTuple("booster_range")
+        if PASS_BOOSTER_OFFSET <= action < PASS_BOOSTER_OFFSET + BOOSTER_COUNT:
+            return ActionTuple("pass_booster", (action - PASS_BOOSTER_OFFSET,))
+        if action == SKIP_TECH_RESEARCH_ACTION and self.pending_research_optional:
+            return ActionTuple("skip_tech_research")
+        if action == PASS_FINAL_ACTION:
+            return ActionTuple("pass_final")
+        if action == BRAINSTONE_ACTION:
+            return ActionTuple("brainstone")
+        scalar_actions = {
+            TERRANS_GAIA_CREDIT_ACTION: "terrans_gaia_credit",
+            TERRANS_GAIA_ORE_ACTION: "terrans_gaia_ore",
+            TERRANS_GAIA_KNOWLEDGE_ACTION: "terrans_gaia_knowledge",
+            TERRANS_GAIA_QIC_ACTION: "terrans_gaia_qic",
+            TERRANS_GAIA_FINISH_ACTION: "terrans_gaia_finish",
+            TAKLONS_PASSIVE_BEFORE_ACTION: "taklons_passive_before",
+            TAKLONS_PASSIVE_AFTER_ACTION: "taklons_passive_after",
+            BAL_TAKS_GAIAFORMER_QIC_ACTION: "bal_taks_gaiaformer_qic",
+            ITARS_BURN_POWER_ACTION: "itars_burn_power",
+            ITARS_GAIA_TECH_ACTION: "itars_gaia_technology",
+            ITARS_GAIA_FINISH_ACTION: "itars_gaia_finish",
+            NEVLAS_POWER_TO_GAIA_ACTION: "nevlas_power_to_gaia",
+            NEVLAS_CREDITS_ACTION: "nevlas_credits",
+            NEVLAS_CREDIT_ORE_ACTION: "nevlas_credit_ore",
+            NEVLAS_ORE_ACTION: "nevlas_ore",
+            NEVLAS_QIC_ACTION: "nevlas_qic",
+            NEVLAS_KNOWLEDGE_ACTION: "nevlas_knowledge",
+            PASSIVE_CHARGE_ACCEPT_ACTION: "passive_charge_accept",
+            PASSIVE_CHARGE_DECLINE_ACTION: "passive_charge_decline",
+            POWER_TO_CREDIT_ACTION: "power_to_credit",
+            POWER_TO_ORE_ACTION: "power_to_ore",
+            POWER_TO_KNOWLEDGE_ACTION: "power_to_knowledge",
+            POWER_TO_QIC_ACTION: "power_to_qic",
+            QIC_TO_ORE_ACTION: "qic_to_ore",
+            ORE_TO_CREDIT_ACTION: "ore_to_credit",
+            KNOWLEDGE_TO_CREDIT_ACTION: "knowledge_to_credit",
+        }
+        if action in scalar_actions:
+            return ActionTuple(scalar_actions[action])
+        if IVITS_SPACE_STATION_OFFSET <= action < IVITS_SPACE_STATION_LIMIT:
+            return ActionTuple("ivits_space_station", (action - IVITS_SPACE_STATION_OFFSET,))
+        if BESCODS_RESEARCH_OFFSET <= action < BESCODS_RESEARCH_LIMIT:
+            return ActionTuple("bescods_research", (action - BESCODS_RESEARCH_OFFSET,))
+        if LOST_PLANET_OFFSET <= action < LOST_PLANET_LIMIT:
+            return ActionTuple("lost_planet", (action - LOST_PLANET_OFFSET,))
+        return ActionTuple("legacy_action", (action,))
+
+    # Explicit aliases make the contract convenient for callers that describe
+    # the conversion in either direction.
+    action_to_tuple = action_tuple
+    action_key = action_tuple
+
+    def action_from_tuple(self, action: ActionTuple) -> int:
+        """Map a canonical tuple back to the compatibility action index."""
+
+        if not isinstance(action, ActionTuple):
+            raise TypeError("action must be an ActionTuple")
+        name, args = action.canonical_key
+        if len(args) > 1 and name not in {"qic_federation"}:
+            raise ValueError(f"invalid arguments for {name}: {args}")
+        offsets = {
+            "build_mine": BUILD_OFFSET,
+            "place_starting_structure": BUILD_OFFSET,
+            "gaia_project": GAIA_OFFSET,
+            "upgrade_trading": UPGRADE_TRADING_OFFSET,
+            "upgrade_lab": UPGRADE_LAB_OFFSET,
+            "upgrade_planetary_institute": UPGRADE_PI_OFFSET,
+            "upgrade_academy": UPGRADE_ACADEMY_OFFSET,
+            "upgrade_qic_academy": UPGRADE_QIC_ACADEMY_OFFSET,
+            "research": RESEARCH_OFFSET,
+            "power_action": POWER_OFFSET,
+            "tech_take": TECH_OFFSET,
+            "federation": FEDERATION_OFFSET,
+            "pass_booster": PASS_BOOSTER_OFFSET,
+            "ivits_space_station": IVITS_SPACE_STATION_OFFSET,
+            "bescods_research": BESCODS_RESEARCH_OFFSET,
+            "lost_planet": LOST_PLANET_OFFSET,
+        }
+        if name in offsets:
+            if len(args) != 1:
+                raise ValueError(f"{name} requires one argument")
+            return offsets[name] + args[0]
+        singleton_ids = {
+            "qic_academy": QIC_ACADEMY_ACTION,
+            "standard_tech": STANDARD_TECH_ACTION,
+            "qic_tech": QIC_TECH_ACTION,
+            "qic_planet_types": QIC_PLANET_TYPES_ACTION,
+            "booster_terraform": BOOSTER_TERRAFORM_ACTION,
+            "booster_range": BOOSTER_RANGE_ACTION,
+            "pass_final": PASS_FINAL_ACTION,
+            "skip_tech_research": SKIP_TECH_RESEARCH_ACTION,
+            "brainstone": BRAINSTONE_ACTION,
+            "terrans_gaia_credit": TERRANS_GAIA_CREDIT_ACTION,
+            "terrans_gaia_ore": TERRANS_GAIA_ORE_ACTION,
+            "terrans_gaia_knowledge": TERRANS_GAIA_KNOWLEDGE_ACTION,
+            "terrans_gaia_qic": TERRANS_GAIA_QIC_ACTION,
+            "terrans_gaia_finish": TERRANS_GAIA_FINISH_ACTION,
+            "taklons_passive_before": TAKLONS_PASSIVE_BEFORE_ACTION,
+            "taklons_passive_after": TAKLONS_PASSIVE_AFTER_ACTION,
+            "bal_taks_gaiaformer_qic": BAL_TAKS_GAIAFORMER_QIC_ACTION,
+            "itars_burn_power": ITARS_BURN_POWER_ACTION,
+            "itars_gaia_technology": ITARS_GAIA_TECH_ACTION,
+            "itars_gaia_finish": ITARS_GAIA_FINISH_ACTION,
+            "nevlas_power_to_gaia": NEVLAS_POWER_TO_GAIA_ACTION,
+            "nevlas_credits": NEVLAS_CREDITS_ACTION,
+            "nevlas_credit_ore": NEVLAS_CREDIT_ORE_ACTION,
+            "nevlas_ore": NEVLAS_ORE_ACTION,
+            "nevlas_qic": NEVLAS_QIC_ACTION,
+            "nevlas_knowledge": NEVLAS_KNOWLEDGE_ACTION,
+            "passive_charge_accept": PASSIVE_CHARGE_ACCEPT_ACTION,
+            "passive_charge_decline": PASSIVE_CHARGE_DECLINE_ACTION,
+            "power_to_credit": POWER_TO_CREDIT_ACTION,
+            "power_to_ore": POWER_TO_ORE_ACTION,
+            "power_to_knowledge": POWER_TO_KNOWLEDGE_ACTION,
+            "power_to_qic": POWER_TO_QIC_ACTION,
+            "qic_to_ore": QIC_TO_ORE_ACTION,
+            "ore_to_credit": ORE_TO_CREDIT_ACTION,
+            "knowledge_to_credit": KNOWLEDGE_TO_CREDIT_ACTION,
+        }
+        if name in singleton_ids:
+            if args:
+                raise ValueError(f"{name} does not accept arguments")
+            return singleton_ids[name]
+        if name == "advanced_tech":
+            if len(args) != 1:
+                raise ValueError("advanced_tech requires one argument")
+            return ADVANCED_TECH_ACTION_OFFSET + args[0]
+        if name == "qic_federation":
+            if len(args) != 1:
+                raise ValueError("qic_federation requires one argument")
+            return QIC_FEDERATION_ACTION_OFFSET + args[0]
+        if name == "legacy_action":
+            if len(args) != 1:
+                raise ValueError("legacy_action requires one argument")
+            return args[0]
+        raise ValueError(f"unknown action type: {name}")
+
+    tuple_to_action = action_from_tuple
+
+    def legal_action_tuples(self) -> tuple[ActionTuple, ...]:
+        """Return legal actions in canonical order with no duplicate tuples."""
+
+        tuples: list[ActionTuple] = []
+        seen: set[tuple[str, tuple[int, ...]]] = set()
+        for action in self.legal_actions():
+            item = self.action_tuple(action)
+            if item.canonical_key not in seen:
+                tuples.append(item)
+                seen.add(item.canonical_key)
+        return tuple(tuples)
+
+    legal_action_keys = legal_action_tuples
+
+    def apply_tuple(self, action: ActionTuple) -> GaiaState:
+        action_id = self.action_from_tuple(action)
+        if action_id not in self.legal_actions():
+            raise ValueError(f"illegal action tuple: {action}")
+        if self.action_tuple(action_id).canonical_key != action.canonical_key:
+            raise ValueError(f"action tuple is not canonical for this state: {action}")
+        return self.apply(action_id)
+
+    def state_hash(self) -> str:
+        return compute_state_hash(self)
 
     def legal_actions(self) -> tuple[int, ...]:
         if self.is_terminal:
@@ -4536,7 +4794,11 @@ class GaiaState:
                 self.round_scoring_tiles[self.round_number - 1]
             ].key
         return {
-            "ruleset": "standard-v22",
+            "ruleset": RULES_VERSION,
+            "rules_version": RULES_VERSION,
+            "state_hash_version": STATE_HASH_VERSION,
+            "state_hash": self.state_hash(),
+            "contract": self.contract_metadata(),
             "round": max(0, min(self.round_number, MAX_ROUNDS)),
             "max_rounds": MAX_ROUNDS,
             "phase": (

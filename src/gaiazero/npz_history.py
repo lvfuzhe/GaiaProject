@@ -12,7 +12,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterable
 
-from gaiazero.distributed import read_npz_shard
+from gaiazero.contracts import NPZ_TRAJECTORY_SCHEMA_VERSION
+from gaiazero.distributed import read_npz_shard, read_npz_trajectory
 from gaiazero.telemetry import delete_local_game, write_local_game
 
 
@@ -95,7 +96,54 @@ def convert_npz_to_history(
     source_path = Path(source)
     if source_path.suffix.lower() != ".npz":
         raise ValueError("source must be an .npz file")
-    _examples, metadata = read_npz_shard(source_path)
+    examples, metadata = read_npz_shard(source_path)
+    typed_trajectory = None
+    if metadata.get("schema_version") == NPZ_TRAJECTORY_SCHEMA_VERSION:
+        # Validate the authoritative typed trace even when a legacy dashboard
+        # history object is also present in metadata.
+        typed_trajectory = read_npz_trajectory(source_path)
+    # New trajectory shards keep the typed state arrays outside metadata so
+    # training never has to parse replay JSON.  Materialize the dashboard's
+    # familiar step shape only at this explicit conversion boundary.
+    if not isinstance(metadata.get("history"), dict):
+        trajectory = typed_trajectory or read_npz_trajectory(source_path)
+        rows = []
+        for index in range(len(trajectory["position_index"])):
+            state = json.loads(str(trajectory["state_snapshot_json"][index]))
+            action_id = int(trajectory["action_ids"][index])
+            action_tuple = trajectory["action_tuples_json"][index]
+            legal_tuples = trajectory["legal_action_tuples_json"][index]
+            policy_targets = trajectory["policy_visit_targets_by_tuple_json"][index]
+            rows.append(
+                {
+                    "move": index,
+                    "position_index": int(trajectory["position_index"][index]),
+                    "semantic_turn_index": int(trajectory["semantic_turn_index"][index]),
+                    "player": int(trajectory["player_to_move"][index]),
+                    "action": None if action_id < 0 else action_id,
+                    "action_tuple": json.loads(str(action_tuple)) if action_tuple else None,
+                    "legal_action_tuples": json.loads(str(legal_tuples))
+                    if legal_tuples
+                    else [],
+                    "policy_visit_targets_by_tuple": json.loads(str(policy_targets))
+                    if policy_targets
+                    else [],
+                    "state_hash": str(trajectory["state_hashes"][index]),
+                    "state": state,
+                }
+            )
+        metadata = dict(metadata)
+        metadata["history"] = {
+            "summary": {
+                "moves": len(examples),
+                "positions": len(examples),
+                "scores": None,
+                "returns": None,
+            },
+            "trace_complete": bool(trajectory["terminal_valid"]),
+            "captured_moves": len(examples),
+            "steps": rows,
+        }
     resolved_id = run_id or f"npz-{source_path.stem}"
     record = _history_record(source_path, metadata, run_id=resolved_id)
     return write_local_game(history_dir, record)
