@@ -128,8 +128,8 @@
     "rules_reference": "bga_random_map_only",
     "version": "setup-seed-stream-v1",
     "golden_fixture_manifest": "tests/fixtures/bga_setup_golden.json",
-    "golden_fixture_source": "BGA random map outputs captured from the setup UI/replays and manually verified",
-    "fixture_status": "to_be_generated",
+    "golden_fixture_source": "GaiaZero BGA-compatible map randomizer with frozen seed manifest",
+    "fixture_status": "generated",
     "fixture_scope": "map_only_bga_contract",
     "fixture_min_setups_per_variant": 256,
     "fixture_variants": [
