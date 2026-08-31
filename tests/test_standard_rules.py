@@ -72,6 +72,11 @@ from gaiazero.game.gaia_setup import hex_distance
 from gaiazero.mcts import PUCTSearch, SearchConfig
 
 
+# Keep setup-sensitive rule tests independent from the generic random booster
+# stream. These tiles do not grant starting Q.I.C. or power-charge income.
+RULE_TEST_BOOSTERS = (0, 2, 3, 5, 6)
+
+
 def finish_starting_placement(state: GaiaState) -> GaiaState:
     while state.is_starting_placement:
         legal = state.legal_actions()
@@ -173,7 +178,12 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(next(f["starting_qic"] for f in catalog if f["name"] == "Bal T'aks"), 0)
 
     def test_bal_taks_starting_state_and_navigation_lock_match_bga(self) -> None:
-        initial = GaiaState.initial(2, faction_indices=(9, 0), first_player=0)
+        initial = GaiaState.initial(
+            2,
+            faction_indices=(9, 0),
+            first_player=0,
+            booster_tiles=RULE_TEST_BOOSTERS,
+        )
         income_planet = next(
             planet for planet, active in enumerate(initial.active_planets) if active
         )
@@ -225,7 +235,12 @@ class StandardGaiaRulesTests(unittest.TestCase):
 
     def test_bal_taks_gaiaformer_conversion_is_free_and_returns_next_gaia_phase(self) -> None:
         state = finish_starting_placement(
-            GaiaState.initial(2, faction_indices=(9, 0), first_player=0)
+            GaiaState.initial(
+                2,
+                faction_indices=(9, 0),
+                first_player=0,
+                booster_tiles=RULE_TEST_BOOSTERS,
+            )
         )
         state = replace(state, player_to_move=0)
         self.assertIn(BAL_TAKS_GAIAFORMER_QIC_ACTION, state.legal_actions())
@@ -1256,7 +1271,13 @@ class StandardGaiaRulesTests(unittest.TestCase):
 
     def test_lantids_pi_rewards_coexisting_mines_without_replacing_host(self) -> None:
         state = finish_starting_placement(
-            GaiaState.initial(2, faction_indices=(1, 2), first_player=0, seed=17)
+            GaiaState.initial(
+                2,
+                faction_indices=(1, 2),
+                first_player=0,
+                seed=17,
+                booster_tiles=RULE_TEST_BOOSTERS,
+            )
         )
         source = state.starting_planets[0][0]
         target = next(
@@ -3025,16 +3046,27 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual(itars.player_to_move, 1)
 
     def test_research_lab_requires_immediate_tech_choice(self) -> None:
-        state = finish_starting_placement(GaiaState.initial(2))
+        state = finish_starting_placement(
+            GaiaState.initial(
+                2,
+                seed=0,
+                faction_indices=(0, 2),
+                first_player=0,
+                booster_tiles=RULE_TEST_BOOSTERS,
+            )
+        )
         mine = next(
             planet
             for planet, owner in enumerate(state.owners)
             if owner == 0 and state.buildings[planet] == Building.MINE
         )
         state = replace(state, player_to_move=0)
-        state = state.apply(state.upgrade_trading_action(mine))
+        state = decline_passive_charge(state.apply(state.upgrade_trading_action(mine)))
         players = list(state.players)
         players[0] = replace(players[0], credits=30, ore=15)
+        # Remove the opponent's available charge so the lab's immediate
+        # technology choice remains the only pending response.
+        players[1] = replace(players[1], bowl_one=0, bowl_two=0)
         state = replace(state, player_to_move=0, players=tuple(players))
 
         pending = state.apply(state.upgrade_lab_action(mine))
@@ -4188,8 +4220,18 @@ class StandardGaiaRulesTests(unittest.TestCase):
         self.assertEqual((converted.players[0].qic, converted.players[0].ore), (0, 4))
 
     def test_canonical_federation_awards_token(self) -> None:
-        state = finish_starting_placement(GaiaState.initial(2))
-        planets = [index for index, active in enumerate(state.active_planets) if active][:3]
+        state = finish_starting_placement(
+            GaiaState.initial(
+                2,
+                seed=0,
+                faction_indices=(0, 2),
+                first_player=0,
+                booster_tiles=RULE_TEST_BOOSTERS,
+            )
+        )
+        # Fixed map fixture: these cells form a connected three-structure
+        # federation under the canonical minimum-satellite planner.
+        planets = [0, 1, 3]
         owners = list(state.owners)
         buildings = list(state.buildings)
         for planet in planets:
