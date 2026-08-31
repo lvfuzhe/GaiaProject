@@ -24,7 +24,7 @@ import struct
 import subprocess
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import MISSING, asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Sequence
@@ -75,6 +75,9 @@ class PipelineConfig:
     seed: int = 0
     simulations: int = 64
     c_puct: float = 1.5
+    dirichlet_alpha: float = 0.3
+    root_noise_fraction: float = 0.25
+    add_root_noise: bool = True
     temperature_moves: int = 24
     max_moves: int = 512
     poll_seconds: float = 2.0
@@ -91,6 +94,29 @@ class PipelineConfig:
     device: str = "auto"
     gate_games: int = 20
     gate_threshold: float = 0.55
+    seed_stream_version: str = "setup-seed-stream-v1"
+    training_config_path: str | None = None
+    training_config_hash: str | None = None
+    network_config_id: str = "legacy-runtime"
+
+    @classmethod
+    def from_training_config(
+        cls,
+        path: str | Path,
+        *,
+        players: int = 4,
+        root: str | Path | None = None,
+        seed: int | None = None,
+        overrides: dict[str, Any] | None = None,
+    ) -> "PipelineConfig":
+        from gaiazero.config import load_training_config
+
+        return load_training_config(path).pipeline_config(
+            players,
+            root=root,
+            seed=seed,
+            overrides=overrides,
+        )
 
     def __post_init__(self) -> None:
         if self.players not in (2, 3, 4):
@@ -113,8 +139,16 @@ class PipelineConfig:
                 raise ValueError(f"{name} must be positive")
         if self.poll_seconds <= 0:
             raise ValueError("poll_seconds must be positive")
+        if self.dirichlet_alpha <= 0:
+            raise ValueError("dirichlet_alpha must be positive")
+        if not 0.0 <= self.root_noise_fraction <= 1.0:
+            raise ValueError("root_noise_fraction must be between zero and one")
         if not 0.0 < self.gate_threshold <= 1.0:
             raise ValueError("gate_threshold must be in (0, 1]")
+        if not self.seed_stream_version or "|" in self.seed_stream_version:
+            raise ValueError("seed_stream_version must be non-empty and may not contain '|'")
+        if self.training_config_path is not None and not self.training_config_path:
+            raise ValueError("training_config_path must not be empty")
 
     def json_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -204,8 +238,17 @@ def save_pipeline_config(config: PipelineConfig) -> Path:
     return path
 
 
-def load_pipeline_config(path: str | Path) -> PipelineConfig:
-    payload = _read_json(Path(path), {})
+def load_pipeline_config(
+    path: str | Path,
+    *,
+    players: int | None = None,
+) -> PipelineConfig:
+    source_path = Path(path)
+    payload = _read_json(source_path, {})
+    if "config_version" in payload and "training" in payload:
+        from gaiazero.config import load_training_config
+
+        return load_training_config(source_path).pipeline_config(players or 4)
     payload.pop("format", None)
     # Older pipeline files may contain the removed ruleset selector. The
     # current pipeline always runs the standard GaiaState environment.
@@ -226,7 +269,11 @@ def _game_components():
 
 def _network_config(config: PipelineConfig) -> tuple[type, NetworkConfig]:
     state_type, _baseline = _game_components()
-    template = state_type.initial(config.players, config.seed)
+    template = state_type.initial(
+        config.players,
+        config.seed,
+        seed_stream_version=config.seed_stream_version,
+    )
     network = NetworkConfig(
         observation_size=template.observation_size,
         action_size=template.action_size,
@@ -242,6 +289,8 @@ def _search_config(config: PipelineConfig, seed: int) -> SearchConfig:
     return SearchConfig(
         simulations=config.simulations,
         c_puct=config.c_puct,
+        dirichlet_alpha=config.dirichlet_alpha,
+        root_noise_fraction=config.root_noise_fraction,
         seed=seed,
     )
 
@@ -698,7 +747,11 @@ def run_selfplay(config: PipelineConfig, *, once: bool = False) -> int:
                 seed=seed,
                 weight=source[0],
             )
-            initial = state_type.initial(config.players, seed)
+            initial = state_type.initial(
+                config.players,
+                seed,
+                seed_stream_version=config.seed_stream_version,
+            )
             trace_started = time.perf_counter()
             trace_steps: list[dict[str, Any]] = [{
                 "move": 0,
@@ -755,6 +808,7 @@ def run_selfplay(config: PipelineConfig, *, once: bool = False) -> int:
                 SelfPlayConfig(
                     temperature_moves=config.temperature_moves,
                     max_moves=config.max_moves,
+                    add_root_noise=config.add_root_noise,
                     seed=seed,
                 ),
                 observer=observe_move,
@@ -782,6 +836,9 @@ def run_selfplay(config: PipelineConfig, *, once: bool = False) -> int:
                     "rules_version": RULES_VERSION,
                     "terminal_valid": bool(result.final_state.is_terminal),
                     "architecture": expected_network.architecture,
+                    "network_config_id": config.network_config_id,
+                    "training_config_path": config.training_config_path,
+                    "training_config_hash": config.training_config_hash,
                     "moves": len(result.actions),
                     "weight": source[0],
                     "history_format": "gaiazero-replay-trace-v1",
@@ -994,8 +1051,11 @@ def run_train(config: PipelineConfig, *, once: bool = False) -> int:
             metadata = {
                 "pipeline_generation": generation,
                 "players": config.players,
-                "ruleset": "standard-v22",
+                "ruleset": RULES_VERSION,
                 "architecture": model.architecture,
+                "network_config_id": config.network_config_id,
+                "training_config_path": config.training_config_path,
+                "training_config_hash": config.training_config_hash,
                 "replay_positions": len(replay),
                 "updates": updates,
                 "loss": metrics.loss,
@@ -1116,6 +1176,7 @@ def run_gatekeeper(config: PipelineConfig, *, once: bool = False) -> int:
                     lambda seed: state_type.initial(
                         config.players,
                         config.seed + 100_000 + seed,
+                        seed_stream_version=config.seed_stream_version,
                     ),
                     NetworkEvaluator(challenger_model, config.device),
                     NetworkEvaluator(champion_model, config.device),
@@ -1413,6 +1474,13 @@ def _add_config_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--simulations", type=int, default=64)
     parser.add_argument("--c-puct", type=float, default=1.5)
+    parser.add_argument("--dirichlet-alpha", type=float, default=0.3)
+    parser.add_argument("--root-noise-fraction", type=float, default=0.25)
+    parser.add_argument(
+        "--add-root-noise",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
     parser.add_argument("--temperature-moves", type=int, default=24)
     parser.add_argument("--max-moves", type=int, default=512)
     parser.add_argument("--poll-seconds", type=float, default=2.0)
@@ -1448,11 +1516,13 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.config is not None:
-        config = load_pipeline_config(args.config)
+        config = load_pipeline_config(args.config, players=args.players)
     else:
         values = {
-            field: getattr(args, field)
+            field: getattr(args, field, PipelineConfig.__dataclass_fields__[field].default)
             for field in PipelineConfig.__dataclass_fields__
+            if PipelineConfig.__dataclass_fields__[field].default
+            is not MISSING
         }
         config = PipelineConfig(**values)
     workers = {

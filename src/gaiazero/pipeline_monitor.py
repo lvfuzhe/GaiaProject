@@ -132,6 +132,8 @@ def _pipeline_config(payload: dict[str, Any], default_root: Path) -> PipelineCon
         "weight_decay",
         "gate_threshold",
     }
+    bool_fields = {"add_root_noise"}
+    nullable_fields = {"training_config_path", "training_config_hash"}
     for name in PipelineConfig.__dataclass_fields__:
         if name not in payload:
             continue
@@ -142,6 +144,10 @@ def _pipeline_config(payload: dict[str, Any], default_root: Path) -> PipelineCon
             values[name] = int(value)
         elif name in float_fields:
             values[name] = float(value)
+        elif name in bool_fields:
+            values[name] = bool(value)
+        elif name in nullable_fields:
+            values[name] = None if value is None else str(value)
         else:
             values[name] = str(value)
     values.setdefault("root", default_root)
@@ -323,4 +329,3 @@ class PipelineSupervisor:
         for handle in self._workers.values():
             if handle.process.poll() is not None and not handle.log.closed:
                 handle.log.close()
-

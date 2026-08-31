@@ -17,6 +17,25 @@
     "max_active_profiles": 1,
     "process_count_per_profile": 5
   },
+  "pipeline": {
+    "seed": 0,
+    "simulations": 128,
+    "c_puct": 1.5,
+    "dirichlet_alpha": 0.3,
+    "root_noise_fraction": 0.25,
+    "add_root_noise": true,
+    "temperature_moves": 24,
+    "max_moves": 512,
+    "poll_seconds": 10.0,
+    "games_per_cycle": 1,
+    "shuffle_pack_size": 4096,
+    "replay_capacity": 200000,
+    "updates_per_cycle": 32,
+    "min_replay": 200000,
+    "gate_games": 20,
+    "gate_threshold": 0.55,
+    "device": "cuda:0"
+  },
   "training": {
     "optimizer": "adamw",
     "learning_rate": 0.0003,

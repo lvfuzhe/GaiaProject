@@ -5,6 +5,7 @@ from pathlib import Path
 
 from gaiazero.arena import evaluate_against, play_arena_game
 from gaiazero.dashboard import serve_dashboard
+from gaiazero.config import load_training_config
 from gaiazero.distributed import PipelineConfig, run_pipeline
 from gaiazero.npz_history import convert_npz_directory, convert_npz_to_history, delete_training_history
 from gaiazero.game import (
@@ -58,6 +59,10 @@ def command_dashboard(args: argparse.Namespace) -> None:
 
 def command_pipeline(args: argparse.Namespace) -> None:
     """Run the five asynchronous GaiaZero multiplayer workers."""
+    if args.training_config is not None:
+        config = load_training_config(args.training_config).pipeline_config(args.players)
+        run_pipeline(config)
+        return
     run_pipeline(
         PipelineConfig(
             root=Path(args.root),
@@ -65,6 +70,9 @@ def command_pipeline(args: argparse.Namespace) -> None:
             seed=args.seed,
             simulations=args.simulations,
             c_puct=args.c_puct,
+            dirichlet_alpha=args.dirichlet_alpha,
+            root_noise_fraction=args.root_noise_fraction,
+            add_root_noise=args.add_root_noise,
             temperature_moves=args.temperature_moves,
             max_moves=args.max_moves,
             poll_seconds=args.poll_seconds,
@@ -187,6 +195,13 @@ def build_parser() -> argparse.ArgumentParser:
     pipeline.add_argument("--seed", type=int, default=0)
     pipeline.add_argument("--simulations", type=int, default=64)
     pipeline.add_argument("--c-puct", type=float, default=1.5)
+    pipeline.add_argument("--dirichlet-alpha", type=float, default=0.3)
+    pipeline.add_argument("--root-noise-fraction", type=float, default=0.25)
+    pipeline.add_argument(
+        "--add-root-noise",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
     pipeline.add_argument("--temperature-moves", type=int, default=24)
     pipeline.add_argument("--max-moves", type=int, default=512)
     pipeline.add_argument("--poll-seconds", type=float, default=2.0)
@@ -203,6 +218,12 @@ def build_parser() -> argparse.ArgumentParser:
     pipeline.add_argument("--device", default="auto")
     pipeline.add_argument("--gate-games", type=int, default=20)
     pipeline.add_argument("--gate-threshold", type=float, default=0.55)
+    pipeline.add_argument(
+        "--training-config",
+        type=Path,
+        default=None,
+        help="load runtime, seed-stream and network settings from gaia-training.json",
+    )
     pipeline.set_defaults(handler=command_pipeline)
 
     npz_history = subparsers.add_parser(
