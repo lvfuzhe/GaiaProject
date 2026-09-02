@@ -1,28 +1,39 @@
 #include "gaiazero/contracts.hpp"
+#include "gaiazero/gaia_state.hpp"
 #include "gaiazero/inference.hpp"
 #include "gaiazero/onnxruntime_backend.hpp"
+#include "gaiazero/sha256.hpp"
 
-#include <cassert>
 #include <iostream>
 #include <stdexcept>
+
+namespace {
+
+void require(bool condition) {
+    if (!condition) throw std::runtime_error("smoke test requirement failed");
+}
+
+}  // namespace
 
 int main() {
     using namespace gaiazero;
 
     static_assert(kActionTypeCount == 54);
-    assert(kRulesVersion == "standard-v22");
-    assert(action_type_id(ActionType::build_mine) == 0);
-    assert(action_type_id(ActionType::legacy_action) == 53);
-    assert(action_type_name(ActionType::research) == "research");
-    assert(action_type_name(static_cast<ActionType>(99)).empty());
+    require(kRulesVersion == "standard-v22");
+    require(action_type_id(ActionType::build_mine) == 0);
+    require(action_type_id(ActionType::legacy_action) == 53);
+    require(action_type_name(ActionType::research) == "research");
+    require(action_type_name(static_cast<ActionType>(99)).empty());
+    require(sha256_hex("abc") ==
+           "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
 
     const auto mine = ActionTuple::create(ActionType::build_mine, {3, 17});
     const auto same_mine = ActionTuple::create(ActionType::build_mine, {3, 17});
     const auto other_mine = ActionTuple::create(ActionType::build_mine, {3, 18});
-    assert(mine.valid());
-    assert(mine.arguments[2] == -1);
-    assert(mine == same_mine);
-    assert(mine != other_mine);
+    require(mine.valid());
+    require(mine.arguments[2] == -1);
+    require(mine == same_mine);
+    require(mine != other_mine);
 
     bool rejected_action = false;
     try {
@@ -31,7 +42,7 @@ int main() {
     } catch (const std::invalid_argument&) {
         rejected_action = true;
     }
-    assert(rejected_action);
+    require(rejected_action);
 
     GraphBatch batch;
     batch.shape = GraphShape{2, 8, 12, 3, 4, 5, 6};
@@ -52,16 +63,114 @@ int main() {
     } catch (const std::invalid_argument&) {
         rejected = true;
     }
-    assert(rejected);
+    require(rejected);
 
     bool backend_unavailable = false;
     try {
         OnnxRuntimeCpuBackend backend(std::filesystem::path{});
-        assert(backend.name() == "onnxruntime-cpu");
+        require(backend.name() == "onnxruntime-cpu");
     } catch (const std::exception&) {
         backend_unavailable = true;
     }
-    assert(backend_unavailable);
+    require(backend_unavailable);
+
+    // Rules/state contract: value copies are safe MCTS branches and every
+    // legal state transition changes the state hash deterministically.
+    auto state = GaiaState::initial(2, 20260828);
+    require(!state.is_terminal());
+    require(state.state_hash().size() == 64);
+    require(state.setup_hash.size() == 64);
+    require(state.setup_hash != GaiaState::initial(2, 20260829).setup_hash);
+    require(state_hash_from_canonical_json(state.canonical_json()) == state.state_hash());
+    require(state.state_hash() == GaiaState::initial(2, 20260828).state_hash());
+    require(state.setup_seed_streams[0].first == "map");
+    require(state.setup_seed_streams[0].second == 20260828ULL);
+    require(state.setup_seed_streams[1].first == "factions");
+    require(state.setup_seed_streams[1].second == 10232423578781582718ULL);
+    const auto placement_actions = state.legal_action_tuples();
+    require(!placement_actions.empty());
+    const auto placed = state.apply(placement_actions.front());
+    require(placed.state_hash() != state.state_hash());
+    require(state.owners[static_cast<std::size_t>(placement_actions.front().arguments[0])] < 0);
+
+    // Finish setup using the first legal choice at every decision point.
+    auto setup_state = state;
+    while (!setup_state.is_terminal() &&
+           (setup_state.is_starting_placement() || setup_state.is_booster_selection())) {
+        const auto actions = setup_state.legal_action_tuples();
+        require(!actions.empty());
+        setup_state = setup_state.apply(actions.front());
+    }
+    require(setup_state.round_number == 1);
+    const auto round_actions = setup_state.legal_action_tuples();
+    require(!round_actions.empty());
+    const auto after_pass = setup_state.apply(round_actions.back());
+    require(after_pass.state_hash() != setup_state.state_hash());
+    require(state_hash_from_canonical_json("{\"a\":1}") ==
+           "5fcacb6679bf9140ede62a21078c25157798fd6d2485649c9898de1cb567543c");
+
+    bool checked_xenos = false;
+    bool checked_taklons = false;
+    bool checked_ivits = false;
+    bool checked_lantids = false;
+    for (std::int64_t seed = 0; seed < 256 &&
+         !(checked_xenos && checked_taklons && checked_ivits && checked_lantids); ++seed) {
+        auto candidate = GaiaState::initial(2, seed);
+        for (int player = 0; player < candidate.player_count; ++player) {
+            const auto& info = candidate.players[static_cast<std::size_t>(player)];
+            if (info.faction == 2) checked_xenos = true;
+            if (info.faction == 4) {
+                require(info.brainstone_bowl == 1);
+                require(info.bowl_one == 3);
+                checked_taklons = true;
+            }
+            if (info.faction == 7) checked_ivits = true;
+            if (info.faction == 1) {
+                for (const int level : info.tracks) require(level == 0);
+                checked_lantids = true;
+            }
+        }
+        while (candidate.is_starting_placement() || candidate.is_booster_selection()) {
+            const auto actions = candidate.legal_action_tuples();
+            require(!actions.empty());
+            candidate = candidate.apply(actions.front());
+        }
+        for (int player = 0; player < candidate.player_count; ++player) {
+            const auto faction = candidate.players[static_cast<std::size_t>(player)].faction;
+            if (faction == 2) {
+                require(candidate.starting_planet_count[static_cast<std::size_t>(player)] == 3);
+                // The third Xenos mine uncovers no extra ore income: 1 + 3 - 1 = 3.
+                int booster = -1;
+                for (int index = 0; index < kBoosterCount; ++index)
+                    if (candidate.booster_owner[static_cast<std::size_t>(index)] == player) booster = index;
+                const int booster_ore = booster == 2 || booster == 3 || booster == 5 || booster == 6 ? 1 : 0;
+                require(candidate.players[static_cast<std::size_t>(player)].ore == 7 + booster_ore);
+            }
+            if (faction == 7) {
+                require(candidate.starting_planet_count[static_cast<std::size_t>(player)] == 1);
+                const int planet = candidate.starting_planets[static_cast<std::size_t>(player)][0];
+                require(candidate.buildings[static_cast<std::size_t>(planet)] ==
+                        static_cast<int>(Building::planetary_institute));
+            }
+        }
+    }
+    require(checked_xenos && checked_taklons && checked_ivits && checked_lantids);
+
+    auto complete_game = setup_state;
+    int pass_decisions = 0;
+    while (!complete_game.is_terminal()) {
+        const auto actions = complete_game.legal_action_tuples();
+        require(!actions.empty());
+        const auto& pass = actions.back();
+        require(pass.action_type == ActionType::pass_booster ||
+                pass.action_type == ActionType::pass_final);
+        complete_game = complete_game.apply(pass);
+        require(++pass_decisions <= kMaxRounds * complete_game.player_count);
+    }
+    require(complete_game.round_number == kMaxRounds + 1);
+    const auto final_scores = complete_game.final_scores();
+    for (int player = 0; player < complete_game.player_count; ++player)
+        require(final_scores[static_cast<std::size_t>(player)] > 0.0);
 
     std::cout << "gaiazero_cpp_smoke ok\n";
     return 0;

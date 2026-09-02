@@ -201,7 +201,7 @@ python -m unittest discover -s tests -v
 
 ## C++/CMake 基础工程
 
-仓库同时提供一个可独立编译的 C++20 基础工程，用于后续 C++ selfplay、规则引擎和 TensorRT 推理适配。当前默认只构建契约与推理接口 smoke 测试，不要求 NVIDIA GPU、CUDA 或 TensorRT SDK。
+仓库同时提供一个可独立编译的 C++20 基础工程，用于后续 C++ selfplay 和 TensorRT 推理。当前包含 `ActionTuple` 契约、C++ `GaiaState` P0 规则状态机、`state-hash-v1` SHA-256 实现、推理接口与 smoke 测试；默认构建不要求 NVIDIA GPU、CUDA 或 TensorRT SDK。
 
 在 VS2026 Build Tools 的 Developer PowerShell 中运行：
 

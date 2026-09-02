@@ -25,6 +25,8 @@ add_library(gaiazero_core
     cpp/src/contracts.cpp
     cpp/src/inference.cpp
     cpp/src/onnxruntime_backend.cpp
+    cpp/src/sha256.cpp
+    cpp/src/gaia_state.cpp
 )
 add_library(gaiazero::core ALIAS gaiazero_core)
 

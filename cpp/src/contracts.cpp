@@ -1,9 +1,19 @@
 #include "gaiazero/contracts.hpp"
+#include "gaiazero/sha256.hpp"
 
 #include <algorithm>
 #include <stdexcept>
 
 namespace gaiazero {
+
+std::string state_hash_from_canonical_json(std::string_view canonical_json) {
+    const std::string envelope =
+        R"({"rules_version":")" + std::string(kRulesVersion) +
+        R"(","state":)" +
+        std::string(canonical_json) +
+        R"(,"state_hash_version":")" + std::string(kStateHashVersion) + R"("})";
+    return sha256_hex(envelope);
+}
 
 ActionTuple ActionTuple::create(
     ActionType type,

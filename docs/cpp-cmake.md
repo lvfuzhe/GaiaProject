@@ -6,7 +6,9 @@
 - 固定尺寸的 `GraphBatch`，对应 Python GNN/ONNX 的节点、边、玩家和 mask 输入。
 - `InferenceBackend` 抽象，后续 ONNX Runtime/TensorRT 后端都通过同一接口接入。
 - `OnnxRuntimeCpuBackend` 参考后端：加载模型时校验固定输入/输出签名，执行 CPU 推理并返回四个 head 的 logits。
-- CTest smoke 测试，验证契约编号、tuple canonicalization 和张量尺寸。
+- `GaiaState` C++ 规则基线：值语义状态复制、初始种族/蛇形放置、助推选择、航程与改造成本、建矿、科研收益、回合收入、结束回合、终局推进与终局计分。
+- `state-hash-v1`：对规范化状态 JSON 使用 SHA-256；哈希覆盖地图、玩家资源/科技、公共板块、待决策字段和回合顺序。
+- CTest smoke 测试，验证契约编号、tuple canonicalization、状态转换/哈希和张量尺寸。
 
 CUDA、ONNX Runtime 和 TensorRT 都是可选 SDK，默认关闭；因此当前没有 NVIDIA GPU 或 CUDA/TensorRT SDK 也可以编译和测试。
 
@@ -50,4 +52,4 @@ gaiazero::NetworkOutput output = backend.infer(graph_batch);
 cmake --preset windows-msvc-ninja -DGAIA_ENABLE_CUDA=ON
 ```
 
-当前 C++ 工程尚未迁移完整 Gaia 规则、MCTS、selfplay 或 gatekeeper；这些模块会在契约稳定后逐步接入，Python/PyTorch 训练仍是现阶段的参考实现。
+当前 C++ 规则是可运行的 P0 基线，已覆盖状态机和核心建矿流程；完整 BGA 星图生成、所有科技/联邦/种族特殊动作、观察编码、MCTS、selfplay 和 gatekeeper 仍以 Python 参考实现为准，后续按 pending-execution 文档逐项迁移。C++ 状态哈希字段契约已冻结，跨语言逐状态 golden 对齐仍需在完整地图/规则迁移后完成。

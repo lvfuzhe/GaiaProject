@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
+#include <string>
 #include <string_view>
 
 namespace gaiazero {
@@ -105,6 +106,8 @@ constexpr std::string_view action_type_name(ActionType type) noexcept {
     return is_valid_action_type(type) ? kActionTypeNames[action_type_id(type)]
                                       : std::string_view{};
 }
+
+[[nodiscard]] std::string state_hash_from_canonical_json(std::string_view canonical_json);
 
 struct ActionTuple {
     ActionType action_type{ActionType::legacy_action};
