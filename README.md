@@ -198,3 +198,17 @@ tests/                          规则、搜索和训练回归测试
 $env:PYTHONPATH = "src"
 python -m unittest discover -s tests -v
 ```
+
+## C++/CMake 基础工程
+
+仓库同时提供一个可独立编译的 C++20 基础工程，用于后续 C++ selfplay、规则引擎和 TensorRT 推理适配。当前默认只构建契约与推理接口 smoke 测试，不要求 NVIDIA GPU、CUDA 或 TensorRT SDK。
+
+在 VS2026 Build Tools 的 Developer PowerShell 中运行：
+
+```powershell
+cmake --preset windows-msvc-ninja
+cmake --build --preset windows-msvc-ninja
+ctest --preset windows-msvc-ninja
+```
+
+普通 PowerShell 可先加载 `VC\Auxiliary\Build\vcvars64.bat`，完整说明见 [`docs/cpp-cmake.md`](docs/cpp-cmake.md)。CUDA、ONNX Runtime 和 TensorRT 通过 `GAIA_ENABLE_CUDA`、`GAIA_ENABLE_ORT_CPU`、`GAIA_ENABLE_TENSORRT` 可选开关接入，SDK 根目录分别由 CMake/CUDA 环境、`ONNXRUNTIME_ROOT`、`TENSORRT_ROOT` 指定。

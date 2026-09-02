@@ -1,0 +1,61 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "ninja-cpu-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_CXX_STANDARD": "20",
+        "GAIA_BUILD_TESTS": "ON",
+        "GAIA_ENABLE_CUDA": "OFF",
+        "GAIA_ENABLE_ORT_CPU": "OFF",
+        "GAIA_ENABLE_TENSORRT": "OFF"
+      }
+    },
+    {
+      "name": "windows-msvc-ninja",
+      "displayName": "Windows MSVC + Ninja (CPU baseline)",
+      "inherits": "ninja-cpu-base",
+      "binaryDir": "${sourceDir}/build/cpp-msvc"
+    },
+    {
+      "name": "cpu-baseline",
+      "displayName": "Portable CPU baseline",
+      "inherits": "ninja-cpu-base",
+      "binaryDir": "${sourceDir}/build/cpp-cpu"
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-msvc-ninja",
+      "configurePreset": "windows-msvc-ninja"
+    },
+    {
+      "name": "cpu-baseline",
+      "configurePreset": "cpu-baseline"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-msvc-ninja",
+      "configurePreset": "windows-msvc-ninja",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "cpu-baseline",
+      "configurePreset": "cpu-baseline",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

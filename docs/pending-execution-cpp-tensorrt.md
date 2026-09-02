@@ -2,6 +2,8 @@
 
 本文档记录下一阶段的目标架构和分步执行顺序。当前仓库仍运行五个 Python 进程；本文档中的步骤全部是待执行项，完成前不得把目标架构标记为已部署。
 
+已完成的前置基础：仓库根目录的 C++20/CMake 工程（`CMakeLists.txt`、`CMakePresets.json`、`cpp/`）已可在无 CUDA 的 CPU 环境编译，并通过契约/张量尺寸 smoke 测试。它只冻结跨语言接口，不代表 C++ 规则、MCTS、selfplay、TensorRT 或 gatekeeper 已迁移。
+
 ## 目标架构
 
 ```text
