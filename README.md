@@ -211,4 +211,4 @@ cmake --build --preset windows-msvc-ninja
 ctest --preset windows-msvc-ninja
 ```
 
-普通 PowerShell 可先加载 `VC\Auxiliary\Build\vcvars64.bat`，完整说明见 [`docs/cpp-cmake.md`](docs/cpp-cmake.md)。CUDA、ONNX Runtime 和 TensorRT 通过 `GAIA_ENABLE_CUDA`、`GAIA_ENABLE_ORT_CPU`、`GAIA_ENABLE_TENSORRT` 可选开关接入，SDK 根目录分别由 CMake/CUDA 环境、`ONNXRUNTIME_ROOT`、`TENSORRT_ROOT` 指定。
+普通 PowerShell 可先加载 `VC\Auxiliary\Build\vcvars64.bat`，完整说明见 [`docs/cpp-cmake.md`](docs/cpp-cmake.md)。CUDA、ONNX Runtime 和 TensorRT 通过 `GAIA_ENABLE_CUDA`、`GAIA_ENABLE_ORT_CPU`、`GAIA_ENABLE_TENSORRT` 可选开关接入，SDK 根目录分别由 CMake/CUDA 环境、`ONNXRUNTIME_ROOT`、`TENSORRT_ROOT` 指定。启用 ONNX Runtime 后，`gaiazero::OnnxRuntimeCpuBackend` 会校验模型签名并执行 CPU 参考推理。

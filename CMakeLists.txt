@@ -24,6 +24,7 @@ endif()
 add_library(gaiazero_core
     cpp/src/contracts.cpp
     cpp/src/inference.cpp
+    cpp/src/onnxruntime_backend.cpp
 )
 add_library(gaiazero::core ALIAS gaiazero_core)
 
@@ -48,11 +49,31 @@ if(GAIA_ENABLE_ORT_CPU)
     if(NOT ONNXRUNTIME_ROOT)
         message(FATAL_ERROR "GAIA_ENABLE_ORT_CPU=ON requires -DONNXRUNTIME_ROOT=<SDK root>")
     endif()
-    if(NOT EXISTS "${ONNXRUNTIME_ROOT}/include/onnxruntime_cxx_api.h")
-        message(FATAL_ERROR "ONNXRUNTIME_ROOT does not contain include/onnxruntime_cxx_api.h")
+    find_path(ONNXRUNTIME_INCLUDE_DIR
+        NAMES onnxruntime_cxx_api.h
+        PATHS
+            "${ONNXRUNTIME_ROOT}/include"
+            "${ONNXRUNTIME_ROOT}/include/onnxruntime/core/session"
+        NO_DEFAULT_PATH
+    )
+    if(NOT ONNXRUNTIME_INCLUDE_DIR)
+        message(FATAL_ERROR "ONNXRUNTIME_ROOT does not contain onnxruntime_cxx_api.h")
+    endif()
+    find_library(ONNXRUNTIME_LIBRARY
+        NAMES onnxruntime
+        PATHS
+            "${ONNXRUNTIME_ROOT}/lib"
+            "${ONNXRUNTIME_ROOT}/lib/win-x64"
+            "${ONNXRUNTIME_ROOT}/runtimes/win-x64/native"
+            "${ONNXRUNTIME_ROOT}/build/Windows/Release"
+        NO_DEFAULT_PATH
+    )
+    if(NOT ONNXRUNTIME_LIBRARY)
+        message(FATAL_ERROR "Could not find the ONNX Runtime library under ONNXRUNTIME_ROOT")
     endif()
     add_library(gaiazero_onnxruntime INTERFACE)
-    target_include_directories(gaiazero_onnxruntime INTERFACE "${ONNXRUNTIME_ROOT}/include")
+    target_include_directories(gaiazero_onnxruntime INTERFACE "${ONNXRUNTIME_INCLUDE_DIR}")
+    target_link_libraries(gaiazero_onnxruntime INTERFACE "${ONNXRUNTIME_LIBRARY}")
     target_compile_definitions(gaiazero_core PUBLIC GAIA_HAS_ONNXRUNTIME=1)
     target_link_libraries(gaiazero_core PUBLIC gaiazero_onnxruntime)
 endif()
@@ -78,6 +99,25 @@ if(GAIA_BUILD_TESTS)
         target_compile_options(gaiazero_cpp_smoke PRIVATE /W4 /permissive-)
     else()
         target_compile_options(gaiazero_cpp_smoke PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    if(GAIA_ENABLE_ORT_CPU AND WIN32)
+        find_file(ONNXRUNTIME_RUNTIME_LIBRARY
+            NAMES onnxruntime.dll
+            PATHS
+                "${ONNXRUNTIME_ROOT}/lib"
+                "${ONNXRUNTIME_ROOT}/lib/win-x64"
+                "${ONNXRUNTIME_ROOT}/runtimes/win-x64/native"
+                "${ONNXRUNTIME_ROOT}/build/Windows/Release"
+            NO_DEFAULT_PATH
+        )
+        if(ONNXRUNTIME_RUNTIME_LIBRARY)
+            add_custom_command(TARGET gaiazero_cpp_smoke POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${ONNXRUNTIME_RUNTIME_LIBRARY}"
+                    "$<TARGET_FILE_DIR:gaiazero_cpp_smoke>"
+                VERBATIM
+            )
+        endif()
     endif()
     add_test(NAME gaiazero_cpp_smoke COMMAND gaiazero_cpp_smoke)
 endif()

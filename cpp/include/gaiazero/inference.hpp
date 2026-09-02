@@ -23,7 +23,7 @@ struct GraphShape {
     [[nodiscard]] bool valid() const noexcept;
 };
 
-// Fixed padded graph tensors match the Python GNN/ONNX boundary. A future
+// Fixed padded graph tensors match the Python GNN/ONNX boundary. The C++
 // rules encoder fills these vectors; backends never inspect Python objects.
 struct GraphBatch {
     GraphShape shape;
@@ -54,4 +54,3 @@ public:
 };
 
 }  // namespace gaiazero
-

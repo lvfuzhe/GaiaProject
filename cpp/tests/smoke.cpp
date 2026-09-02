@@ -1,5 +1,6 @@
 #include "gaiazero/contracts.hpp"
 #include "gaiazero/inference.hpp"
+#include "gaiazero/onnxruntime_backend.hpp"
 
 #include <cassert>
 #include <iostream>
@@ -52,6 +53,15 @@ int main() {
         rejected = true;
     }
     assert(rejected);
+
+    bool backend_unavailable = false;
+    try {
+        OnnxRuntimeCpuBackend backend(std::filesystem::path{});
+        assert(backend.name() == "onnxruntime-cpu");
+    } catch (const std::exception&) {
+        backend_unavailable = true;
+    }
+    assert(backend_unavailable);
 
     std::cout << "gaiazero_cpp_smoke ok\n";
     return 0;

@@ -20,7 +20,7 @@ Python train
   -> Python shuffle -> Python train
 ```
 
-ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，不引入 ONNX Runtime。TensorRT engine 可以在 C++ 进程启动时从 ONNX 构建，并按模型哈希缓存；缓存不是训练和模型发布的权威文件，权威模型仍是通过守门的 ONNX 文件。
+ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，生产 selfplay/gatekeeper 不引入 ONNX Runtime。当前额外提供的 `OnnxRuntimeCpuBackend` 仅用于无 GPU 环境的 CPU 参考推理、签名校验和 golden 对齐，不参与生产闭环。TensorRT engine 可以在 C++ 进程启动时从 ONNX 构建，并按模型哈希缓存；缓存不是训练和模型发布的权威文件，权威模型仍是通过守门的 ONNX 文件。
 
 本阶段直接采用星图 GNN + 玩家/科技/公共板块混合网络，不保留其他网络表示架构的评估或实施任务。
 
