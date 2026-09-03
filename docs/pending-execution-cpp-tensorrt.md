@@ -89,13 +89,14 @@ ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，生产 selfplay/gate
 
 本轮 setup 决策已经闭合，不再存在需要产品确认的分布冲突：星图沿用当前随机算法并按 BGA 合法性参考；种族、科技、计分片、助推片和联邦片使用 `setup-seed-stream-v1` 的通用无放回随机；地图流使用 root seed 兼容策略，其余流按名称独立派生。
 
-仍需完善的是工程验收，不是规则选择：
+已经完成并验证的工程基础：
 
-- 生成并冻结四种人数/地图变体的 BGA 星图 golden fixture；在完成前只能声称“当前算法可复现”，不能声称已验证 BGA 统计等价。
-- 把配置加载器接入运行时，确保代码使用的 seed stream 版本与 `gaia-training.json` 一致，禁止代码常量和配置漂移。
-- 在 raw NPZ、C++ 状态摘要和历史回放中统一写入 `setup_seed_stream_version`、各流 seed、`setup_hash`，并验证 Python/C++ hash 完全一致。
-- 修订依赖旧随机样本的规则测试：测试应显式固定种族/板块，或只断言规则不变量，不能假设默认 seed 的助推片和随机种族；当前完整测试仍有 5 个此类 fixture 失败（其余 `200 passed, 69 subtests passed`）。
-- 完成 C++ 初始设置、组件随机、状态哈希和 golden fixture 对齐后，才可勾选第 5、6、7 步的跨语言验收。
+- 已生成四种人数/地图变体的 BGA 星图 golden fixture，位于 `tests/fixtures/bga_setup_golden.json`；它验证固定样本契约，不代表已经完成对 BGA 概率分布的统计等价证明。
+- `gaia-training.json` 配置加载器、版本化 seed stream、`standard-v22`、参数化 `ActionTuple`、完整轨迹 NPZ、PyTorch GNN、SWA、ONNX 导出与 CPU golden fixture 已落地。
+- 依赖旧随机样本的 5 个 fixture 测试已经修复，规则基线恢复全绿。
+- C++ 已有 P0 状态机、`state-hash-v1` 和与当前 Python GNN 输入布局一致的 `GaiaState -> GraphBatch` 编码器，并已通过无 CUDA 的 CTest。
+
+当前最前面的未完成项是跨语言完整规则验收：C++ 星图仍是可复现 scaffold，尚未与 Python 的 BGA 星图生成、全部特殊规则、合法动作集合和逐状态 hash 做 golden 对齐；因此第 5 步整体尚未验收，第 6、7 步也不能开始生产实现。
 
 ## 与 KataGo 的适配对照
 
@@ -488,13 +489,14 @@ Gaia 的一次规则行动可能展开为多次兑换、选板块、充能确认
 - [x] 将 `GaiaState` 的状态字段、玩家顺序、地图坐标、资源、科技、联邦、助推和待决策状态映射为 C++ 数据结构（`cpp/include/gaiazero/gaia_state.hpp`）。
 - [x] 首版 C++ P0 状态机：种族初始资源/能力标志、蛇形初始放置、Ivits 单基地 PI、助推选择、航程/改造成本、Lantids 共存建矿、科研即时收益、结束回合、收入推进、终局边界和终局计分。
 - [x] 实现 C++ `state-hash-v1`：规范化状态 JSON + SHA-256，覆盖所有已建模数组、玩家字段、setup seed streams 和 pending 决策字段。
-- [ ] 实现与 Python 一致的初始设置、版本化 seed stream、随机种子、合法动作生成、动作应用、终局返回值和观察编码。
+- [x] 实现 C++ `GaiaState -> GraphBatch` 编码器：固定 `128` 节点、`512` 边、`16` 类关系及显式 mask；节点顺序、有向邻接、公共 observation 前缀、玩家绝对座位顺序和归一化常数与 `graph_inputs_from_state()` 一致。
+- [ ] 实现与 Python 一致的初始设置、版本化 seed stream、随机种子、完整合法动作生成、动作应用和终局返回值。
 - [ ] 实现与 Python 共用定义的 `semantic_decision_id`、动作类别和 forced-step 判定；自动执行只消除无选择步骤，不能越过充能接受/拒绝、资源组合、板块选择等真实决策。
 - [ ] 明确 C++ 状态复制/撤销策略，优先使用紧凑数组、结构共享或可回滚状态，避免每个节点深拷贝大对象。
 - [ ] 为每一类动作建立 Python/C++ 双向序列化和逐状态对比测试。
 - [ ] 定义完整状态哈希，覆盖当前玩家、待决策类型、offset、资源、科技、板块、星图和影响后续合法动作/收益的所有状态；使用固定种子执行短局、完整局和边界规则测试，比较合法动作集合、资源、VP、终局、状态哈希和 NPZ trace。
 
-说明：P0 哈希算法和 C++ 字段契约已经实现，但当前星图仍是可复现的坐标 scaffold，完整 BGA setup 与全部 Python 规则迁移完成后，必须补充 Python/C++ golden fixture 逐状态哈希对照，届时才能勾选跨语言一致性验收。
+说明：P0 哈希算法、C++ 字段契约和 GNN v1 编码器已经实现，但当前星图仍是可复现的坐标 scaffold。编码器当前严格覆盖生产配置使用的 `16` 维公共 observation 前缀；如果以后扩大公共特征维度，必须先冻结新增 schema 并同步扩展 Python/C++。完整 BGA setup 与全部 Python 规则迁移完成后，还必须补充 Python/C++ golden fixture 的逐状态哈希与完整张量对照，届时才能勾选跨语言一致性验收。
 
 验收：C++ 与 Python 在 golden fixtures 和随机短局上产生相同的状态摘要、合法动作和最终结果。
 

@@ -1,9 +1,11 @@
 #include "gaiazero/contracts.hpp"
 #include "gaiazero/gaia_state.hpp"
+#include "gaiazero/graph_encoder.hpp"
 #include "gaiazero/inference.hpp"
 #include "gaiazero/onnxruntime_backend.hpp"
 #include "gaiazero/sha256.hpp"
 
+#include <cmath>
 #include <iostream>
 #include <stdexcept>
 
@@ -11,6 +13,10 @@ namespace {
 
 void require(bool condition) {
     if (!condition) throw std::runtime_error("smoke test requirement failed");
+}
+
+void require_close(float actual, float expected, float tolerance = 1.0e-6F) {
+    require(std::abs(actual - expected) <= tolerance);
 }
 
 }  // namespace
@@ -83,6 +89,80 @@ int main() {
     require(state.setup_hash != GaiaState::initial(2, 20260829).setup_hash);
     require(state_hash_from_canonical_json(state.canonical_json()) == state.state_hash());
     require(state.state_hash() == GaiaState::initial(2, 20260828).state_hash());
+
+    // Graph tensors use the exact ordering and normalization consumed by the
+    // Python graph_inputs_from_state function and the ONNX boundary.
+    const auto encoded = encode_graph_batch(state);
+    require(encoded.shape.batch == 1);
+    require(encoded.shape.nodes == 128);
+    require(encoded.shape.edges == 512);
+    require(encoded.shape.players == 2);
+    require(encoded.shape.node_features == 16);
+    require(encoded.shape.global_features == 16);
+    require(encoded.shape.player_features == 16);
+    validate_graph_batch(encoded);
+    std::size_t first_active = 0;
+    while (first_active < state.active_planets.size() &&
+           !state.active_planets[first_active]) ++first_active;
+    require(first_active < state.active_planets.size());
+    require_close(encoded.node_mask[0], 1.0F);
+    require_close(encoded.node_features[0],
+                  static_cast<float>(state.planet_q[first_active]) / 16.0F);
+    require_close(encoded.node_features[1],
+                  static_cast<float>(state.planet_r[first_active]) / 16.0F);
+    require_close(encoded.node_features[2],
+                  static_cast<float>(state.terrains[first_active]) / 9.0F);
+    require_close(encoded.node_features[3],
+                  static_cast<float>(state.owners[first_active]) / 2.0F);
+    require_close(encoded.global_features[0], 0.0F);
+    require_close(encoded.global_features[1], 0.5F);
+    require_close(encoded.global_features[2], 1.0F);
+    require_close(encoded.global_features[3], 0.0F);
+    require_close(encoded.global_features[6],
+                  state.player_to_move == 0 ? 1.0F : 0.0F);
+    require_close(encoded.global_features[7],
+                  state.player_to_move == 1 ? 1.0F : 0.0F);
+    require_close(encoded.player_features[0],
+                  static_cast<float>(state.players[0].credits) / 30.0F);
+    require_close(encoded.player_features[15],
+                  state.player_to_move == 0 ? 1.0F : 0.0F);
+    require_close(encoded.player_features[16 + 15],
+                  state.player_to_move == 1 ? 1.0F : 0.0F);
+    require_close(encoded.player_mask[0], 1.0F);
+    require_close(encoded.player_mask[1], 1.0F);
+    require(encoded.edge_mask[0] == 1.0F);
+
+    auto encoded_mutated = state;
+    encoded_mutated.used_power_actions = (1 << 0) | (1 << 6);
+    encoded_mutated.used_qic_actions = (1 << 1);
+    const auto encoded_actions = encode_graph_batch(encoded_mutated);
+    // With two players, power bits begin at observation/global index 10.
+    require_close(encoded_actions.global_features[10], 1.0F);
+    require_close(encoded_actions.global_features[15], 0.0F);
+
+    bool rejected_encoder_config = false;
+    try {
+        auto invalid_encoder = GraphEncoderConfig{};
+        invalid_encoder.max_nodes = 0;
+        (void)encode_graph_batch(state, invalid_encoder);
+    } catch (const std::invalid_argument&) {
+        rejected_encoder_config = true;
+    }
+    require(rejected_encoder_config);
+
+    for (int player_count = 2; player_count <= 4; ++player_count) {
+        const auto multiplayer = GaiaState::initial(player_count, 20260828);
+        const auto multiplayer_graph = encode_graph_batch(multiplayer);
+        require(multiplayer_graph.shape.players == player_count);
+        require(multiplayer_graph.player_mask.size() ==
+                static_cast<std::size_t>(player_count));
+        for (int player = 0; player < player_count; ++player) {
+            require_close(
+                multiplayer_graph.player_features[
+                    static_cast<std::size_t>(player) * 16 + 15],
+                multiplayer.player_to_move == player ? 1.0F : 0.0F);
+        }
+    }
     require(state.setup_seed_streams[0].first == "map");
     require(state.setup_seed_streams[0].second == 20260828ULL);
     require(state.setup_seed_streams[1].first == "factions");
