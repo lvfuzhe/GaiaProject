@@ -149,6 +149,10 @@ struct GaiaState {
     [[nodiscard]] std::vector<ActionTuple> legal_action_tuples() const;
     [[nodiscard]] GaiaState apply(const ActionTuple& action) const;
     [[nodiscard]] std::array<double, kMaxPlayers> final_scores() const;
+    // Diagnostic representation used by the cross-language federation
+    // golden tests.  It is intentionally read-only and does not affect the
+    // canonical state contract.
+    [[nodiscard]] std::string debug_federation_plan() const;
 };
 
 }  // namespace gaiazero

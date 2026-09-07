@@ -28,6 +28,8 @@ add_library(gaiazero_core
     cpp/src/sha256.cpp
     cpp/src/gaia_state.cpp
     cpp/src/graph_encoder.cpp
+    cpp/src/numpy_random.cpp
+    cpp/src/gaia_setup.cpp
 )
 add_library(gaiazero::core ALIAS gaiazero_core)
 
@@ -98,10 +100,18 @@ if(GAIA_BUILD_TESTS)
     enable_testing()
     add_executable(gaiazero_cpp_smoke cpp/tests/smoke.cpp)
     target_link_libraries(gaiazero_cpp_smoke PRIVATE gaiazero::core)
+    add_executable(gaiazero_setup_probe cpp/tests/setup_probe.cpp)
+    target_link_libraries(gaiazero_setup_probe PRIVATE gaiazero::core)
+    add_executable(gaiazero_state_probe cpp/tests/state_probe.cpp)
+    target_link_libraries(gaiazero_state_probe PRIVATE gaiazero::core)
     if(MSVC)
         target_compile_options(gaiazero_cpp_smoke PRIVATE /W4 /permissive-)
+        target_compile_options(gaiazero_setup_probe PRIVATE /W4 /permissive-)
+        target_compile_options(gaiazero_state_probe PRIVATE /W4 /permissive-)
     else()
         target_compile_options(gaiazero_cpp_smoke PRIVATE -Wall -Wextra -Wpedantic)
+        target_compile_options(gaiazero_setup_probe PRIVATE -Wall -Wextra -Wpedantic)
+        target_compile_options(gaiazero_state_probe PRIVATE -Wall -Wextra -Wpedantic)
     endif()
     if(GAIA_ENABLE_ORT_CPU AND WIN32)
         find_file(ONNXRUNTIME_RUNTIME_LIBRARY

@@ -54,3 +54,10 @@ cmake --preset windows-msvc-ninja -DGAIA_ENABLE_CUDA=ON
 ```
 
 当前 C++ 规则是可运行的 P0 基线，已覆盖状态机、核心建矿流程和 GNN v1 图观察编码；完整 BGA 星图生成、所有科技/联邦/种族特殊动作、MCTS、selfplay 和 gatekeeper 仍以 Python 参考实现为准，后续按 pending-execution 文档逐项迁移。C++ 状态哈希字段契约已冻结，跨语言逐状态 hash 与完整图张量 golden 对齐仍需在完整地图/规则迁移后完成。
+## Cross-language parity
+
+The C++ rules core now matches the Python `standard-v22` reference for setup
+streams, canonical state JSON, `state-hash-v1`, ActionTuple ordering, legal
+actions, transitions and the covered special-faction branches. See
+[`cpp-python-parity.md`](cpp-python-parity.md) for the verification commands
+and scope.

@@ -2,9 +2,11 @@
 #include "gaiazero/gaia_state.hpp"
 #include "gaiazero/graph_encoder.hpp"
 #include "gaiazero/inference.hpp"
+#include "gaiazero/numpy_random.hpp"
 #include "gaiazero/onnxruntime_backend.hpp"
 #include "gaiazero/sha256.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -32,6 +34,21 @@ int main() {
     require(action_type_name(static_cast<ActionType>(99)).empty());
     require(sha256_hex("abc") ==
            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+
+    NumpyRandom numpy_rng(0);
+    require(numpy_rng.next_uint64() == 11749869230777074271ULL);
+    require(numpy_rng.next_uint64() == 4976686463289251617ULL);
+    require(numpy_rng.next_uint64() == 755828109848996024ULL);
+    NumpyRandom numpy_permutation_rng(20260828);
+    require(numpy_permutation_rng.permutation(7) ==
+            std::vector<int>({6, 1, 4, 0, 5, 2, 3}));
+    NumpyRandom numpy_integer_rng(1);
+    for (const int expected : {2, 3, 4, 5, 0, 0, 4, 5, 1, 1}) {
+        require(numpy_integer_rng.integers(6) == expected);
+    }
+    NumpyRandom numpy_choice_rng(0);
+    require(numpy_choice_rng.choice_without_replacement(10, 5) ==
+            std::vector<int>({4, 7, 2, 3, 5}));
 
     const auto mine = ActionTuple::create(ActionType::build_mine, {3, 17});
     const auto same_mine = ActionTuple::create(ActionType::build_mine, {3, 17});
@@ -241,10 +258,15 @@ int main() {
     while (!complete_game.is_terminal()) {
         const auto actions = complete_game.legal_action_tuples();
         require(!actions.empty());
-        const auto& pass = actions.back();
-        require(pass.action_type == ActionType::pass_booster ||
-                pass.action_type == ActionType::pass_final);
-        complete_game = complete_game.apply(pass);
+        // Pass actions are intentionally ordered before optional free
+        // actions, so do not assume the last legal action is a pass.
+        const auto pass_it = std::find_if(
+            actions.begin(), actions.end(), [](const ActionTuple& action) {
+                return action.action_type == ActionType::pass_booster ||
+                       action.action_type == ActionType::pass_final;
+            });
+        require(pass_it != actions.end());
+        complete_game = complete_game.apply(*pass_it);
         require(++pass_decisions <= kMaxRounds * complete_game.player_count);
     }
     require(complete_game.round_number == kMaxRounds + 1);
