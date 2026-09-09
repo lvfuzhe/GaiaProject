@@ -2,6 +2,7 @@
 
 #include "gaiazero/contracts.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <string>
@@ -146,6 +147,12 @@ struct GaiaState {
     [[nodiscard]] bool is_booster_selection() const noexcept;
     [[nodiscard]] std::string state_hash() const;
     [[nodiscard]] std::string canonical_json() const;
+    [[nodiscard]] std::vector<float> observation() const;
+    [[nodiscard]] std::size_t observation_size() const noexcept {
+        return kObservationSize +
+               static_cast<std::size_t>(std::max(0, player_count - 2)) * 712U;
+    }
+    [[nodiscard]] std::size_t action_size() const noexcept { return kActionSize; }
     [[nodiscard]] std::vector<ActionTuple> legal_action_tuples() const;
     [[nodiscard]] GaiaState apply(const ActionTuple& action) const;
     [[nodiscard]] std::array<double, kMaxPlayers> final_scores() const;

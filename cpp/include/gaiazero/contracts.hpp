@@ -13,6 +13,11 @@ inline constexpr std::string_view kRulesVersion = "standard-v22";
 inline constexpr std::string_view kActionTupleSchemaVersion = "action-tuple-v1";
 inline constexpr std::string_view kStateHashVersion = "state-hash-v1";
 inline constexpr std::size_t kMaxActionArguments = 8;
+// Stable compatibility dimension of the standard-v22 flat observation.  The
+// graph encoder is used by the production network, while raw self-play NPZ
+// keeps this vector for the existing PyTorch shuffle/train boundary.
+inline constexpr std::size_t kObservationSize = 4127;
+inline constexpr std::size_t kActionSize = 971;
 
 // The order is a stable audit key only. Inference uses parameterized action
 // logits and the rules engine remains responsible for legal tuple generation.

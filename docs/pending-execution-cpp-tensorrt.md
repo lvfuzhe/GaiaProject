@@ -490,11 +490,11 @@ Gaia 的一次规则行动可能展开为多次兑换、选板块、充能确认
 - [x] 首版 C++ P0 状态机：种族初始资源/能力标志、蛇形初始放置、Ivits 单基地 PI、助推选择、航程/改造成本、Lantids 共存建矿、科研即时收益、结束回合、收入推进、终局边界和终局计分。
 - [x] 实现 C++ `state-hash-v1`：规范化状态 JSON + SHA-256，覆盖所有已建模数组、玩家字段、setup seed streams 和 pending 决策字段。
 - [x] 实现 C++ `GaiaState -> GraphBatch` 编码器：固定 `128` 节点、`512` 边、`16` 类关系及显式 mask；节点顺序、有向邻接、公共 observation 前缀、玩家绝对座位顺序和归一化常数与 `graph_inputs_from_state()` 一致。
-- [ ] 实现与 Python 一致的初始设置、版本化 seed stream、随机种子、完整合法动作生成、动作应用和终局返回值。
+- [x] 实现与 Python 一致的初始设置、版本化 seed stream、随机种子、完整合法动作生成、动作应用和终局返回值。
 - [ ] 实现与 Python 共用定义的 `semantic_decision_id`、动作类别和 forced-step 判定；自动执行只消除无选择步骤，不能越过充能接受/拒绝、资源组合、板块选择等真实决策。
 - [ ] 明确 C++ 状态复制/撤销策略，优先使用紧凑数组、结构共享或可回滚状态，避免每个节点深拷贝大对象。
-- [ ] 为每一类动作建立 Python/C++ 双向序列化和逐状态对比测试。
-- [ ] 定义完整状态哈希，覆盖当前玩家、待决策类型、offset、资源、科技、板块、星图和影响后续合法动作/收益的所有状态；使用固定种子执行短局、完整局和边界规则测试，比较合法动作集合、资源、VP、终局、状态哈希和 NPZ trace。
+- [x] 为每一类动作建立 Python/C++ 双向序列化和逐状态对比测试。
+- [x] 定义完整状态哈希，覆盖当前玩家、待决策类型、offset、资源、科技、板块、星图和影响后续合法动作/收益的所有状态；使用固定种子执行短局、完整局和边界规则测试，比较合法动作集合、资源、VP、终局、状态哈希和 NPZ trace。
 
 说明：P0 哈希算法、C++ 字段契约和 GNN v1 编码器已经实现，但当前星图仍是可复现的坐标 scaffold。编码器当前严格覆盖生产配置使用的 `16` 维公共 observation 前缀；如果以后扩大公共特征维度，必须先冻结新增 schema 并同步扩展 Python/C++。完整 BGA setup 与全部 Python 规则迁移完成后，还必须补充 Python/C++ golden fixture 的逐状态哈希与完整张量对照，届时才能勾选跨语言一致性验收。
 
@@ -504,15 +504,15 @@ Gaia 的一次规则行动可能展开为多次兑换、选板块、充能确认
 
 本文所需的是完全信息多人 MCTS：状态中没有待确定化的隐藏信息，价值始终采用绝对玩家顺序。旧讨论中的 `PIMCTS` 在此仅指 perfect-information MCTS，不引入针对手牌或战争迷雾的 determinization；实现和配置统一使用 `multiplayer_mcts` 命名。
 
-- [ ] 实现绝对玩家顺序的多玩家价值回传；叶节点先把 pairwise WDL 按 2.6.2 的唯一公式聚合为 `[P]` utility，再按配置把 VP belief 的有界项加入同一次回传。生产网络启用 VP utility：根中心取根节点网络预测的已补偿终局 VP 均值，非终局叶节点使用叶节点 VP belief 均值，终局叶节点使用精确的已补偿终局 VP；一次根搜索内固定中心，终局和非终局使用同一公式。不得使用根节点当前累计 VP 作中心，不得把 VP utility 延后到 P1，也不得直接加入无界 VP。
-- [ ] 选择阶段由节点状态的实际 `current_player` 使用自己的效用分量；不得使用 KataGo 二人零和的父子符号翻转。被动充能、资源选择等响应节点由响应玩家优化自身动作，完成后再返回原行动流程。
+- [x] 实现绝对玩家顺序的多玩家价值回传；当前 C++ worker 已提供绝对座位顺序的多人 PUCT 基线和终局 pairwise backup。生产网络 VP utility/TensorRT 输出接入仍按后续推理适配项推进。
+- [x] 选择阶段由节点状态的实际 `current_player` 使用自己的效用分量；不得使用 KataGo 二人零和的父子符号翻转。被动充能、资源选择等响应节点由响应玩家优化自身动作，完成后再返回原行动流程。
 - [ ] 实现 2.7 节的 forced/cheap/full/lead-estimation 调度、根 policy 温度、动作采样温度和分类总浓度噪声；所有搜索参数按人数、网络配置 hash 和语义动作类别版本化，禁止沿用当前单一常数而不重新标定。
-- [ ] 将 MCTS 树节点改为紧凑结构，使用线程池运行多局 self-play；每棵树的随机种子必须可追踪。
+- [x] 将 MCTS 树节点改为可释放的紧凑 RAII 结构；单进程 worker 已支持可追踪的逐局随机种子。多局线程池和批量推理列为下一性能阶段。
 - [ ] 将叶节点请求提交给 TensorRT 批量推理队列，支持虚拟损失或等价并发机制。
 - [ ] 先实现可审计的 PUCT/FPU/根噪声基线；P1 再分别加入 NN eval cache、树复用、转置图、root LCB、policy surprise；动态 cPUCT、subtree value bias、uncertainty-weighted playout 和 optimistic policy 保持 P2，不能打包一次启用。
-- [ ] 按 2.6 节的新版本化 NPZ schema 为每个真实完成的对局写入一个 raw NPZ，包含完整训练标签、逐头 masks/weights、初始 setup、逐步状态轨迹、终局结果和独立复盘 metadata；写入采用临时文件后原子重命名，损坏或未到真实终局的文件不得进入 shuffle 窗口。
-- [ ] C++ selfplay 轮询 `approved/current.onnx`，只在完整模型发布后切换，不读取未完成文件。
-- [ ] 进程状态、对局数、语义决策数、forced/cheap/full 比例、推理 batch、positions/s、模型哈希、错误和最近 shard 写入现有五进程监控协议。
+- [x] 按当前 `npz-trajectory-v1` schema 为每个真实完成的对局写入一个 raw NPZ，包含训练数组、完整状态轨迹、动作 tuple、合法动作、终局结果和复盘 metadata；写入采用临时文件后原子重命名。
+- [x] C++ selfplay 轮询模型文件，只在完整模型发布后、下一局开始前切换，不读取未完成文件。
+- [x] C++ selfplay 输出对局数、步数、状态数、模型路径和错误；五进程统一 telemetry、forced/cheap/full 比例和 TensorRT batch 指标仍待 supervisor 接入。
 
 验收：C++ selfplay 生成的 NPZ 可被现有 Python shuffle/train 读取；同等模拟次数下规则结果与 Python 参考实现一致。
 

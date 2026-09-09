@@ -20,6 +20,7 @@
 #include <tuple>
 #include <type_traits>
 #include <vector>
+#include <cmath>
 
 namespace gaiazero {
 namespace {
@@ -1381,6 +1382,146 @@ bool GaiaState::is_terminal() const noexcept { return round_number > kMaxRounds;
 bool GaiaState::is_starting_placement() const noexcept { return round_number == 0 && placement_step < placement_order_length; }
 bool GaiaState::is_booster_selection() const noexcept {
     return round_number == 0 && placement_step >= placement_order_length && booster_selection_step < player_count;
+}
+
+std::vector<float> GaiaState::observation() const {
+    // This is the standard-v22 flat observation used by the Python training
+    // boundary.  Keep the append order in lockstep with
+    // game/gaia_state.py::observation; the graph encoder has its own compact
+    // representation and does not replace this raw NPZ contract.
+    std::vector<float> values;
+    values.reserve(observation_size());
+    const auto add = [&values](float value) { values.push_back(value); };
+    const auto onehot = [&add](int value, int count) {
+        for (int candidate = 0; candidate < count; ++candidate)
+            add(value == candidate ? 1.0F : 0.0F);
+    };
+    add(static_cast<float>(round_number) / static_cast<float>(kMaxRounds));
+    add(static_cast<float>(player_count) / 4.0F);
+    add(is_starting_placement() ? 1.0F : 0.0F);
+    add(is_booster_selection() ? 1.0F : 0.0F);
+    add(static_cast<float>(booster_selection_step) /
+        static_cast<float>(std::max(1, player_count)));
+    add(brainstone_selected ? 1.0F : 0.0F);
+    for (int p = 0; p < player_count; ++p) add(player_to_move == p ? 1.0F : 0.0F);
+    for (int p = 0; p < player_count; ++p) add(first_player == p ? 1.0F : 0.0F);
+    for (int action = 0; action < 7; ++action)
+        add((used_power_actions & (1 << action)) ? 1.0F : 0.0F);
+    for (int action = 0; action < 3; ++action)
+        add((used_qic_actions & (1 << action)) ? 1.0F : 0.0F);
+    for (const int tile : round_scoring_tiles) onehot(tile, 10);
+    for (const int tile : final_scoring_tiles) onehot(tile, 6);
+    for (const int tile : standard_tech_tiles) onehot(tile, 9);
+    for (const int tile : advanced_tech_tiles) onehot(tile, 15);
+    onehot(terraforming_federation_tile, 6);
+    for (const int count : federation_tile_supply) add(static_cast<float>(count) / 3.0F);
+    add(pending_gaia_conversion_player >= 0 ? 1.0F : 0.0F);
+    add(static_cast<float>(pending_gaia_conversion_power) / 15.0F);
+    add(pending_itars_gaia_player >= 0 ? 1.0F : 0.0F);
+    add(pending_passive_charge_player >= 0 ? 1.0F : 0.0F);
+    add(static_cast<float>(pending_passive_charge_amount) / 7.0F);
+    add(static_cast<float>(pending_passive_charge_queue_length) / 3.0F);
+    add(pending_taklons_charge_player >= 0 ? 1.0F : 0.0F);
+    add(static_cast<float>(pending_taklons_charge_amount) / 7.0F);
+    add(pending_tech_player >= 0 ? 1.0F : 0.0F);
+    add(pending_advanced_tech >= 0 ? 1.0F : 0.0F);
+    add(pending_research_player >= 0 ? 1.0F : 0.0F);
+    add(pending_lost_planet_player >= 0 ? 1.0F : 0.0F);
+    add(pending_power_terraform_player >= 0 ? 1.0F : 0.0F);
+    add(static_cast<float>(pending_power_terraform_steps) / 2.0F);
+    add(pending_booster_terraform_player >= 0 ? 1.0F : 0.0F);
+    add(pending_booster_range_player >= 0 ? 1.0F : 0.0F);
+    add(pending_research_optional ? 1.0F : 0.0F);
+    for (int track = -1; track < kTrackCount; ++track)
+        add(pending_research_track == track ? 1.0F : 0.0F);
+    for (int p = 0; p < player_count; ++p) add(pending_gaia_conversion_player == p ? 1.0F : 0.0F);
+    for (int p = 0; p < player_count; ++p) add(pending_itars_gaia_player == p ? 1.0F : 0.0F);
+    for (int p = 0; p < player_count; ++p) add(pending_passive_charge_player == p ? 1.0F : 0.0F);
+    for (int p = 0; p < player_count; ++p) add(pending_passive_charge_acting == p ? 1.0F : 0.0F);
+    for (int planet = 0; planet < kMaxPlanets; ++planet)
+        add(pending_passive_charge_planet == planet ? 1.0F : 0.0F);
+    for (int p = 0; p < player_count; ++p) add(pending_taklons_charge_player == p ? 1.0F : 0.0F);
+    for (int p = 0; p < player_count; ++p) add(pending_lost_planet_player == p ? 1.0F : 0.0F);
+    for (int tile = 0; tile < 15; ++tile) add(pending_advanced_tech == tile ? 1.0F : 0.0F);
+    for (const int owner : booster_owner) {
+        add(owner == -2 ? 1.0F : 0.0F);
+        add(owner == -1 ? 1.0F : 0.0F);
+        for (int p = 0; p < player_count; ++p) add(owner == p ? 1.0F : 0.0F);
+    }
+    for (int position = 0; position < kMaxSectors; ++position) {
+        const bool present = position < sector_count;
+        const int tile = present ? sector_tiles[static_cast<std::size_t>(position)] : -1;
+        const int rotation = present ? sector_rotations[static_cast<std::size_t>(position)] : -1;
+        add(present ? 1.0F : 0.0F);
+        onehot(tile, 10);
+        onehot(rotation, 6);
+    }
+    for (int p = 0; p < player_count; ++p) {
+        const auto& info = players[static_cast<std::size_t>(p)];
+        const int booster = player_booster(*this, p);
+        add(static_cast<float>(info.credits) / 30.0F);
+        add(static_cast<float>(info.ore) / 15.0F);
+        add(static_cast<float>(info.knowledge) / 15.0F);
+        add(static_cast<float>(info.qic) / 10.0F);
+        add(static_cast<float>(info.vp) / 150.0F);
+        add(static_cast<float>(info.bowl_one) / 15.0F);
+        add(static_cast<float>(info.bowl_two) / 15.0F);
+        add(static_cast<float>(info.bowl_three) / 15.0F);
+        add(static_cast<float>(info.gaia_power) / 15.0F);
+        add(static_cast<float>(info.gaiaformers) / 3.0F);
+        add(static_cast<float>(info.gaiaformers_in_gaia) / 3.0F);
+        add(static_cast<float>(info.federation_tokens) / 6.0F);
+        add(static_cast<float>(info.federation_keys) / 3.0F);
+        add(static_cast<float>(info.gleens_federation_tokens));
+        add(static_cast<float>(info.board_federations) / 6.0F);
+        add(static_cast<float>(info.knowledge_academies));
+        add(static_cast<float>(info.qic_academies));
+        add(info.used_qic_academy_action ? 1.0F : 0.0F);
+        add(info.used_standard_tech_action ? 1.0F : 0.0F);
+        add(info.used_booster_action ? 1.0F : 0.0F);
+        add(info.used_firaks_downgrade_action ? 1.0F : 0.0F);
+        add(info.used_bescods_research_action ? 1.0F : 0.0F);
+        add(info.used_ivits_space_station_action ? 1.0F : 0.0F);
+        for (int tile = 0; tile < 3; ++tile)
+            add((info.used_advanced_tech_actions & (1 << tile)) ? 1.0F : 0.0F);
+        add(info.passed ? 1.0F : 0.0F);
+        for (int bowl = 0; bowl < 5; ++bowl) add(info.brainstone_bowl == bowl ? 1.0F : 0.0F);
+        for (const int level : info.tracks) add(static_cast<float>(level) / 5.0F);
+        for (int faction = 0; faction < 14; ++faction) add(info.faction == faction ? 1.0F : 0.0F);
+        for (int candidate = 0; candidate < 10; ++candidate) add(booster == candidate ? 1.0F : 0.0F);
+        for (int tile = 0; tile < 9; ++tile) add((info.tech_tiles & (1U << tile)) ? 1.0F : 0.0F);
+        for (int tile = 0; tile < 9; ++tile) add((info.covered_tech_tiles & (1U << tile)) ? 1.0F : 0.0F);
+        for (int tile = 0; tile < 15; ++tile) add((info.advanced_tech_tiles & (1U << tile)) ? 1.0F : 0.0F);
+        for (const int count : info.federation_tile_counts) add(static_cast<float>(count) / 6.0F);
+    }
+    for (int planet = 0; planet < kMaxPlanets; ++planet) {
+        const auto index = static_cast<std::size_t>(planet);
+        add(active_planets[index] ? 1.0F : 0.0F);
+        for (int terrain = 0; terrain < 10; ++terrain) add(terrains[index] == terrain ? 1.0F : 0.0F);
+        add(owners[index] == -1 ? 1.0F : 0.0F);
+        for (int p = 0; p < player_count; ++p) add(owners[index] == p ? 1.0F : 0.0F);
+        for (int building = 0; building < 6; ++building) add(buildings[index] == building ? 1.0F : 0.0F);
+        add(coexisting_mine_owner[index] == -1 ? 1.0F : 0.0F);
+        for (int p = 0; p < player_count; ++p) add(coexisting_mine_owner[index] == p ? 1.0F : 0.0F);
+        add(coexisting_mine_federated[index] ? 1.0F : 0.0F);
+        add(gaiaformer_owner[index] == -1 ? 1.0F : 0.0F);
+        for (int p = 0; p < player_count; ++p) add(gaiaformer_owner[index] == p ? 1.0F : 0.0F);
+        add(federated[index] ? 1.0F : 0.0F);
+    }
+    const auto spaces = board_spaces(*this);
+    for (int space = 0; space < kMaxBoardSpaces; ++space) {
+        const bool present = space < static_cast<int>(spaces.size());
+        const int owner = space_station_owner[static_cast<std::size_t>(space)];
+        add(present ? 1.0F : 0.0F);
+        add(present && owner == -1 ? 1.0F : 0.0F);
+        for (int p = 0; p < player_count; ++p) add(present && owner == p ? 1.0F : 0.0F);
+        add(present && space_station_federated[static_cast<std::size_t>(space)] ? 1.0F : 0.0F);
+        for (int p = 0; p < player_count; ++p)
+            add(present && (satellite_owners[static_cast<std::size_t>(space)] & (1 << p)) ? 1.0F : 0.0F);
+    }
+    if (values.size() != observation_size())
+        throw std::logic_error("standard-v22 observation length mismatch");
+    return values;
 }
 
 std::string GaiaState::canonical_json() const {

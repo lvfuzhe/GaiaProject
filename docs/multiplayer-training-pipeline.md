@@ -1,12 +1,23 @@
 # 多人局异步训练流水线
 
-> 当前实现仍是五个 Python 进程。C++ selfplay/C++ gatekeeper、TensorRT 推理和 SWA -> ONNX 导出属于下一阶段待执行改造，具体步骤见 [`pending-execution-cpp-tensorrt.md`](pending-execution-cpp-tensorrt.md)。
+> 当前默认流水线仍是五个 Python 进程；生产 C++ selfplay 已提供独立 worker `gaiazero_selfplay`，可先替换 selfplay 进程。C++ gatekeeper、TensorRT 推理和 SWA -> ONNX 导出仍按 [`pending-execution-cpp-tensorrt.md`](pending-execution-cpp-tensorrt.md) 后续接入。
 
 该流水线借鉴 KataGo 的异步训练组织方式，但不接入 KataGo。游戏规则、MCTS、网络、
 样本和导出权重均为 GaiaZero 自有格式。全流程只依赖 Python、NumPy 和 PyTorch，不使用
 TensorFlow 或 TFRecord。
 
 ## 五个进程
+
+需要启用 C++ selfplay 时，将默认 Python selfplay worker 替换为：
+
+```powershell
+build/cpp-msvc/gaiazero_selfplay.exe --players 3 --games 4 --simulations 128 `
+  --output runs/pipeline-3p/raw --model runs/pipeline-3p/approved/current.onnx `
+  --stop-file runs/pipeline-3p/STOP --status-file runs/pipeline-3p/status.json
+```
+
+它生成的 `npz-trajectory-v1` 与 Python shuffle/train 兼容；详见
+[`cpp-selfplay.md`](cpp-selfplay.md)。
 
 该管线支持 2、3、4 人局。三种人数都使用同一 KataGo 风格残差网络和 MCTS 自对弈路径，只有价值头输出维度和游戏状态维度随人数变化。
 
