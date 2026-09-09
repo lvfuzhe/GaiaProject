@@ -9,6 +9,8 @@
 - 轮询 ONNX 模型文件，并且只在下一局开始前切换模型；
 - 支持 TensorRT serialized engine 的批量叶节点推理：每个 MCTS 波次收集多个未展开叶子，
   一次 enqueue 后再扩展/回传，减少 GPU kernel launch 和 PCIe 往返；
+- 使用可复用线程池并发运行多局；每个线程独立持有 MCTS/Evaluator（TensorRT execution
+  context 不跨线程共享），对局结果按完成顺序更新状态并以原子 NPZ 分片写入；
 - 监听 `STOP` 文件，支持异步训练管线优雅停止。
 - 原子写入 `status.json`，供五进程监控读取运行阶段、已完成对局和步数。
 
@@ -46,6 +48,7 @@ build/cpp-msvc/gaiazero_selfplay.exe `
   --backend tensorrt `
   --tensorrt-engine runs/pipeline-3p/exported/current.engine `
   --leaf-batch-size 64 `
+  --threads 4 `
   --simulations 256 `
   --output runs/pipeline-3p/raw
 ```
@@ -54,6 +57,9 @@ build/cpp-msvc/gaiazero_selfplay.exe `
 batch 小于该值时，worker 会在推理阶段报告明确的 shape/profile 错误；应降低该参数或
 重新构建 profile。`--backend auto` 在提供 `--tensorrt-engine` 时优先 TensorRT，
 否则使用 `--model` 的 ONNX Runtime CPU 后端。
+
+`--threads` 控制同时运行的完整对局数；它与叶节点 batch 相互独立。GPU 运行时建议先
+让 `threads × leaf-batch-size` 不超过显存预算；CPU/ORT 运行时可根据物理核心数调整。
 
 生成的文件可以直接由 Python 读取：
 

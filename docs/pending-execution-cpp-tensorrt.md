@@ -508,7 +508,10 @@ Gaia 的一次规则行动可能展开为多次兑换、选板块、充能确认
 - [x] 实现绝对玩家顺序的多玩家价值回传；当前 C++ worker 已提供绝对座位顺序的多人 PUCT 基线和终局 pairwise backup。生产网络 VP utility/TensorRT 输出接入仍按后续推理适配项推进。
 - [x] 选择阶段由节点状态的实际 `current_player` 使用自己的效用分量；不得使用 KataGo 二人零和的父子符号翻转。被动充能、资源选择等响应节点由响应玩家优化自身动作，完成后再返回原行动流程。
 - [ ] 实现 2.7 节的 forced/cheap/full/lead-estimation 调度、根 policy 温度、动作采样温度和分类总浓度噪声；所有搜索参数按人数、网络配置 hash 和语义动作类别版本化，禁止沿用当前单一常数而不重新标定。
-- [x] 将 MCTS 树节点改为可释放的紧凑 RAII 结构；单进程 worker 已支持可追踪的逐局随机种子。多局线程池和批量推理列为下一性能阶段。
+- [x] 将 MCTS 树节点改为可释放的紧凑 RAII 结构；C++ worker 已支持可追踪的逐局随机种子。
+- [x] 加入可复用线程池多局并发：每个线程独立持有 Evaluator/TensorRT execution context，
+  任务按完整对局分发，结果按完成顺序原子写入 NPZ；`--threads` 与叶节点 batch 已写入
+  worker status。队列深度与详细推理吞吐 telemetry 仍属于 supervisor 性能阶段。
 - [x] 将 MCTS 叶节点按 `--leaf-batch-size` 分波提交给 TensorRT，一次 enqueue 后统一扩展/回传，并使用 virtual visits 降低同一波次重复选择；独立异步请求队列、pinned host memory 和 CUDA stream 仍待性能阶段实现。
 - [ ] 先实现可审计的 PUCT/FPU/根噪声基线；P1 再分别加入 NN eval cache、树复用、转置图、root LCB、policy surprise；动态 cPUCT、subtree value bias、uncertainty-weighted playout 和 optimistic policy 保持 P2，不能打包一次启用。
 - [x] 按当前 `npz-trajectory-v1` schema 为每个真实完成的对局写入一个 raw NPZ，包含训练数组、完整状态轨迹、动作 tuple、合法动作、终局结果和复盘 metadata；写入采用临时文件后原子重命名。

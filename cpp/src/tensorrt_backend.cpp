@@ -134,14 +134,10 @@ TensorRtBackend::TensorRtBackend(const std::filesystem::path& engine_path,
         for (const auto* expected : kOutputs) if (std::string(name) == expected) known = true;
         if (!known) throw std::runtime_error(std::string("unexpected TensorRT binding: ") + name);
     }
+    // The runtime does not need to query a profile's max shape here: each
+    // infer() call sets concrete batch dimensions and TensorRT validates them
+    // against the selected optimization profile.
     impl_->metadata.max_batch_size = 0;
-    for (int binding = 0; binding < impl_->engine->getNbBindings(); ++binding) {
-        if (impl_->engine->bindingIsInput(binding)) {
-            const auto dims = impl_->engine->getProfileDimensions(
-                binding, config.optimization_profile, nvinfer1::OptProfileSelector::kMAX);
-            if (dims.nbDims > 0) impl_->metadata.max_batch_size = std::max<std::int64_t>(impl_->metadata.max_batch_size, dims.d[0]);
-        }
-    }
 #else
     (void)config;
     throw std::runtime_error(

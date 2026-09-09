@@ -10,12 +10,17 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <condition_variable>
+#include <deque>
 #include <fstream>
+#include <future>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <random>
 #include <sstream>
@@ -132,6 +137,7 @@ struct Config {
     fs::path tensorrt_engine_path{};
     std::string backend{"auto"};
     int leaf_batch_size{64};
+    int threads{1};
     fs::path stop_file{};
     bool allow_uniform{true};
     bool once{false};
@@ -150,6 +156,7 @@ void usage() {
               << "  --tensorrt-engine FILE TensorRT serialized engine (batched leaf inference)\n"
               << "  --backend auto|onnxruntime|tensorrt|uniform\n"
               << "  --leaf-batch-size N   MCTS leaf wave size (default 64)\n"
+              << "  --threads N           concurrent games in the worker pool (default 1)\n"
               << "  --beta-vp N           bounded VP utility weight (default 0.10)\n"
               << "  --vp-scale N          VP utility scale (default 20)\n"
               << "  --no-root-noise       disable Dirichlet root noise\n"
@@ -197,6 +204,7 @@ Config parse_args(int argc, char** argv) {
         else if (option == "--tensorrt-engine") config.tensorrt_engine_path = require("--tensorrt-engine");
         else if (option == "--backend") config.backend = require("--backend");
         else if (option == "--leaf-batch-size") config.leaf_batch_size = parse_value<int>(require("--leaf-batch-size"), "leaf-batch-size");
+        else if (option == "--threads") config.threads = parse_value<int>(require("--threads"), "threads");
         else if (option == "--stop-file") config.stop_file = require("--stop-file");
         else if (option == "--no-root-noise") config.root_noise = false;
         else if (option == "--no-uniform") config.allow_uniform = false;
@@ -208,7 +216,7 @@ Config parse_args(int argc, char** argv) {
         config.poll_ms < 1 || config.c_puct <= 0 || config.dirichlet_alpha <= 0 ||
         config.root_noise_fraction < 0 || config.root_noise_fraction > 1 ||
         config.temperature < 0 || config.beta_vp < 0 || config.vp_scale <= 0 ||
-        config.leaf_batch_size < 1 ||
+        config.leaf_batch_size < 1 || config.threads < 1 ||
         (config.backend != "auto" && config.backend != "onnxruntime" &&
          config.backend != "tensorrt" && config.backend != "uniform"))
         throw std::invalid_argument("invalid selfplay configuration");
@@ -255,6 +263,7 @@ void write_status(const Config& config, std::string_view phase, int games,
                    config.backend == "tensorrt" ? config.tensorrt_engine_path.string() : config.model_path.string())
             << ",\"backend\":" << json_quote(config.backend)
             << ",\"leaf_batch_size\":" << config.leaf_batch_size
+            << ",\"threads\":" << config.threads
             << ",\"last_shard\":" << json_quote(last_shard.empty() ? "" : last_shard.string())
             << ",\"error\":" << json_quote(error)
             << ",\"updated_at_unix_ms\":"
@@ -1332,6 +1341,73 @@ GameResult play_game(const Config& config, int game_index, Evaluator& evaluator)
     return GameResult{move, destination};
 }
 
+// A bounded reusable pool for whole-game tasks.  The evaluator is thread-local
+// in each task (see main), because TensorRT execution contexts are not shared
+// between threads.  This keeps game simulation, inference and NPZ writing
+// independent while avoiding one thread creation/destruction per game.
+class ThreadPool {
+public:
+    explicit ThreadPool(std::size_t worker_count) {
+        if (worker_count == 0) throw std::invalid_argument("thread pool requires at least one worker");
+        max_pending_ = std::max<std::size_t>(1, worker_count * 2);
+        workers_.reserve(worker_count);
+        for (std::size_t index = 0; index < worker_count; ++index) {
+            workers_.emplace_back([this] {
+                for (;;) {
+                    std::function<void()> task;
+                    {
+                        std::unique_lock lock(mutex_);
+                        condition_.wait(lock, [this] { return stopping_ || !tasks_.empty(); });
+                        if (stopping_ && tasks_.empty()) return;
+                        task = std::move(tasks_.front());
+                        tasks_.pop_front();
+                    }
+                    condition_.notify_all();
+                    task();
+                }
+            });
+        }
+    }
+
+    ~ThreadPool() {
+        {
+            std::lock_guard lock(mutex_);
+            stopping_ = true;
+        }
+        condition_.notify_all();
+        for (auto& worker : workers_) if (worker.joinable()) worker.join();
+    }
+
+    ThreadPool(const ThreadPool&) = delete;
+    ThreadPool& operator=(const ThreadPool&) = delete;
+
+    template <typename Function>
+    auto submit(Function&& function) -> std::future<std::invoke_result_t<Function>> {
+        using Result = std::invoke_result_t<Function>;
+        auto task = std::make_shared<std::packaged_task<Result()>>(
+            std::forward<Function>(function));
+        auto future = task->get_future();
+        {
+            std::unique_lock lock(mutex_);
+            condition_.wait(lock, [this] {
+                return stopping_ || tasks_.size() < max_pending_;
+            });
+            if (stopping_) throw std::runtime_error("cannot submit to a stopped thread pool");
+            tasks_.emplace_back([task] { (*task)(); });
+        }
+        condition_.notify_one();
+        return future;
+    }
+
+private:
+    std::vector<std::thread> workers_;
+    std::deque<std::function<void()>> tasks_;
+    std::mutex mutex_;
+    std::condition_variable condition_;
+    std::size_t max_pending_{1};
+    bool stopping_{false};
+};
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1342,16 +1418,28 @@ int main(int argc, char** argv) {
     try {
         active_config = parse_args(argc, argv);
         const Config& config = *active_config;
-        Evaluator evaluator(config);
+        ThreadPool pool(static_cast<std::size_t>(config.threads));
         int game = 0;
         write_status(config, "starting", completed_games, completed_moves);
         for (;;) {
             if (!config.once && fs::exists(config.stop_file)) break;
+            std::vector<std::future<GameResult>> futures;
+            futures.reserve(static_cast<std::size_t>(config.games));
             for (int cycle = 0; cycle < config.games; ++cycle) {
                 if (!config.once && fs::exists(config.stop_file)) break;
-                evaluator.reload_if_changed();
-                write_status(config, "running", completed_games, completed_moves);
-                const auto result = play_game(config, game++, evaluator);
+                const int game_index = game++;
+                futures.push_back(pool.submit([&config, game_index] {
+                    // One Evaluator (and, for TensorRT, one execution context)
+                    // is retained per pool thread and reused across games.
+                    thread_local std::unique_ptr<Evaluator> evaluator;
+                    if (!evaluator) evaluator = std::make_unique<Evaluator>(config);
+                    evaluator->reload_if_changed();
+                    return play_game(config, game_index, *evaluator);
+                }));
+            }
+            write_status(config, "running", completed_games, completed_moves);
+            for (auto& future : futures) {
+                const auto result = future.get();
                 ++completed_games;
                 completed_moves += result.moves;
                 last_shard = result.shard;
