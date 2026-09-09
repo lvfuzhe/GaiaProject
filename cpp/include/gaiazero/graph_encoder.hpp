@@ -4,6 +4,7 @@
 #include "gaiazero/inference.hpp"
 
 #include <cstdint>
+#include <vector>
 
 namespace gaiazero {
 
@@ -26,6 +27,13 @@ struct GraphEncoderConfig {
 // src/gaiazero/gnn.py::graph_inputs_from_state.
 [[nodiscard]] GraphBatch encode_graph_batch(
     const GaiaState& state,
+    const GraphEncoderConfig& config = {});
+
+// Encodes several states into one fixed-shape batch.  Every state must use
+// the same graph/player capacities; edge indices remain local to each batch
+// item (the ONNX/TensorRT contract is [B, E, 2], not a flattened COO graph).
+[[nodiscard]] GraphBatch encode_graph_batch(
+    const std::vector<const GaiaState*>& states,
     const GraphEncoderConfig& config = {});
 
 }  // namespace gaiazero

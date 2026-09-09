@@ -1,6 +1,7 @@
 #include "gaiazero/gaia_state.hpp"
 #include "gaiazero/graph_encoder.hpp"
 #include "gaiazero/onnxruntime_backend.hpp"
+#include "gaiazero/tensorrt_backend.hpp"
 
 #include <algorithm>
 #include <array>
@@ -128,6 +129,9 @@ struct Config {
     fs::path output_dir{"runs/cpp-selfplay/raw"};
     fs::path status_file{};
     fs::path model_path{};
+    fs::path tensorrt_engine_path{};
+    std::string backend{"auto"};
+    int leaf_batch_size{64};
     fs::path stop_file{};
     bool allow_uniform{true};
     bool once{false};
@@ -143,6 +147,9 @@ void usage() {
               << "  --output DIR          raw NPZ directory\n"
               << "  --status-file FILE    atomic worker status JSON\n"
               << "  --model FILE          graph ONNX model (CPU ORT when enabled)\n"
+              << "  --tensorrt-engine FILE TensorRT serialized engine (batched leaf inference)\n"
+              << "  --backend auto|onnxruntime|tensorrt|uniform\n"
+              << "  --leaf-batch-size N   MCTS leaf wave size (default 64)\n"
               << "  --beta-vp N           bounded VP utility weight (default 0.10)\n"
               << "  --vp-scale N          VP utility scale (default 20)\n"
               << "  --no-root-noise       disable Dirichlet root noise\n"
@@ -187,6 +194,9 @@ Config parse_args(int argc, char** argv) {
         else if (option == "--output") config.output_dir = require("--output");
         else if (option == "--status-file") config.status_file = require("--status-file");
         else if (option == "--model") config.model_path = require("--model");
+        else if (option == "--tensorrt-engine") config.tensorrt_engine_path = require("--tensorrt-engine");
+        else if (option == "--backend") config.backend = require("--backend");
+        else if (option == "--leaf-batch-size") config.leaf_batch_size = parse_value<int>(require("--leaf-batch-size"), "leaf-batch-size");
         else if (option == "--stop-file") config.stop_file = require("--stop-file");
         else if (option == "--no-root-noise") config.root_noise = false;
         else if (option == "--no-uniform") config.allow_uniform = false;
@@ -197,8 +207,17 @@ Config parse_args(int argc, char** argv) {
         config.simulations < 1 || config.max_moves < 1 || config.temperature_moves < 0 ||
         config.poll_ms < 1 || config.c_puct <= 0 || config.dirichlet_alpha <= 0 ||
         config.root_noise_fraction < 0 || config.root_noise_fraction > 1 ||
-        config.temperature < 0 || config.beta_vp < 0 || config.vp_scale <= 0)
+        config.temperature < 0 || config.beta_vp < 0 || config.vp_scale <= 0 ||
+        config.leaf_batch_size < 1 ||
+        (config.backend != "auto" && config.backend != "onnxruntime" &&
+         config.backend != "tensorrt" && config.backend != "uniform"))
         throw std::invalid_argument("invalid selfplay configuration");
+    if (config.backend == "tensorrt" && config.tensorrt_engine_path.empty())
+        throw std::invalid_argument("--backend tensorrt requires --tensorrt-engine");
+    if (config.backend == "onnxruntime" && config.model_path.empty())
+        throw std::invalid_argument("--backend onnxruntime requires --model");
+    if (config.backend == "uniform" && (!config.model_path.empty() || !config.tensorrt_engine_path.empty()))
+        throw std::invalid_argument("--backend uniform cannot be combined with a model path");
     if (config.stop_file.empty()) config.stop_file = config.output_dir.parent_path() / "STOP";
     if (config.status_file.empty()) config.status_file = config.output_dir.parent_path() / "status.json";
     return config;
@@ -232,7 +251,10 @@ void write_status(const Config& config, std::string_view phase, int games,
             << ",\"players\":" << config.players
             << ",\"games\":" << games
             << ",\"moves\":" << moves
-            << ",\"model\":" << json_quote(config.model_path.empty() ? "" : config.model_path.string())
+            << ",\"model\":" << json_quote(
+                   config.backend == "tensorrt" ? config.tensorrt_engine_path.string() : config.model_path.string())
+            << ",\"backend\":" << json_quote(config.backend)
+            << ",\"leaf_batch_size\":" << config.leaf_batch_size
             << ",\"last_shard\":" << json_quote(last_shard.empty() ? "" : last_shard.string())
             << ",\"error\":" << json_quote(error)
             << ",\"updated_at_unix_ms\":"
@@ -471,6 +493,7 @@ struct Edge {
     ActionTuple action;
     float prior{0.0F};
     int visits{0};
+    int virtual_visits{0};
     std::array<float, gaiazero::kMaxPlayers> value_sum{};
     std::unique_ptr<SearchNode> child;
 };
@@ -485,33 +508,41 @@ class Evaluator {
 public:
     explicit Evaluator(const Config& config) : config_(config) {
         reload_if_changed();
-        if (!backend_ && !config_.allow_uniform)
-            throw std::invalid_argument("--model is required when --no-uniform is set");
+        if (!backend_ && !config_.allow_uniform && config_.backend != "uniform")
+            throw std::invalid_argument("a model/engine is required when --no-uniform is set");
     }
 
     void reload_if_changed() {
-        if (config_.model_path.empty()) return;
+        const auto path = configured_model_path();
+        if (config_.backend == "uniform" || path.empty()) return;
         std::error_code error;
-        if (!fs::is_regular_file(config_.model_path, error)) {
-            if (!config_.allow_uniform)
-                throw std::runtime_error("model file is not available: " + config_.model_path.string());
+        if (!fs::is_regular_file(path, error)) {
+            if (!config_.allow_uniform || config_.backend != "auto")
+                throw std::runtime_error("model file is not available: " + path.string());
             // Keep the last valid backend while a publisher atomically
             // replaces the model file.
             if (!backend_) model_mtime_.reset();
             return;
         }
-        const auto mtime = fs::last_write_time(config_.model_path, error);
+        const auto mtime = fs::last_write_time(path, error);
         if (error || (model_mtime_ && *model_mtime_ == mtime)) return;
         // Construct into a temporary first.  A partially copied or invalid
         // model never replaces the backend serving the current game.
         try {
-            auto candidate = std::make_unique<gaiazero::OnnxRuntimeCpuBackend>(
-                config_.model_path, gaiazero::OnnxRuntimeCpuConfig{});
+            std::unique_ptr<gaiazero::InferenceBackend> candidate;
+            if (selected_backend() == "tensorrt") {
+                candidate = std::make_unique<gaiazero::TensorRtBackend>(
+                    path, gaiazero::TensorRtConfig{});
+            } else {
+                candidate = std::make_unique<gaiazero::OnnxRuntimeCpuBackend>(
+                    path, gaiazero::OnnxRuntimeCpuConfig{});
+            }
             backend_ = std::move(candidate);
             model_mtime_ = mtime;
-            std::cout << "[cpp-selfplay] loaded model " << config_.model_path.string() << "\n" << std::flush;
+            std::cout << "[cpp-selfplay] loaded " << backend_->name() << " model "
+                      << path.string() << "\n" << std::flush;
         } catch (const std::exception& error) {
-            if (!backend_ && !config_.allow_uniform) throw;
+            if (!backend_ && (!config_.allow_uniform || config_.backend != "auto")) throw;
             std::cerr << "[cpp-selfplay] keeping previous model; reload failed: "
                       << error.what() << "\n" << std::flush;
         }
@@ -519,106 +550,177 @@ public:
 
     Evaluation evaluate(const GaiaState& state,
                         const std::array<float, gaiazero::kMaxPlayers>* root_center = nullptr) {
+        const std::vector<const GaiaState*> states{&state};
+        return evaluate_batch(states, root_center).front();
+    }
+
+    std::vector<Evaluation> evaluate_batch(
+        const std::vector<const GaiaState*>& states,
+        const std::array<float, gaiazero::kMaxPlayers>* root_center = nullptr) {
+        if (states.empty()) throw std::invalid_argument("cannot evaluate an empty state batch");
+        for (const auto* state : states) if (state == nullptr)
+            throw std::invalid_argument("cannot evaluate a null state");
+        std::vector<Evaluation> evaluations;
+        evaluations.reserve(states.size());
+        if (!backend_) {
+            for (const auto* state : states) evaluations.push_back(fallback(*state));
+            return evaluations;
+        }
+
+        const auto batch = gaiazero::encode_graph_batch(states);
+        const auto output = backend_->infer(batch);
+        const std::size_t batch_size = states.size();
+        const std::size_t action_stride = gaiazero::kActionTypeCount;
+        const std::size_t argument_stride = kMaxArgs * 128U;
+        const int players = states.front()->player_count;
+        const std::size_t pair_stride = static_cast<std::size_t>(players * (players - 1) / 2 * 3);
+        const std::size_t vp_stride = static_cast<std::size_t>(players * 403);
+        if (output.action_type_logits.size() != batch_size * action_stride ||
+            output.action_argument_logits.size() != batch_size * argument_stride ||
+            output.pairwise_wdl_logits.size() != batch_size * pair_stride ||
+            output.vp_belief_logits.size() != batch_size * vp_stride) {
+            throw std::runtime_error(
+                "inference backend returned output sizes inconsistent with GraphBatch batch dimension");
+        }
+        for (std::size_t batch_index = 0; batch_index < batch_size; ++batch_index) {
+            evaluations.push_back(decode(*states[batch_index], output, batch_index,
+                                         action_stride, argument_stride, root_center));
+        }
+        return evaluations;
+    }
+
+    [[nodiscard]] fs::path active_model_path() const {
+        return backend_ ? configured_model_path() : fs::path{};
+    }
+
+private:
+    [[nodiscard]] std::string selected_backend() const {
+        if (config_.backend != "auto") return config_.backend;
+        return !config_.tensorrt_engine_path.empty() ? "tensorrt" : "onnxruntime";
+    }
+
+    [[nodiscard]] fs::path configured_model_path() const {
+        return selected_backend() == "tensorrt"
+            ? config_.tensorrt_engine_path : config_.model_path;
+    }
+
+    Evaluation fallback(const GaiaState& state) const {
+        Evaluation evaluation;
+        const auto legal = state.legal_action_tuples();
+        evaluation.priors.assign(legal.size(), 1.0F);
+        const auto scores = state.final_scores();
+        double mean = 0.0;
+        for (int p = 0; p < state.player_count; ++p) mean += scores[static_cast<std::size_t>(p)];
+        mean /= static_cast<double>(state.player_count);
+        double scale = 18.0;
+        for (int p = 0; p < state.player_count; ++p)
+            scale = std::max(scale, std::abs(scores[static_cast<std::size_t>(p)] - mean));
+        for (int p = 0; p < state.player_count; ++p)
+            evaluation.values[static_cast<std::size_t>(p)] = static_cast<float>(
+                std::tanh((scores[static_cast<std::size_t>(p)] - mean) / scale));
+        return evaluation;
+    }
+
+    Evaluation decode(const GaiaState& state, const gaiazero::NetworkOutput& output,
+                      std::size_t batch_index, std::size_t action_stride,
+                      std::size_t argument_stride,
+                      const std::array<float, gaiazero::kMaxPlayers>* root_center) const {
         const auto legal = state.legal_action_tuples();
         Evaluation evaluation;
         evaluation.priors.assign(legal.size(), 1.0F);
-        auto& priors = evaluation.priors;
-        auto& values = evaluation.values;
-        if (backend_) {
-            const auto batch = gaiazero::encode_graph_batch(state);
-            const auto output = backend_->infer(batch);
-            if (output.action_type_logits.size() >= gaiazero::kActionTypeCount &&
-                output.action_argument_logits.size() >= kMaxArgs * 128U) {
-                std::vector<float> scores(legal.size(), -std::numeric_limits<float>::infinity());
-                for (std::size_t i = 0; i < legal.size(); ++i) {
-                    const auto& action = legal[i];
-                    float score = output.action_type_logits[gaiazero::action_type_id(action.action_type)];
-                    for (std::size_t slot = 0; slot < action.argument_count; ++slot) {
-                        const int arg = action.arguments[slot];
-                        if (arg < 0 || arg >= 128) { score = -std::numeric_limits<float>::infinity(); break; }
-                        score += output.action_argument_logits[slot * 128U + static_cast<std::size_t>(arg)];
-                    }
-                    scores[i] = score;
+        const auto action_offset = batch_index * action_stride;
+        const auto argument_offset = batch_index * argument_stride;
+        if (output.action_type_logits.size() >= action_offset + action_stride &&
+            output.action_argument_logits.size() >= argument_offset + argument_stride &&
+            !legal.empty()) {
+            std::vector<float> scores(legal.size(), -std::numeric_limits<float>::infinity());
+            for (std::size_t i = 0; i < legal.size(); ++i) {
+                const auto& action = legal[i];
+                float score = output.action_type_logits[action_offset + gaiazero::action_type_id(action.action_type)];
+                for (std::size_t slot = 0; slot < action.argument_count; ++slot) {
+                    const int arg = action.arguments[slot];
+                    if (arg < 0 || arg >= 128) { score = -std::numeric_limits<float>::infinity(); break; }
+                    score += output.action_argument_logits[argument_offset + slot * 128U + static_cast<std::size_t>(arg)];
                 }
-                const float maximum = *std::max_element(scores.begin(), scores.end());
-                float total = 0.0F;
-                for (std::size_t i = 0; i < scores.size(); ++i) {
-                    priors[i] = std::isfinite(scores[i]) ? std::exp(scores[i] - maximum) : 0.0F;
-                    total += priors[i];
-                }
-                if (total > 0.0F) for (float& value : priors) value /= total;
+                scores[i] = score;
             }
-            const int players = state.player_count;
-            const int pair_count = players * (players - 1) / 2;
-            if (static_cast<int>(output.pairwise_wdl_logits.size()) >= pair_count * 3) {
-                std::array<float, gaiazero::kMaxPlayers> utility{};
-                int pair = 0;
-                for (int left = 0; left < players; ++left) {
-                    for (int right = left + 1; right < players; ++right, ++pair) {
-                        const float a = output.pairwise_wdl_logits[static_cast<std::size_t>(pair * 3)];
-                        const float b = output.pairwise_wdl_logits[static_cast<std::size_t>(pair * 3 + 1)];
-                        const float c = output.pairwise_wdl_logits[static_cast<std::size_t>(pair * 3 + 2)];
-                        const float maximum = std::max({a, b, c});
-                        const float wa = std::exp(a - maximum);
-                        const float wb = std::exp(b - maximum);
-                        const float wc = std::exp(c - maximum);
-                        const float total = std::max(1e-12F, wa + wb + wc);
-                        const float margin = (wa - wc) / total;
-                        utility[static_cast<std::size_t>(left)] += margin;
-                        utility[static_cast<std::size_t>(right)] -= margin;
-                    }
-                }
-                for (int player = 0; player < players; ++player)
-                    values[static_cast<std::size_t>(player)] = utility[static_cast<std::size_t>(player)] /
-                        static_cast<float>(std::max(1, players - 1));
-                evaluation.has_pairwise = true;
+            const float maximum = *std::max_element(scores.begin(), scores.end());
+            float total = 0.0F;
+            for (std::size_t i = 0; i < scores.size(); ++i) {
+                evaluation.priors[i] = std::isfinite(scores[i]) ? std::exp(scores[i] - maximum) : 0.0F;
+                total += evaluation.priors[i];
             }
-            if (static_cast<int>(output.vp_belief_logits.size()) >= players * 403) {
-                constexpr int bucket_count = 403;
-                for (int player = 0; player < players; ++player) {
-                    const auto begin = output.vp_belief_logits.begin() + player * bucket_count;
-                    const auto end = begin + bucket_count;
-                    const float maximum = *std::max_element(begin, end);
-                    double denominator = 0.0;
-                    double numerator = 0.0;
-                    for (auto cursor = begin; cursor != end; ++cursor) {
-                        const double weight = std::exp(static_cast<double>(*cursor - maximum));
-                        denominator += weight;
-                        const auto index = static_cast<int>(cursor - begin);
-                        const int representative = index == 0 ? -201 : index == 402 ? 201 : index - 201;
-                        numerator += weight * representative;
-                    }
-                    evaluation.vp_mean[static_cast<std::size_t>(player)] =
-                        static_cast<float>(numerator / std::max(1e-12, denominator));
-                }
-                evaluation.has_vp_mean = true;
-            }
+            if (total > 0.0F) for (float& value : evaluation.priors) value /= total;
         }
-        const auto scores = state.final_scores();
+        const int players = state.player_count;
+        const int pair_count = players * (players - 1) / 2;
+        const auto pair_offset = batch_index * static_cast<std::size_t>(pair_count * 3);
+        if (output.pairwise_wdl_logits.size() >= pair_offset + static_cast<std::size_t>(pair_count * 3)) {
+            std::array<float, gaiazero::kMaxPlayers> utility{};
+            int pair = 0;
+            for (int left = 0; left < players; ++left) {
+                for (int right = left + 1; right < players; ++right, ++pair) {
+                    const auto index = pair_offset + static_cast<std::size_t>(pair * 3);
+                    const float a = output.pairwise_wdl_logits[index];
+                    const float b = output.pairwise_wdl_logits[index + 1];
+                    const float c = output.pairwise_wdl_logits[index + 2];
+                    const float maximum = std::max({a, b, c});
+                    const float wa = std::exp(a - maximum);
+                    const float wb = std::exp(b - maximum);
+                    const float wc = std::exp(c - maximum);
+                    const float total = std::max(1e-12F, wa + wb + wc);
+                    const float margin = (wa - wc) / total;
+                    utility[static_cast<std::size_t>(left)] += margin;
+                    utility[static_cast<std::size_t>(right)] -= margin;
+                }
+            }
+            for (int player = 0; player < players; ++player)
+                evaluation.values[static_cast<std::size_t>(player)] = utility[static_cast<std::size_t>(player)] /
+                    static_cast<float>(std::max(1, players - 1));
+            evaluation.has_pairwise = true;
+        }
+        constexpr int bucket_count = 403;
+        const auto vp_offset = batch_index * static_cast<std::size_t>(players * bucket_count);
+        if (output.vp_belief_logits.size() >= vp_offset + static_cast<std::size_t>(players * bucket_count)) {
+            for (int player = 0; player < players; ++player) {
+                const auto begin = output.vp_belief_logits.begin() + vp_offset + player * bucket_count;
+                const auto end = begin + bucket_count;
+                const float maximum = *std::max_element(begin, end);
+                double denominator = 0.0;
+                double numerator = 0.0;
+                for (auto cursor = begin; cursor != end; ++cursor) {
+                    const double weight = std::exp(static_cast<double>(*cursor - maximum));
+                    denominator += weight;
+                    const auto index = static_cast<int>(cursor - begin);
+                    const int representative = index == 0 ? -201 : index == 402 ? 201 : index - 201;
+                    numerator += weight * representative;
+                }
+                evaluation.vp_mean[static_cast<std::size_t>(player)] =
+                    static_cast<float>(numerator / std::max(1e-12, denominator));
+            }
+            evaluation.has_vp_mean = true;
+        }
         if (!evaluation.has_pairwise) {
+            const auto scores = state.final_scores();
             double mean = 0.0;
-            for (int p = 0; p < state.player_count; ++p) mean += scores[static_cast<std::size_t>(p)];
-            mean /= static_cast<double>(state.player_count);
+            for (int p = 0; p < players; ++p) mean += scores[static_cast<std::size_t>(p)];
+            mean /= static_cast<double>(players);
             double scale = 18.0;
-            for (int p = 0; p < state.player_count; ++p)
+            for (int p = 0; p < players; ++p)
                 scale = std::max(scale, std::abs(scores[static_cast<std::size_t>(p)] - mean));
-            for (int p = 0; p < state.player_count; ++p)
-                values[static_cast<std::size_t>(p)] = static_cast<float>(std::tanh((scores[static_cast<std::size_t>(p)] - mean) / scale));
+            for (int p = 0; p < players; ++p)
+                evaluation.values[static_cast<std::size_t>(p)] = static_cast<float>(
+                    std::tanh((scores[static_cast<std::size_t>(p)] - mean) / scale));
         }
         if (evaluation.has_vp_mean && root_center != nullptr) {
-            for (int p = 0; p < state.player_count; ++p)
-                values[static_cast<std::size_t>(p)] += static_cast<float>(config_.beta_vp *
+            for (int p = 0; p < players; ++p)
+                evaluation.values[static_cast<std::size_t>(p)] += static_cast<float>(config_.beta_vp *
                     std::tanh((evaluation.vp_mean[static_cast<std::size_t>(p)] - (*root_center)[static_cast<std::size_t>(p)]) /
                               config_.vp_scale));
         }
         return evaluation;
     }
 
-    [[nodiscard]] fs::path active_model_path() const {
-        return backend_ ? config_.model_path : fs::path{};
-    }
-
-private:
     const Config& config_;
     std::unique_ptr<gaiazero::InferenceBackend> backend_;
     std::optional<fs::file_time_type> model_mtime_;
@@ -645,21 +747,63 @@ public:
         expand(root, &root_center, &root_evaluation);
         if (config_.root_noise && config_.root_noise_fraction > 0.0)
             add_root_noise(root);
-        for (int simulation = 0; simulation < config_.simulations; ++simulation) {
-            std::vector<Edge*> path;
-            SearchNode* node = &root;
-            std::array<float, gaiazero::kMaxPlayers> value{};
-            while (true) {
-                if (node->state.is_terminal()) { value = terminal_value(node->state, root_center); break; }
-                if (!node->expanded) { value = expand(*node, &root_center); break; }
-                Edge* edge = select(*node);
-                path.push_back(edge);
-                if (!edge->child) edge->child = std::make_unique<SearchNode>(SearchNode{node->state.apply(edge->action)});
-                node = edge->child.get();
+        if (config_.leaf_batch_size <= 1) {
+            for (int simulation = 0; simulation < config_.simulations; ++simulation) {
+                std::vector<Edge*> path;
+                SearchNode* node = &root;
+                std::array<float, gaiazero::kMaxPlayers> value{};
+                while (true) {
+                    if (node->state.is_terminal()) { value = terminal_value(node->state, root_center); break; }
+                    if (!node->expanded) { value = expand(*node, &root_center); break; }
+                    Edge* edge = select(*node);
+                    path.push_back(edge);
+                    if (!edge->child) edge->child = std::make_unique<SearchNode>(SearchNode{node->state.apply(edge->action)});
+                    node = edge->child.get();
+                }
+                backup(path, value);
             }
-            for (Edge* edge : path) {
-                ++edge->visits;
-                for (int p = 0; p < gaiazero::kMaxPlayers; ++p) edge->value_sum[static_cast<std::size_t>(p)] += value[static_cast<std::size_t>(p)];
+        } else {
+            int completed = 0;
+            while (completed < config_.simulations) {
+                struct Pending {
+                    std::vector<Edge*> path;
+                    SearchNode* leaf{nullptr};
+                    std::array<float, gaiazero::kMaxPlayers> value{};
+                    bool terminal{false};
+                };
+                std::vector<Pending> pending;
+                pending.reserve(static_cast<std::size_t>(config_.leaf_batch_size));
+                while (completed + static_cast<int>(pending.size()) < config_.simulations &&
+                       static_cast<int>(pending.size()) < config_.leaf_batch_size) {
+                    Pending item;
+                    SearchNode* node = &root;
+                    while (true) {
+                        if (node->state.is_terminal()) {
+                            item.value = terminal_value(node->state, root_center);
+                            item.terminal = true;
+                            break;
+                        }
+                        if (!node->expanded) { item.leaf = node; break; }
+                        Edge* edge = select(*node);
+                        ++edge->virtual_visits;
+                        item.path.push_back(edge);
+                        if (!edge->child) edge->child = std::make_unique<SearchNode>(SearchNode{node->state.apply(edge->action)});
+                        node = edge->child.get();
+                    }
+                    pending.push_back(std::move(item));
+                }
+                std::vector<const GaiaState*> leaves;
+                leaves.reserve(pending.size());
+                for (const auto& item : pending) if (!item.terminal) leaves.push_back(&item.leaf->state);
+                const auto evaluations = leaves.empty()
+                    ? std::vector<Evaluation>{}
+                    : evaluator_.evaluate_batch(leaves, &root_center);
+                std::size_t eval_index = 0;
+                for (auto& item : pending) {
+                    if (!item.terminal) item.value = expand(*item.leaf, &root_center, &evaluations[eval_index++]);
+                    backup(item.path, item.value);
+                }
+                completed += static_cast<int>(pending.size());
             }
         }
         SearchResult result;
@@ -691,6 +835,16 @@ public:
     }
 
 private:
+    void backup(const std::vector<Edge*>& path,
+                const std::array<float, gaiazero::kMaxPlayers>& value) const {
+        for (Edge* edge : path) {
+            if (edge->virtual_visits > 0) --edge->virtual_visits;
+            ++edge->visits;
+            for (int p = 0; p < gaiazero::kMaxPlayers; ++p)
+                edge->value_sum[static_cast<std::size_t>(p)] += value[static_cast<std::size_t>(p)];
+        }
+    }
+
     std::array<float, gaiazero::kMaxPlayers> terminal_value(
         const GaiaState& state,
         const std::array<float, gaiazero::kMaxPlayers>& root_center) const {
@@ -745,7 +899,8 @@ private:
         const float exploration = static_cast<float>(config_.c_puct * std::sqrt(static_cast<double>(1 + total_visits(node))));
         for (Edge& edge : node.edges) {
             const float q = edge.visits == 0 ? 0.0F : edge.value_sum[static_cast<std::size_t>(node.state.player_to_move)] / static_cast<float>(edge.visits);
-            const float candidate = q + exploration * edge.prior / static_cast<float>(1 + edge.visits);
+            const float candidate = q + exploration * edge.prior /
+                static_cast<float>(1 + edge.visits + edge.virtual_visits);
             if (candidate > score) { score = candidate; best = &edge; }
         }
         if (!best) throw std::logic_error("MCTS selection found no edge");
@@ -754,7 +909,7 @@ private:
 
     static int total_visits(const SearchNode& node) {
         int total = 0;
-        for (const Edge& edge : node.edges) total += edge.visits;
+        for (const Edge& edge : node.edges) total += edge.visits + edge.virtual_visits;
         return total;
     }
 

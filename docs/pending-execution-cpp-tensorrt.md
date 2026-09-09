@@ -476,7 +476,8 @@ Gaia 的一次规则行动可能展开为多次兑换、选板块、充能确认
 ### 4. C++ TensorRT 推理适配层
 
 - [ ] 新建独立 C++ 推理库，负责 ONNX 解析、TensorRT network/engine 构建、上下文创建和资源释放。
-- [ ] 支持动态 batch 或预设 batch profile，并实现多请求合批接口，避免 self-play 每个叶节点单独推理。
+- [x] 新建 `TensorRtBackend`，加载序列化 engine、创建 runtime/context，校验八个输入和四个输出，并完成资源释放。
+- [x] 支持动态 batch profile，并实现 `GraphBatch` 多请求合批接口，避免 self-play 每个叶节点单独推理。
 - [ ] 实现 CUDA stream、pinned host memory、异步拷贝和 batch 输出回收；从配置读取 `precision`、`validation_precision`、`allow_tf32`、CUDA device、目标 GPU、最低 compute capability 和 workspace 上限，默认提供 FP32 校验模式，再启用 FP16/TF32 优化。
 - [ ] 按 ONNX SHA-256、TensorRT/CUDA 版本、硬件能力和配置精度缓存序列化 engine；缓存失效时自动重建，不能把一个 GPU 的 engine 复制给不满足目标能力的 GPU。
 - [ ] 增加 TensorRT 输出与 Python PyTorch SWA 输出的逐元素校验工具。
@@ -508,7 +509,7 @@ Gaia 的一次规则行动可能展开为多次兑换、选板块、充能确认
 - [x] 选择阶段由节点状态的实际 `current_player` 使用自己的效用分量；不得使用 KataGo 二人零和的父子符号翻转。被动充能、资源选择等响应节点由响应玩家优化自身动作，完成后再返回原行动流程。
 - [ ] 实现 2.7 节的 forced/cheap/full/lead-estimation 调度、根 policy 温度、动作采样温度和分类总浓度噪声；所有搜索参数按人数、网络配置 hash 和语义动作类别版本化，禁止沿用当前单一常数而不重新标定。
 - [x] 将 MCTS 树节点改为可释放的紧凑 RAII 结构；单进程 worker 已支持可追踪的逐局随机种子。多局线程池和批量推理列为下一性能阶段。
-- [ ] 将叶节点请求提交给 TensorRT 批量推理队列，支持虚拟损失或等价并发机制。
+- [x] 将 MCTS 叶节点按 `--leaf-batch-size` 分波提交给 TensorRT，一次 enqueue 后统一扩展/回传，并使用 virtual visits 降低同一波次重复选择；独立异步请求队列、pinned host memory 和 CUDA stream 仍待性能阶段实现。
 - [ ] 先实现可审计的 PUCT/FPU/根噪声基线；P1 再分别加入 NN eval cache、树复用、转置图、root LCB、policy surprise；动态 cPUCT、subtree value bias、uncertainty-weighted playout 和 optimistic policy 保持 P2，不能打包一次启用。
 - [x] 按当前 `npz-trajectory-v1` schema 为每个真实完成的对局写入一个 raw NPZ，包含训练数组、完整状态轨迹、动作 tuple、合法动作、终局结果和复盘 metadata；写入采用临时文件后原子重命名。
 - [x] C++ selfplay 轮询模型文件，只在完整模型发布后、下一局开始前切换，不读取未完成文件。

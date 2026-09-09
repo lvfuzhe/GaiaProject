@@ -54,16 +54,29 @@ void copy_prefix(float* destination, std::int64_t destination_size,
 
 }  // namespace
 
-GraphBatch encode_graph_batch(const GaiaState& state,
+GraphBatch encode_graph_batch(const std::vector<const GaiaState*>& states,
                               const GraphEncoderConfig& config) {
     if (!config.valid()) {
         throw std::invalid_argument("GraphEncoderConfig dimensions must all be positive");
     }
-    if (state.player_count < 2 || state.player_count > kMaxPlayers) {
+    if (states.empty()) {
+        throw std::invalid_argument("graph encoder requires at least one state");
+    }
+    if (states.front() == nullptr) {
+        throw std::invalid_argument("graph encoder received a null state");
+    }
+    const auto& first = *states.front();
+    if (first.player_count < 2 || first.player_count > kMaxPlayers) {
         throw std::invalid_argument("GaiaState player_count must be in [2, 4]");
     }
+    for (const auto* state : states) {
+        if (state == nullptr) throw std::invalid_argument("graph encoder received a null state");
+        if (state->player_count != first.player_count) {
+            throw std::invalid_argument("all graph batch states must have the same player_count");
+        }
+    }
 
-    const auto globals = observation_prefix(state);
+    const auto globals = observation_prefix(first);
     if (static_cast<std::size_t>(config.global_features) > globals.size()) {
         throw std::invalid_argument(
             "graph encoder v1 only exposes the Python observation prefix; "
@@ -75,7 +88,7 @@ GraphBatch encode_graph_batch(const GaiaState& state,
         1,
         config.max_nodes,
         config.max_edges,
-        state.player_count,
+        first.player_count,
         config.node_features,
         config.global_features,
         config.player_features,
@@ -83,98 +96,107 @@ GraphBatch encode_graph_batch(const GaiaState& state,
 
     const auto nodes = static_cast<std::size_t>(config.max_nodes);
     const auto edges = static_cast<std::size_t>(config.max_edges);
-    const auto players = static_cast<std::size_t>(state.player_count);
+    const auto players = static_cast<std::size_t>(first.player_count);
     const auto node_features = static_cast<std::size_t>(config.node_features);
     const auto global_features = static_cast<std::size_t>(config.global_features);
     const auto player_features = static_cast<std::size_t>(config.player_features);
-    batch.node_features.assign(nodes * node_features, 0.0F);
-    batch.edge_index.assign(edges * 2, 0);
-    batch.edge_type.assign(edges, 0);
-    batch.edge_mask.assign(edges, 0.0F);
-    batch.node_mask.assign(nodes, 0.0F);
-    batch.global_features.assign(global_features, 0.0F);
-    batch.player_features.assign(players * player_features, 0.0F);
-    batch.player_mask.assign(players, 1.0F);
+    const auto batch_size = states.size();
+    batch.shape.batch = static_cast<std::int64_t>(batch_size);
+    batch.node_features.assign(batch_size * nodes * node_features, 0.0F);
+    batch.edge_index.assign(batch_size * edges * 2, 0);
+    batch.edge_type.assign(batch_size * edges, 0);
+    batch.edge_mask.assign(batch_size * edges, 0.0F);
+    batch.node_mask.assign(batch_size * nodes, 0.0F);
+    batch.global_features.assign(batch_size * global_features, 0.0F);
+    batch.player_features.assign(batch_size * players * player_features, 0.0F);
+    batch.player_mask.assign(batch_size * players, 1.0F);
 
-    std::vector<std::size_t> active;
-    active.reserve(kMaxPlanets);
-    for (std::size_t planet = 0; planet < state.active_planets.size(); ++planet) {
-        if (state.active_planets[planet]) active.push_back(planet);
-    }
-    if (active.size() > nodes) active.resize(nodes);
-
-    const float player_denominator =
-        static_cast<float>(std::max(1, state.player_count));
-    for (std::size_t node = 0; node < active.size(); ++node) {
-        const auto planet = active[node];
-        batch.node_mask[node] = 1.0F;
-        const std::vector<float> values{
-            static_cast<float>(state.planet_q[planet]) / 16.0F,
-            static_cast<float>(state.planet_r[planet]) / 16.0F,
-            static_cast<float>(state.terrains[planet]) / 9.0F,
-            static_cast<float>(state.owners[planet]) / player_denominator,
-            static_cast<float>(state.buildings[planet]) / 5.0F,
-            state.federated[planet] ? 1.0F : 0.0F,
-            static_cast<float>(state.gaiaformer_owner[planet]) / player_denominator,
-            static_cast<float>(state.coexisting_mine_owner[planet]) / player_denominator,
-        };
-        copy_prefix(batch.node_features.data() + node * node_features,
-                    config.node_features, values);
-    }
-
-    std::size_t edge_count = 0;
-    for (std::size_t left = 0; left < active.size(); ++left) {
-        const auto planet_left = active[left];
-        for (std::size_t right = 0; right < active.size(); ++right) {
-            if (left == right) continue;
-            const auto planet_right = active[right];
-            int distance = std::abs(state.planet_q[planet_left] -
-                                    state.planet_q[planet_right]);
-            distance += std::abs(state.planet_r[planet_left] -
-                                 state.planet_r[planet_right]);
-            distance += std::abs(
-                (state.planet_q[planet_left] + state.planet_r[planet_left]) -
-                (state.planet_q[planet_right] + state.planet_r[planet_right]));
-            if (distance / 2 > 1 || edge_count >= edges) continue;
-            batch.edge_index[edge_count * 2] = static_cast<std::int64_t>(left);
-            batch.edge_index[edge_count * 2 + 1] = static_cast<std::int64_t>(right);
-            const auto terrain = state.terrains[planet_right];
-            batch.edge_type[edge_count] =
-                ((terrain % config.relation_types) + config.relation_types) %
-                config.relation_types;
-            batch.edge_mask[edge_count] = 1.0F;
-            ++edge_count;
+    for (std::size_t batch_index = 0; batch_index < batch_size; ++batch_index) {
+        const auto& state = *states[batch_index];
+        const auto globals_for_state = observation_prefix(state);
+        std::vector<std::size_t> active;
+        active.reserve(kMaxPlanets);
+        for (std::size_t planet = 0; planet < state.active_planets.size(); ++planet) {
+            if (state.active_planets[planet]) active.push_back(planet);
         }
-    }
-
-    std::copy_n(globals.begin(), global_features, batch.global_features.begin());
-
-    for (std::size_t player = 0; player < players; ++player) {
-        const auto& info = state.players[player];
-        const std::vector<float> values{
-            static_cast<float>(info.credits) / 30.0F,
-            static_cast<float>(info.ore) / 15.0F,
-            static_cast<float>(info.knowledge) / 15.0F,
-            static_cast<float>(info.qic) / 10.0F,
-            static_cast<float>(info.vp) / 150.0F,
-            static_cast<float>(info.bowl_one) / 15.0F,
-            static_cast<float>(info.bowl_two) / 15.0F,
-            static_cast<float>(info.bowl_three) / 15.0F,
-            static_cast<float>(info.gaia_power) / 15.0F,
-            static_cast<float>(info.gaiaformers) / 3.0F,
-            static_cast<float>(info.federation_tokens) / 6.0F,
-            static_cast<float>(info.tracks[0]) / 5.0F,
-            static_cast<float>(info.tracks[1]) / 5.0F,
-            static_cast<float>(info.tracks[2]) / 5.0F,
-            info.passed ? 1.0F : 0.0F,
-            static_cast<std::size_t>(state.player_to_move) == player ? 1.0F : 0.0F,
-        };
-        copy_prefix(batch.player_features.data() + player * player_features,
-                    config.player_features, values);
+        if (active.size() > nodes) active.resize(nodes);
+        const auto node_base = batch_index * nodes * node_features;
+        const auto node_mask_base = batch_index * nodes;
+        const auto edge_base = batch_index * edges;
+        const auto player_base = batch_index * players * player_features;
+        const auto player_mask_base = batch_index * players;
+        const float player_denominator = static_cast<float>(std::max(1, state.player_count));
+        for (std::size_t node = 0; node < active.size(); ++node) {
+            const auto planet = active[node];
+            batch.node_mask[node_mask_base + node] = 1.0F;
+            const std::vector<float> values{
+                static_cast<float>(state.planet_q[planet]) / 16.0F,
+                static_cast<float>(state.planet_r[planet]) / 16.0F,
+                static_cast<float>(state.terrains[planet]) / 9.0F,
+                static_cast<float>(state.owners[planet]) / player_denominator,
+                static_cast<float>(state.buildings[planet]) / 5.0F,
+                state.federated[planet] ? 1.0F : 0.0F,
+                static_cast<float>(state.gaiaformer_owner[planet]) / player_denominator,
+                static_cast<float>(state.coexisting_mine_owner[planet]) / player_denominator,
+            };
+            copy_prefix(batch.node_features.data() + node_base + node * node_features,
+                        config.node_features, values);
+        }
+        std::size_t edge_count = 0;
+        for (std::size_t left = 0; left < active.size(); ++left) {
+            const auto planet_left = active[left];
+            for (std::size_t right = 0; right < active.size(); ++right) {
+                if (left == right) continue;
+                const auto planet_right = active[right];
+                int distance = std::abs(state.planet_q[planet_left] - state.planet_q[planet_right]);
+                distance += std::abs(state.planet_r[planet_left] - state.planet_r[planet_right]);
+                distance += std::abs((state.planet_q[planet_left] + state.planet_r[planet_left]) -
+                                     (state.planet_q[planet_right] + state.planet_r[planet_right]));
+                if (distance / 2 > 1 || edge_count >= edges) continue;
+                batch.edge_index[(edge_base + edge_count) * 2] = static_cast<std::int64_t>(left);
+                batch.edge_index[(edge_base + edge_count) * 2 + 1] = static_cast<std::int64_t>(right);
+                const auto terrain = state.terrains[planet_right];
+                batch.edge_type[edge_base + edge_count] =
+                    ((terrain % config.relation_types) + config.relation_types) % config.relation_types;
+                batch.edge_mask[edge_base + edge_count] = 1.0F;
+                ++edge_count;
+            }
+        }
+        std::copy_n(globals_for_state.begin(), global_features,
+                    batch.global_features.begin() + batch_index * global_features);
+        for (std::size_t player = 0; player < players; ++player) {
+            const auto& info = state.players[player];
+            const std::vector<float> values{
+                static_cast<float>(info.credits) / 30.0F,
+                static_cast<float>(info.ore) / 15.0F,
+                static_cast<float>(info.knowledge) / 15.0F,
+                static_cast<float>(info.qic) / 10.0F,
+                static_cast<float>(info.vp) / 150.0F,
+                static_cast<float>(info.bowl_one) / 15.0F,
+                static_cast<float>(info.bowl_two) / 15.0F,
+                static_cast<float>(info.bowl_three) / 15.0F,
+                static_cast<float>(info.gaia_power) / 15.0F,
+                static_cast<float>(info.gaiaformers) / 3.0F,
+                static_cast<float>(info.federation_tokens) / 6.0F,
+                static_cast<float>(info.tracks[0]) / 5.0F,
+                static_cast<float>(info.tracks[1]) / 5.0F,
+                static_cast<float>(info.tracks[2]) / 5.0F,
+                info.passed ? 1.0F : 0.0F,
+                static_cast<std::size_t>(state.player_to_move) == player ? 1.0F : 0.0F,
+            };
+            copy_prefix(batch.player_features.data() + player_base + player * player_features,
+                        config.player_features, values);
+            batch.player_mask[player_mask_base + player] = 1.0F;
+        }
     }
 
     validate_graph_batch(batch);
     return batch;
+}
+
+GraphBatch encode_graph_batch(const GaiaState& state,
+                              const GraphEncoderConfig& config) {
+    return encode_graph_batch(std::vector<const GaiaState*>{&state}, config);
 }
 
 }  // namespace gaiazero

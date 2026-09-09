@@ -4,10 +4,12 @@
 #include "gaiazero/inference.hpp"
 #include "gaiazero/numpy_random.hpp"
 #include "gaiazero/onnxruntime_backend.hpp"
+#include "gaiazero/tensorrt_backend.hpp"
 #include "gaiazero/sha256.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <iostream>
 #include <stdexcept>
 
@@ -148,6 +150,35 @@ int main() {
     require_close(encoded.player_mask[0], 1.0F);
     require_close(encoded.player_mask[1], 1.0F);
     require(encoded.edge_mask[0] == 1.0F);
+
+    // Batched graph encoding keeps each state's padded tensors contiguous and
+    // preserves local edge indices for ONNX/TensorRT leaf waves.
+    auto next_state = state.apply(state.legal_action_tuples().front());
+    const auto encoded_pair = encode_graph_batch(
+        std::vector<const GaiaState*>{&state, &next_state});
+    require(encoded_pair.shape.batch == 2);
+    require(encoded_pair.node_features.size() == 2 * encoded.node_features.size());
+    require(encoded_pair.global_features.size() == 2 * encoded.global_features.size());
+    require_close(encoded_pair.global_features[0], encoded.global_features[0]);
+    require_close(encoded_pair.global_features[encoded.global_features.size()],
+                  static_cast<float>(next_state.round_number) / static_cast<float>(kMaxRounds));
+    bool rejected_mixed_players = false;
+    try {
+        const auto three_player = GaiaState::initial(3, 20260828);
+        (void)encode_graph_batch(std::vector<const GaiaState*>{&state, &three_player});
+    } catch (const std::invalid_argument&) {
+        rejected_mixed_players = true;
+    }
+    require(rejected_mixed_players);
+
+    bool tensorrt_unavailable = false;
+    try {
+        TensorRtBackend backend(std::filesystem::path{});
+        (void)backend;
+    } catch (const std::exception&) {
+        tensorrt_unavailable = true;
+    }
+    require(tensorrt_unavailable);
 
     auto encoded_mutated = state;
     encoded_mutated.used_power_actions = (1 << 0) | (1 << 6);

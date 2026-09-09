@@ -45,6 +45,31 @@ gaiazero::OnnxRuntimeCpuBackend backend("candidate.onnx");
 gaiazero::NetworkOutput output = backend.infer(graph_batch);
 ```
 
+## TensorRT 批量叶节点后端
+
+有 CUDA/TensorRT SDK 时，可启用 TensorRT 后端；`TENSORRT_ROOT` 应包含
+`include/NvInfer.h`、`lib/nvinfer` 以及 CUDA runtime。该后端对一个 `GraphBatch`
+执行一次 enqueue，供 MCTS 叶节点批量推理使用：
+
+```powershell
+cmake --preset windows-msvc-ninja `
+  -DGAIA_ENABLE_TENSORRT=ON `
+  -DTENSORRT_ROOT="C:\sdk\TensorRT"
+cmake --build --preset windows-msvc-ninja --config Release --target gaiazero_selfplay
+```
+
+运行时指定 TensorRT engine 和叶节点波次大小：
+
+```powershell
+gaiazero_selfplay.exe --players 3 --backend tensorrt `
+  --tensorrt-engine runs/pipeline-3p/exported/current.engine `
+  --leaf-batch-size 64 --simulations 256
+```
+
+engine 必须由同一份 GaiaZero ONNX 导出构建，并保留八个输入、四个输出名称和动态
+batch optimization profile。没有 NVIDIA/TensorRT 的机器不需要安装这些 SDK，继续使用
+CPU smoke 或 ONNX Runtime CPU 参考后端即可。
+
 后端会拒绝不存在的模型、输入/输出数量或名称不匹配、类型/秩不匹配以及运行时 shape 不匹配的模型。模型导出的合法动作过滤仍由 C++ 规则引擎负责，ONNX 后端只返回原始 logits。
 
 启用 CUDA 时需要本机已安装 CUDA Toolkit；没有 Toolkit 时 CMake 会在配置阶段明确报错：

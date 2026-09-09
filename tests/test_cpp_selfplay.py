@@ -31,6 +31,8 @@ class CppSelfplayTests(unittest.TestCase):
                     "1",
                     "--simulations",
                     "1",
+                    "--leaf-batch-size",
+                    "4",
                     "--max-moves",
                     "180",
                     "--output",

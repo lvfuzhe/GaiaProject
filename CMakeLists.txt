@@ -25,6 +25,7 @@ add_library(gaiazero_core
     cpp/src/contracts.cpp
     cpp/src/inference.cpp
     cpp/src/onnxruntime_backend.cpp
+    cpp/src/tensorrt_backend.cpp
     cpp/src/sha256.cpp
     cpp/src/gaia_state.cpp
     cpp/src/graph_encoder.cpp
@@ -90,10 +91,20 @@ if(GAIA_ENABLE_TENSORRT)
     if(NOT EXISTS "${TENSORRT_ROOT}/include/NvInfer.h")
         message(FATAL_ERROR "TENSORRT_ROOT does not contain include/NvInfer.h")
     endif()
+    find_library(TENSORRT_LIBRARY
+        NAMES nvinfer
+        PATHS "${TENSORRT_ROOT}/lib" "${TENSORRT_ROOT}/lib/x64" "${TENSORRT_ROOT}/lib/win-x64"
+        NO_DEFAULT_PATH)
+    if(NOT TENSORRT_LIBRARY)
+        message(FATAL_ERROR "Could not find the TensorRT nvinfer library under TENSORRT_ROOT")
+    endif()
+    if(NOT GAIA_ENABLE_CUDA)
+        find_package(CUDAToolkit REQUIRED)
+    endif()
     add_library(gaiazero_tensorrt INTERFACE)
     target_include_directories(gaiazero_tensorrt INTERFACE "${TENSORRT_ROOT}/include")
     target_compile_definitions(gaiazero_core PUBLIC GAIA_HAS_TENSORRT=1)
-    target_link_libraries(gaiazero_core PUBLIC gaiazero_tensorrt)
+    target_link_libraries(gaiazero_core PUBLIC gaiazero_tensorrt "${TENSORRT_LIBRARY}" CUDA::cudart)
 endif()
 
 add_executable(gaiazero_selfplay cpp/src/selfplay_main.cpp)
