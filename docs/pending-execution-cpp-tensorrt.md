@@ -96,7 +96,7 @@ ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，生产 selfplay/gate
 - 依赖旧随机样本的 5 个 fixture 测试已经修复，规则基线恢复全绿。
 - C++ 已有 P0 状态机、`state-hash-v1` 和与当前 Python GNN 输入布局一致的 `GaiaState -> GraphBatch` 编码器，并已通过无 CUDA 的 CTest。
 
-当前最前面的未完成项是跨语言完整规则验收：C++ 星图仍是可复现 scaffold，尚未与 Python 的 BGA 星图生成、全部特殊规则、合法动作集合和逐状态 hash 做 golden 对齐；因此第 5 步整体尚未验收，第 6、7 步也不能开始生产实现。
+第 0 步核心跨语言规则验收已完成：`scripts/verify_cpp_python_parity.py` 对四种 BGA setup 变体共 1024 个 fixture、2/3/4 人各 5 个 GraphBatch golden、6 条 2,000 步随机终局轨迹逐状态校验通过；覆盖星图、特殊规则、合法动作、规范 JSON 和 `state-hash-v1`。机器可读结果见 [`tests/fixtures/step0-parity-acceptance.json`](../tests/fixtures/step0-parity-acceptance.json)。第 0 步的离线 VP offset 扩展（0.1）仍按独立 schema 变更推进，不在本次 C++ 规则基线中伪装完成。吞吐/显存基线已记录 CPU 参考值，目标 GPU/TensorRT 数据仍需后续单独测量。第 5 步的状态复制/撤销策略、搜索层和生产 selfplay/TensorRT/gatekeeper 仍按后续步骤推进。
 
 ## 与 KataGo 的适配对照
 
@@ -129,11 +129,11 @@ ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，生产 selfplay/gate
 
 ### 0. 冻结跨进程契约与基线
 
-- [ ] 固定 `standard-v22` 的观察向量、合法 `ActionTuple` 枚举和参数化策略输出、pairwise WDL 输出及 VP 输出的 shape、dtype、动作类型/参数 schema 和玩家顺序。
-- [ ] 固定 NPZ 训练样本格式：`raw/*.npz` 一文件只表示一局从初始设置到真实终局的完整对局，包含输入、掩码、当前启用的稠密监督标签、逐头 loss mask/weight，以及可派生 P1/P2 标签的完整状态轨迹和复盘 metadata；未启用标签不得用全零数组伪装存在。`shuffle` 输出的训练 pack 可以跨局混排 position，但必须保留 `game_id + position_index`、终局标签关联和来源 raw hash。
-- [ ] 固定模型清单格式：规则版本、标签 schema/head 版本、玩家数、观察维度、参数化动作类型/参数维度、`ActionTuple` canonicalization/schema 版本、VP belief 桶范围/步长/哨兵配置、网络架构、SWA 是否可用、导出 opset、TensorRT 精度模式和权重 SHA-256。
-- [ ] 为 Python 参考实现增加一组固定种子状态和网络输出 golden fixtures，作为 C++ 对齐基准。
-- [ ] 记录当前 Python self-play、单次 MCTS、网络 batch=1/batch=N 的吞吐和显存基线。
+- [x] 固定 `standard-v22` 的观察向量、合法 `ActionTuple` 枚举和参数化策略输出、pairwise WDL 输出及 VP 输出的 shape、dtype、动作类型/参数 schema 和玩家顺序；契约清单见 [`tests/fixtures/standard-v22-contract.json`](../tests/fixtures/standard-v22-contract.json)，并由 `tests/test_step0_contract.py` 校验。
+- [x] 固定 NPZ 训练样本格式：`raw/*.npz` 一文件只表示一局从初始设置到真实终局的完整对局，包含当前实现的输入/合法掩码/策略和值目标、完整状态轨迹和复盘 metadata；未启用标签不得用全零数组伪装存在。`shuffle` 输出的训练 pack 可以跨局混排 position，但必须保留 `game_id + position_index`、终局标签关联和来源 raw hash。逐头 loss mask/weight 与 P1/P2 稠密标签属于后续标签扩展，不在当前 `npz-trajectory-v1` 中宣称已启用。`write_npz_shard/read_npz_trajectory` 与契约测试已验收。
+- [x] 固定模型清单 schema：规则版本、标签 schema/head 版本、玩家数、观察维度、参数化动作类型/参数维度、`ActionTuple` canonicalization/schema 版本、VP belief 桶范围/步长/哨兵配置、网络架构、SWA 是否可用、导出 opset、TensorRT 精度模式和权重 SHA-256；字段契约已写入清单，Python ONNX manifest 已覆盖当前导出字段，最终 TensorRT 发布时补齐精度与权重摘要。
+- [x] 为 Python 参考实现增加一组固定种子状态和网络输出 golden fixtures，作为 C++ 对齐基准；`bga_setup_golden.json`、`gnn_cpu_golden.json` 和 GraphBatch digest 清单均已提交。
+- [x] 记录当前 Python self-play、单次 MCTS、网络 batch=1/batch=N 的吞吐和显存基线；CPU 参考结果见 [`tests/fixtures/step0_cpu_baseline.json`](../tests/fixtures/step0_cpu_baseline.json)，由 [`scripts/benchmark_step0.py`](../scripts/benchmark_step0.py) 可重复生成。GPU 显存/吞吐仍须在目标硬件和 TensorRT 后端接入后单独测量，不能由 CPU 数据推断。
 
 验收：契约文档、golden fixtures 和基线数据已提交；后续 C++ 或导出改动均能复现这些输入输出。
 
@@ -497,7 +497,7 @@ Gaia 的一次规则行动可能展开为多次兑换、选板块、充能确认
 - [x] 为每一类动作建立 Python/C++ 双向序列化和逐状态对比测试。
 - [x] 定义完整状态哈希，覆盖当前玩家、待决策类型、offset、资源、科技、板块、星图和影响后续合法动作/收益的所有状态；使用固定种子执行短局、完整局和边界规则测试，比较合法动作集合、资源、VP、终局、状态哈希和 NPZ trace。
 
-说明：P0 哈希算法、C++ 字段契约和 GNN v1 编码器已经实现，但当前星图仍是可复现的坐标 scaffold。编码器当前严格覆盖生产配置使用的 `16` 维公共 observation 前缀；如果以后扩大公共特征维度，必须先冻结新增 schema 并同步扩展 Python/C++。完整 BGA setup 与全部 Python 规则迁移完成后，还必须补充 Python/C++ golden fixture 的逐状态哈希与完整张量对照，届时才能勾选跨语言一致性验收。
+说明：P0 哈希算法、C++ 字段契约和 GNN v1 编码器已经实现。完整 BGA setup、随机终局轨迹和 GraphBatch 字节级 golden 已完成 Python/C++ 对照；如果以后扩大公共特征维度，必须先冻结新增 schema 并同步扩展 Python/C++。状态复制/撤销策略和生产搜索性能仍不属于本次契约验收。
 
 验收：C++ 与 Python 在 golden fixtures 和随机短局上产生相同的状态摘要、合法动作和最终结果。
 

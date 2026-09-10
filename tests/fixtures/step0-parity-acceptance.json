@@ -1,0 +1,38 @@
+{
+  "schema_version": "cpp-python-parity-acceptance-v1",
+  "rules_version": "standard-v22",
+  "setup_fixtures": 1024,
+  "trace_limit": 2000,
+  "traces": [
+    {
+      "players": 2,
+      "seed": 0,
+      "steps": 57
+    },
+    {
+      "players": 2,
+      "seed": 17,
+      "steps": 60
+    },
+    {
+      "players": 3,
+      "seed": 0,
+      "steps": 102
+    },
+    {
+      "players": 3,
+      "seed": 4,
+      "steps": 97
+    },
+    {
+      "players": 4,
+      "seed": 17,
+      "steps": 127
+    },
+    {
+      "players": 4,
+      "seed": 8,
+      "steps": 160
+    }
+  ]
+}

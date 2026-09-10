@@ -1,0 +1,40 @@
+{
+  "schema_version": "step0-cpu-baseline-v1",
+  "measured_at_utc": "2026-09-10T02:36:31Z",
+  "environment": {
+    "python": "3.13.2",
+    "pytorch": "2.8.0+cpu",
+    "platform": "Windows-11-10.0.26100-SP0",
+    "device": "cpu",
+    "gpu_memory_bytes": null
+  },
+  "workload": {
+    "player_count": 3,
+    "seed": 20260828,
+    "mcts_simulations": 8,
+    "selfplay_simulations": 1,
+    "selfplay_positions": 116,
+    "gnn_network_config_id": "graph-hybrid-v1"
+  },
+  "measurements": {
+    "mcts8_seconds": 0.00827480002772063,
+    "mcts8_runs_per_second": 120.84884186324672,
+    "selfplay_one_game_seconds": 18.117110699997284,
+    "selfplay_positions_per_second": 6.402786952116895,
+    "gnn_batch1_seconds": 0.05988449999131262,
+    "gnn_batch1_inferences_per_second": 16.698811881957248,
+    "gnn_batch4_seconds": 0.16673439997248352,
+    "gnn_batch4_inferences_per_second": 23.990250366211935
+  },
+  "rss_delta_bytes": {
+    "mcts8": 221184,
+    "selfplay_one_game": 17772544,
+    "gnn_batch1": 8839168,
+    "gnn_batch4": 16211968
+  },
+  "limitations": [
+    "CPU reference measurements only; no GPU/TensorRT throughput is inferred.",
+    "RSS deltas are process-level observations, not allocator or VRAM usage.",
+    "Use the same workload and script after C++/TensorRT integration for comparison."
+  ]
+}

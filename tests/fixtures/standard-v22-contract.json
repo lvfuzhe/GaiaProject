@@ -1,0 +1,83 @@
+{
+  "schema_version": "standard-v22-contract-v1",
+  "rules_version": "standard-v22",
+  "action": {
+    "schema_version": "action-tuple-v1",
+    "action_type_count": 54,
+    "max_parameter_slots": 8,
+    "parameterization": "conditional_independent_slots",
+    "canonicalization": "type_then_fixed_slot_order",
+    "fixed_action_id_role": "audit_and_cache_only"
+  },
+  "observation": {
+    "dtype": "float32",
+    "player_order": "absolute_seat_order",
+    "shape_by_player_count": {
+      "2": [4127],
+      "3": [4839],
+      "4": [5551]
+    },
+    "graph_inputs": {
+      "nodes": ["float32", [1, 128, 16]],
+      "edge_index": ["int64", [1, 512, 2]],
+      "edge_type": ["int64", [1, 512]],
+      "edge_mask": ["float32", [1, 512]],
+      "node_mask": ["float32", [1, 128]],
+      "global": ["float32", [1, 16]],
+      "players": ["float32", [1, "P", 16]],
+      "player_mask": ["float32", [1, "P"]]
+    }
+  },
+  "network": {
+    "architecture_family": "graph_hybrid",
+    "network_config_id": "graph-hybrid-v1",
+    "core_heads": ["parameterized_policy", "pairwise_wdl", "vp_belief"],
+    "output_names": [
+      "action_type_logits",
+      "action_argument_logits",
+      "pairwise_wdl_logits",
+      "vp_belief_logits"
+    ],
+    "output_shapes": {
+      "action_type_logits": [1, 54],
+      "action_argument_logits": [1, 8, 128],
+      "pairwise_wdl_logits": [1, "Q", 3],
+      "vp_belief_logits": [1, "P", 403]
+    },
+    "vp_belief": {
+      "minimum": -200,
+      "maximum": 200,
+      "step": 1,
+      "underflow_bucket": true,
+      "overflow_bucket": true,
+      "bucket_count": 403
+    }
+  },
+  "trajectory": {
+    "schema_version": "npz-trajectory-v1",
+    "state_hash_version": "state-hash-v1",
+    "alignment": "pre_action_positions_plus_terminal",
+    "raw_file_scope": "one_complete_game"
+  },
+  "graph_golden": {
+    "schema_version": "cpp-python-graph-golden-v1",
+    "seeds": [0, 1, 17, 255, 20260828],
+    "digests": {
+      "2/0": "533d63f14cff0efc8d273cafa5ff64ffe19f9395421a2a3361ed5f8e6ada92f1",
+      "2/1": "fb447859b4797cb7e81bbf46769835654707d58ea20a34e6276bbf2092ee220e",
+      "2/17": "b80ea15aca79588a68ac7e474b6961b6582f1a35b7fc7e7a911edda894bc2e85",
+      "2/255": "849d4bd37c45c5cf4678e86bcd2a7f380c24b5ed8925d31f21351bb4766cbec9",
+      "2/20260828": "5db4dd7000c77444b137e8a4c46fdc13d6686e0388efc21fe45da0848bdd1735",
+      "3/0": "4e02adfda2e1fbafcad3ac9808f881ada416fe6ddb41e45eccfe290d5393f92e",
+      "3/1": "0a7e744cef15980bcf088cdeded72a336cb642189cc2be55809e53bc1eb0ba40",
+      "3/17": "7f13a639a33e973d44f1003a1d5ae420dc2777f5da39a563fe701f0dd7e0274b",
+      "3/255": "98a2b1125cbef802ecf518c291455083f07269ffd8bdce8cc32c6d9957626658",
+      "3/20260828": "09c36d34aaec915c30f65c150b62487696fcb947bdda4ab6b5eb82270dedcdcc",
+      "4/0": "75a5151fc649e0bfdf19450ede3f74ac6922bbb1dcf7c6b669fc48b2a91cb76a",
+      "4/1": "1e92f8911719d263bfd8818d01f6afbb526427d40999a0f3783c3e117d1bedcd",
+      "4/17": "bdf0fd1e22e66e89bb1d6ffa1bf06683abdd29835742c81726dc1e63a9b44420",
+      "4/255": "91d28177fafea19103291714b90307a35e5e8f5f42421d6792c735455c393f12",
+      "4/20260828": "cb064d10f4b205310f194c781f2490148e1a3422b4a59b1e6000a87b3622c561"
+    }
+  }
+}
