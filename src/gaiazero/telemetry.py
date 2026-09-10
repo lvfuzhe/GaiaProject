@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,6 +14,8 @@ import numpy as np
 
 
 LOCAL_HISTORY_FORMAT = "gaiazero-local-history-v1"
+PIPELINE_TELEMETRY_FORMAT = "gaiazero-pipeline-telemetry-v1"
+PIPELINE_TELEMETRY_SCHEMA_VERSION = "pipeline-telemetry-v1"
 _LOCAL_HISTORY_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}")
 
 
@@ -23,6 +27,162 @@ def _json_default(value: Any) -> Any:
     if isinstance(value, Path):
         return str(value)
     raise TypeError(f"cannot serialize {type(value).__name__}")
+
+
+def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
+    """Atomically publish a small JSON snapshot used by the worker dashboard."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=_json_default,
+    )
+    try:
+        with temporary.open("w", encoding="utf-8", newline="\n") as stream:
+            stream.write(encoded + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _telemetry_groups(metrics: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Normalize heterogeneous worker metrics into one stable envelope.
+
+    ``values`` intentionally retains every worker-specific metric.  The other
+    groups contain the cross-worker vocabulary consumed by dashboards and
+    future supervisors; absent values are omitted rather than fabricated.
+    """
+
+    counters: dict[str, Any] = {}
+    rates: dict[str, Any] = {}
+    queues: dict[str, Any] = {}
+    models: dict[str, Any] = {}
+    counter_names = {
+        "games", "moves", "positions", "examples", "packs", "updates",
+        "exports", "evaluated", "approved", "replay_positions", "generation",
+        "new_positions", "processed_games", "pending_games", "loaded_shards",
+    }
+    queue_names = {
+        "pending", "pending_games", "pending_candidates", "queue_depth",
+        "inflight", "loaded_shards", "trained_shards", "replay_positions",
+    }
+    rate_names = {
+        "games_per_second", "positions_per_second", "examples_per_second",
+        "updates_per_second", "inference_per_second", "throughput",
+        "duration_seconds",
+    }
+    model_names = {
+        "weight", "model", "candidate", "approved_model", "backend",
+        "network_config_id", "training_config_hash",
+    }
+    for key, value in metrics.items():
+        if key in counter_names:
+            counters[key] = value
+        if key in queue_names:
+            queues[key] = value
+        if key in rate_names or key.endswith("_per_second"):
+            rates[key] = value
+        if key in model_names:
+            models[key] = value
+    return {
+        "counters": counters,
+        "rates": rates,
+        "queues": queues,
+        "model": models,
+        "values": dict(metrics),
+    }
+
+
+def publish_pipeline_telemetry(
+    root: str | Path,
+    worker: str,
+    phase: str,
+    *,
+    metrics: dict[str, Any] | None = None,
+    pid: int | None = None,
+) -> dict[str, Any]:
+    """Publish a canonical five-worker status and append its event record.
+
+    Each worker owns one status JSON and one JSONL event stream, so concurrent
+    workers never contend on a shared append-only file.  ``metrics`` remains
+    flat for compatibility; ``telemetry`` provides normalized groups.
+    """
+
+    base = Path(root)
+    status_path = base / "status" / f"{worker}.json"
+    previous: dict[str, Any] = {}
+    try:
+        previous = json.loads(status_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        previous = {}
+    previous_metrics = previous.get("metrics")
+    values = dict(metrics) if metrics else (
+        dict(previous_metrics) if isinstance(previous_metrics, dict) else {}
+    )
+    try:
+        sequence = int(previous.get("sequence", 0)) + 1
+    except (TypeError, ValueError):
+        sequence = 1
+    now = datetime.now(UTC).isoformat()
+    now_ms = time.time_ns() // 1_000_000
+    payload: dict[str, Any] = {
+        "format": PIPELINE_TELEMETRY_FORMAT,
+        "schema_version": PIPELINE_TELEMETRY_SCHEMA_VERSION,
+        "worker": str(worker),
+        "phase": str(phase),
+        "pid": int(pid if pid is not None else os.getpid()),
+        "sequence": sequence,
+        "updated_at": now,
+        "updated_at_unix_ms": now_ms,
+        "event": "worker_status",
+        "metrics": values,
+        "telemetry": _telemetry_groups(values),
+    }
+    _atomic_json(status_path, payload)
+    event_path = base / "telemetry" / "events" / f"{worker}.jsonl"
+    event_path.parent.mkdir(parents=True, exist_ok=True)
+    with event_path.open("a", encoding="utf-8", newline="\n") as stream:
+        stream.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=_json_default) + "\n")
+        stream.flush()
+    return payload
+
+
+def read_pipeline_telemetry(
+    root: str | Path,
+    *,
+    worker: str | None = None,
+    limit: int = 200,
+) -> dict[str, Any]:
+    """Read recent canonical events for one worker or the complete pipeline."""
+
+    if limit < 1:
+        raise ValueError("telemetry limit must be positive")
+    events_dir = Path(root) / "telemetry" / "events"
+    paths = [events_dir / f"{worker}.jsonl"] if worker else sorted(events_dir.glob("*.jsonl"))
+    events: list[dict[str, Any]] = []
+    for path in paths:
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for line in lines[-limit:]:
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict) and value.get("schema_version") == PIPELINE_TELEMETRY_SCHEMA_VERSION:
+                events.append(value)
+    events.sort(key=lambda item: str(item.get("updated_at", "")))
+    return {
+        "format": PIPELINE_TELEMETRY_FORMAT,
+        "schema_version": PIPELINE_TELEMETRY_SCHEMA_VERSION,
+        "events": events[-limit:],
+    }
 
 
 def write_local_game(path: str | Path, record: dict[str, Any]) -> Path:

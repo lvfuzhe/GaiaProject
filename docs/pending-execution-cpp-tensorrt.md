@@ -516,7 +516,7 @@ Gaia 的一次规则行动可能展开为多次兑换、选板块、充能确认
 - [ ] 先实现可审计的 PUCT/FPU/根噪声基线；P1 再分别加入 NN eval cache、树复用、转置图、root LCB、policy surprise；动态 cPUCT、subtree value bias、uncertainty-weighted playout 和 optimistic policy 保持 P2，不能打包一次启用。
 - [x] 按当前 `npz-trajectory-v1` schema 为每个真实完成的对局写入一个 raw NPZ，包含训练数组、完整状态轨迹、动作 tuple、合法动作、终局结果和复盘 metadata；写入采用临时文件后原子重命名。
 - [x] C++ selfplay 轮询模型文件，只在完整模型发布后、下一局开始前切换，不读取未完成文件。
-- [x] C++ selfplay 输出对局数、步数、状态数、模型路径和错误；五进程统一 telemetry、forced/cheap/full 比例和 TensorRT batch 指标仍待 supervisor 接入。
+- [x] C++ selfplay 输出对局数、步数、状态数、模型路径和错误；五进程统一 telemetry 已接入：Python 四个 worker 与 C++ selfplay 使用同一 `gaiazero-pipeline-telemetry-v1` 信封，分别写入 `status/<worker>.json` 快照和 `telemetry/events/<worker>.jsonl` 事件流，supervisor 提供总览及单 worker 最近事件。
 
 验收：C++ selfplay 生成的 NPZ 可被现有 Python shuffle/train 读取；同等模拟次数下规则结果与 Python 参考实现一致。
 

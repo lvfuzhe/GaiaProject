@@ -63,6 +63,7 @@ from gaiazero.model import (
 from gaiazero.replay import ReplayBuffer, TrainingExample
 from gaiazero.selfplay import SelfPlayConfig, play_self_game
 from gaiazero.training import AlphaZeroTrainer, TrainerConfig
+from gaiazero.telemetry import publish_pipeline_telemetry
 
 
 PIPELINE_FORMAT = 1
@@ -213,16 +214,12 @@ def _publish_worker_status(
     previous_metrics = previous.get("metrics")
     if not metrics and isinstance(previous_metrics, dict):
         metrics = previous_metrics
-    _atomic_json(
-        paths["status"] / f"{worker}.json",
-        {
-            "format": PIPELINE_FORMAT,
-            "worker": worker,
-            "phase": phase,
-            "pid": os.getpid(),
-            "updated_at": datetime.now(UTC).isoformat(),
-            "metrics": metrics,
-        },
+    publish_pipeline_telemetry(
+        paths["root"],
+        worker,
+        phase,
+        metrics=metrics,
+        pid=os.getpid(),
     )
 
 

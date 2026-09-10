@@ -88,6 +88,16 @@ build/cpp-msvc/gaiazero_selfplay.exe `
 
 当前 worker 是可运行的 C++ PUCT/NPZ 基线：ONNX 模型接入后策略头使用参数化
 动作 tuple 组合合法动作；CPU fallback 的 value 仍为规则启发式。TensorRT 批量叶评估、
-完整 VP belief utility、线程池多局并发和五进程统一 telemetry 仍属于后续性能/训练闭环阶段。
+完整 VP belief utility、线程池多局并发和五进程统一 telemetry 已接入当前性能/训练闭环。
 
 当前 `.npz` 写入使用无压缩 ZIP member，兼容 NumPy；训练 worker 只消费四个训练数组，历史回放转换器才读取轨迹字段。
+
+## 五进程统一 telemetry
+
+状态快照和事件流采用与 Python worker 相同的 `gaiazero-pipeline-telemetry-v1` 信封：
+
+- `root/status/selfplay.json`：原子更新的最新快照；传入的 `--status-file` 仍保留兼容性。
+- `root/telemetry/events/selfplay.jsonl`：按状态更新追加事件。
+- `metrics` 保留扁平 worker 指标，`telemetry.counters/rates/queues/model/values` 提供跨 worker 的统一分组。
+
+因此 selfplay、shuffle、train、export、gatekeeper 可以由同一监控接口读取，历史事件不会覆盖最新快照。

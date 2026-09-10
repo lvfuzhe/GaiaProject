@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import tempfile
@@ -22,6 +23,8 @@ class CppSelfplayTests(unittest.TestCase):
         if not executable.is_file():
             self.skipTest(f"C++ selfplay executable is not built: {executable}")
         with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            status_file = root / "status.json"
             subprocess.run(
                 [
                     str(executable.resolve()),
@@ -37,6 +40,8 @@ class CppSelfplayTests(unittest.TestCase):
                     "180",
                     "--output",
                     temporary,
+                    "--status-file",
+                    str(status_file),
                     "--no-root-noise",
                     "--once",
                 ],
@@ -68,13 +73,22 @@ class CppSelfplayTests(unittest.TestCase):
                     np.allclose(values["final_vp_belief_targets"].sum(axis=-1), 1.0)
                 )
 
-        self.assertTrue(examples)
-        self.assertEqual(metadata["schema_version"], "npz-trajectory-v1")
-        self.assertEqual(len(trajectory["position_index"]), len(examples) + 1)
-        self.assertTrue(trajectory["terminal_valid"])
-        self.assertEqual(examples[0].observation.shape, (4127,))
-        self.assertEqual(examples[0].legal_mask.shape, (971,))
-        self.assertAlmostEqual(float(np.sum(examples[0].policy_target)), 1.0)
+            self.assertTrue(examples)
+            self.assertEqual(metadata["schema_version"], "npz-trajectory-v1")
+            self.assertEqual(len(trajectory["position_index"]), len(examples) + 1)
+            self.assertTrue(trajectory["terminal_valid"])
+            self.assertEqual(examples[0].observation.shape, (4127,))
+            self.assertEqual(examples[0].legal_mask.shape, (971,))
+            self.assertAlmostEqual(float(np.sum(examples[0].policy_target)), 1.0)
+            snapshot = json.loads(status_file.read_text(encoding="utf-8"))
+            self.assertEqual(snapshot["format"], "gaiazero-pipeline-telemetry-v1")
+            self.assertEqual(snapshot["schema_version"], "pipeline-telemetry-v1")
+            self.assertIn("telemetry", snapshot)
+            canonical = root / "status" / "selfplay.json"
+            events = root / "telemetry" / "events" / "selfplay.jsonl"
+            self.assertTrue(canonical.is_file())
+            self.assertTrue(events.is_file())
+            self.assertGreaterEqual(len(events.read_text(encoding="utf-8").splitlines()), 2)
 
     def test_cpp_selfplay_thread_pool_writes_one_shard_per_game(self) -> None:
         executable = Path(

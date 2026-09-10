@@ -477,10 +477,12 @@ function renderPipelineWorkerPage(section, worker) {
   const phase = workerPhase(worker);
   const metrics = workerMetrics(name, worker);
   const updated = worker?.snapshot?.updated_at;
+  const telemetryEvents = worker?.telemetry?.events || [];
+  const latestTelemetry = telemetryEvents.at(-1);
   const log = worker?.log || [];
   section.querySelector(".pipeline-worker-page").innerHTML = `
     <header class="pipeline-worker-header panel">
-      <div><p class="eyebrow">Process ${Object.keys(PIPELINE_WORKERS).indexOf(name) + 1} / 5</p><h2>${definition.label}</h2><span>${workerPhaseLabel(phase)} · PID ${worker?.pid || "--"}</span></div>
+      <div><p class="eyebrow">Process ${Object.keys(PIPELINE_WORKERS).indexOf(name) + 1} / 5</p><h2>${definition.label}</h2><span>${workerPhaseLabel(phase)} · PID ${worker?.pid || "--"} · telemetry #${latestTelemetry?.sequence || "--"} (${telemetryEvents.length} events)</span></div>
       <span class="health-badge ${pipelineStatusClass(worker?.process_status)}">${pipelineStatusLabel(worker?.process_status)}</span>
     </header>
     <div class="pipeline-worker-metrics">${metrics.map(([label, value]) => `<article class="metric-card"><span>${label}</span><strong>${value === null || value === undefined ? "--" : escapeHtml(value)}</strong><small>${updated ? `更新 ${formatTime(updated)}` : "等待进程数据"}</small></article>`).join("")}</div>

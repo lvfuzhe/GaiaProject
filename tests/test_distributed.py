@@ -21,7 +21,12 @@ from gaiazero.model import NetworkConfig, PolicyValueNetwork, save_checkpoint
 from gaiazero.npz_history import convert_npz_to_history, delete_training_history
 from gaiazero.pipeline_monitor import PipelineSupervisor, WORKER_NAMES
 from gaiazero.replay import TrainingExample
-from gaiazero.telemetry import build_local_history_index, read_local_game_trace
+from gaiazero.telemetry import (
+    build_local_history_index,
+    publish_pipeline_telemetry,
+    read_local_game_trace,
+    read_pipeline_telemetry,
+)
 
 
 class DistributedPipelineTests(unittest.TestCase):
@@ -145,6 +150,33 @@ class DistributedPipelineTests(unittest.TestCase):
             self.assertEqual(trace["steps"][0]["move"], 0)
             self.assertTrue(delete_training_history(history, "npz-test"))
             self.assertFalse(output.exists())
+
+    def test_pipeline_telemetry_has_common_envelope_and_event_stream(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            first = publish_pipeline_telemetry(
+                root,
+                "shuffle",
+                "starting",
+                metrics={"packs": 0, "queue_depth": 3},
+                pid=101,
+            )
+            second = publish_pipeline_telemetry(
+                root,
+                "shuffle",
+                "running",
+                metrics={"packs": 2, "queue_depth": 1, "examples_per_second": 12.5},
+                pid=101,
+            )
+            self.assertEqual(first["format"], "gaiazero-pipeline-telemetry-v1")
+            self.assertEqual(second["schema_version"], "pipeline-telemetry-v1")
+            self.assertEqual(second["sequence"], 2)
+            snapshot = (root / "status" / "shuffle.json").read_text(encoding="utf-8")
+            self.assertIn('"telemetry"', snapshot)
+            telemetry = read_pipeline_telemetry(root, worker="shuffle")
+            self.assertEqual(len(telemetry["events"]), 2)
+            self.assertEqual(telemetry["events"][-1]["telemetry"]["queues"]["queue_depth"], 1)
+            self.assertEqual(telemetry["events"][-1]["telemetry"]["rates"]["examples_per_second"], 12.5)
 
     def test_dashboard_supervisor_starts_and_stops_all_five_workers(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

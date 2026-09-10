@@ -638,6 +638,9 @@ class DashboardTests(unittest.TestCase):
             base = f"http://127.0.0.1:{server.server_port}"
             with urlopen(f"{base}/api/pipeline", timeout=5) as response:
                 data = json.loads(response.read())
+            self.assertIn("telemetry", data)
+            self.assertEqual(data["telemetry"]["schema_version"], "pipeline-telemetry-v1")
+            self.assertTrue(all("telemetry" in worker for worker in data["workers"].values()))
             with urlopen(base, timeout=5) as response:
                 page = response.read().decode("utf-8")
             with urlopen(f"{base}/app.js", timeout=5) as response:

@@ -96,3 +96,7 @@ root/
 
 所有跨进程产物先写临时文件，再通过同目录原子重命名发布。各阶段使用 JSON 状态文件记录
 已处理输入，因此进程重启后不会重复打包或重复评估同一候选模型。
+
+## 统一 telemetry
+
+五个 worker 使用同一 telemetry 契约（`gaiazero-pipeline-telemetry-v1`）。每个 worker 原子写入 `root/status/<worker>.json` 最新快照，并追加到 `root/telemetry/events/<worker>.jsonl`；快照中的 `metrics` 保留原始指标，`telemetry` 按 `counters`、`rates`、`queues`、`model`、`values` 分组。`PipelineSupervisor.status()` 返回总事件流及每个 worker 的最近事件，便于页面、脚本和故障恢复使用同一数据源。

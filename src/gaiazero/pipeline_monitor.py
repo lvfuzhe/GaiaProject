@@ -17,6 +17,7 @@ from gaiazero.distributed import (
     pipeline_paths,
     save_pipeline_config,
 )
+from gaiazero.telemetry import read_pipeline_telemetry
 
 
 WORKER_NAMES = ("selfplay", "shuffle", "train", "export", "gatekeeper")
@@ -266,6 +267,7 @@ class PipelineSupervisor:
             }
             return {
                 "format": PIPELINE_FORMAT,
+                "telemetry": read_pipeline_telemetry(paths["root"], limit=200),
                 "status": overall,
                 "root": str(paths["root"].resolve()),
                 "started_at": self.started_at,
@@ -303,6 +305,7 @@ class PipelineSupervisor:
             "pid": pid or snapshot.get("pid"),
             "exit_code": exit_code,
             "snapshot": snapshot,
+            "telemetry": read_pipeline_telemetry(paths["root"], worker=name, limit=40),
             "log": _tail_log(paths["logs"] / f"{name}.log"),
         }
         if name == "selfplay":

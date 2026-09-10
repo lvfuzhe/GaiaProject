@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <condition_variable>
 #include <deque>
@@ -248,28 +249,83 @@ std::string json_quote(std::string_view value) {
     return out.str();
 }
 
+std::string utc_timestamp() {
+    const auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::tm utc{};
+#ifdef _WIN32
+    gmtime_s(&utc, &now);
+#else
+    gmtime_r(&now, &utc);
+#endif
+    std::ostringstream out;
+    out << std::put_time(&utc, "%Y-%m-%dT%H:%M:%SZ");
+    return out.str();
+}
+
 void write_status(const Config& config, std::string_view phase, int games,
                   int moves, const fs::path& last_shard = {},
                   std::string_view error = {}) {
     if (config.status_file.empty()) return;
+    static std::uint64_t sequence = 0;
+    static bool sequence_initialized = false;
+    if (!sequence_initialized) {
+        std::ifstream previous(config.status_file, std::ios::binary);
+        if (previous) {
+            const std::string content(
+                (std::istreambuf_iterator<char>(previous)),
+                std::istreambuf_iterator<char>());
+            const auto marker = content.find("\"sequence\":");
+            if (marker != std::string::npos) {
+                const auto first = marker + std::strlen("\"sequence\":");
+                try {
+                    sequence = static_cast<std::uint64_t>(
+                        std::stoull(content.substr(first)));
+                } catch (const std::exception&) {
+                    sequence = 0;
+                }
+            }
+        }
+        sequence_initialized = true;
+    }
+    const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    const auto model = config.backend == "tensorrt"
+        ? config.tensorrt_engine_path.string() : config.model_path.string();
     std::ostringstream payload;
-    payload << "{\"schema_version\":\"cpp-selfplay-status-v1\",\"worker\":\"selfplay\",\"pid\":"
+    payload << "{\"format\":\"gaiazero-pipeline-telemetry-v1\",\"schema_version\":\"pipeline-telemetry-v1\",\"event\":\"worker_status\",\"worker\":\"selfplay\",\"pid\":"
             << process_id()
+            << ",\"sequence\":" << ++sequence
             << ",\"phase\":" << json_quote(phase)
             << ",\"players\":" << config.players
             << ",\"games\":" << games
             << ",\"moves\":" << moves
-            << ",\"model\":" << json_quote(
-                   config.backend == "tensorrt" ? config.tensorrt_engine_path.string() : config.model_path.string())
+            << ",\"model\":" << json_quote(model)
             << ",\"backend\":" << json_quote(config.backend)
             << ",\"leaf_batch_size\":" << config.leaf_batch_size
             << ",\"threads\":" << config.threads
             << ",\"last_shard\":" << json_quote(last_shard.empty() ? "" : last_shard.string())
             << ",\"error\":" << json_quote(error)
-            << ",\"updated_at_unix_ms\":"
-            << std::chrono::duration_cast<std::chrono::milliseconds>(
-                   std::chrono::system_clock::now().time_since_epoch()).count()
-            << '}';
+            << ",\"updated_at_unix_ms\":" << now_ms
+            << ",\"updated_at\":" << json_quote(utc_timestamp())
+            << ",\"metrics\":{\"games\":" << games
+            << ",\"moves\":" << moves << ",\"model\":" << json_quote(model)
+            << ",\"backend\":" << json_quote(config.backend)
+            << ",\"leaf_batch_size\":" << config.leaf_batch_size
+            << ",\"threads\":" << config.threads
+            << ",\"last_shard\":" << json_quote(last_shard.empty() ? "" : last_shard.string())
+            << ",\"error\":" << json_quote(error) << "}"
+            << ",\"telemetry\":{\"counters\":{\"games\":" << games
+            << ",\"moves\":" << moves << "},\"rates\":{},\"queues\":{},\"model\":{\"backend\":"
+            << json_quote(config.backend) << ",\"model\":" << json_quote(model)
+            << "},\"values\":{\"games\":" << games << ",\"moves\":" << moves
+            << ",\"players\":" << config.players
+            << ",\"model\":" << json_quote(model)
+            << ",\"backend\":" << json_quote(config.backend)
+            << ",\"leaf_batch_size\":" << config.leaf_batch_size
+            << ",\"threads\":" << config.threads
+            << ",\"last_shard\":" << json_quote(last_shard.empty() ? "" : last_shard.string())
+            << ",\"error\":" << json_quote(error) << "}}}";
+    const auto text = payload.str();
     if (!config.status_file.parent_path().empty())
         fs::create_directories(config.status_file.parent_path());
     const fs::path temporary = config.status_file.string() + ".tmp-" +
@@ -277,7 +333,6 @@ void write_status(const Config& config, std::string_view phase, int games,
     {
         std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
         if (!out) return;
-        const auto text = payload.str();
         out.write(text.data(), static_cast<std::streamsize>(text.size()));
         out.flush();
     }
@@ -294,6 +349,33 @@ void write_status(const Config& config, std::string_view phase, int games,
     fs::rename(temporary, config.status_file, ignored);
     if (ignored) fs::remove(temporary, ignored);
 #endif
+    // C++ selfplay historically accepted an arbitrary --status-file. Mirror
+    // the canonical Python worker locations while preserving that option.
+    const auto status_parent = config.status_file.parent_path();
+    const auto root = status_parent.filename() == "status"
+        ? status_parent.parent_path() : status_parent;
+    const auto canonical_status = root / "status" / "selfplay.json";
+    if (canonical_status != config.status_file) {
+        const fs::path canonical_tmp = canonical_status.string() + ".tmp-" + std::to_string(process_id());
+        fs::create_directories(canonical_status.parent_path());
+        std::ofstream canonical(canonical_tmp, std::ios::binary | std::ios::trunc);
+        if (canonical) {
+            canonical.write(text.data(), static_cast<std::streamsize>(text.size()));
+            canonical.flush();
+            canonical.close();
+#ifdef _WIN32
+            ::MoveFileExW(canonical_tmp.wstring().c_str(), canonical_status.wstring().c_str(),
+                          MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+#else
+            std::error_code ignored;
+            fs::rename(canonical_tmp, canonical_status, ignored);
+#endif
+        }
+    }
+    const auto events = root / "telemetry" / "events" / "selfplay.jsonl";
+    fs::create_directories(events.parent_path());
+    std::ofstream event_stream(events, std::ios::binary | std::ios::app);
+    if (event_stream) event_stream << text << '\n';
 }
 
 std::string action_json(const ActionTuple& action) {
