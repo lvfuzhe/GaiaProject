@@ -26,6 +26,13 @@ from gaiazero.game.gaia_setup import (
     generate_setup,
     hex_distance,
 )
+from gaiazero.vp_offset import (
+    COMPENSATION_MODE,
+    COMPENSATION_VERSION,
+    BASE_INITIAL_VP,
+    observation_scale,
+    resolve_offsets,
+)
 
 
 class Terrain(IntEnum):
@@ -533,6 +540,10 @@ class GaiaState:
     setup_seed_stream_version: str
     setup_seed_streams: tuple[tuple[str, int], ...]
     setup_hash: str
+    published_vp_offsets: tuple[int, ...]
+    vp_offset_perturbations: tuple[int, ...]
+    starting_vp_offsets: tuple[int, ...]
+    compensation_version: str
     round_number: int
     player_to_move: int
     first_player: int
@@ -618,9 +629,21 @@ class GaiaState:
         terraforming_federation_tile: int | None = None,
         map_mode: str = "bga-random",
         map_size: str | None = None,
+        starting_vp_offsets: tuple[int, ...] | None = None,
+        published_vp_offsets: tuple[int, ...] | None = None,
+        vp_offset_perturbations: tuple[int, ...] | None = None,
+        compensation_version: str = COMPENSATION_VERSION,
     ) -> GaiaState:
         if not 2 <= num_players <= 4:
             raise ValueError("GaiaState supports two to four players")
+        published_offsets, perturbations, actual_offsets = resolve_offsets(
+            num_players,
+            starting=starting_vp_offsets,
+            published=published_vp_offsets,
+            perturbation=vp_offset_perturbations,
+        )
+        if not compensation_version:
+            raise ValueError("compensation_version must not be empty")
         setup = generate_setup(
             num_players,
             seed,
@@ -651,7 +674,12 @@ class GaiaState:
         players: list[PlayerState] = []
         for player in range(num_players):
             faction_index = setup.faction_indices[player]
-            players.append(cls._base_player_state(faction_index))
+            players.append(
+                replace(
+                    cls._base_player_state(faction_index),
+                    vp=BASE_INITIAL_VP + actual_offsets[player],
+                )
+            )
 
         first = setup.first_player
         state = cls(
@@ -660,6 +688,10 @@ class GaiaState:
             setup_seed_stream_version=setup.seed_stream_version,
             setup_seed_streams=setup.seed_stream_seeds,
             setup_hash=setup.setup_hash,
+            published_vp_offsets=published_offsets,
+            vp_offset_perturbations=perturbations,
+            starting_vp_offsets=actual_offsets,
+            compensation_version=str(compensation_version),
             round_number=0,
             player_to_move=setup.placement_order[0],
             first_player=first,
@@ -781,6 +813,11 @@ class GaiaState:
             "action_schema_version": ACTION_TUPLE_SCHEMA_VERSION,
             "action_representation": "parameterized_action_tuple",
             "state_hash_version": STATE_HASH_VERSION,
+            "compensation_mode": COMPENSATION_MODE,
+            "compensation_version": self.compensation_version,
+            "published_vp_offsets": list(self.published_vp_offsets),
+            "vp_offset_perturbations": list(self.vp_offset_perturbations),
+            "starting_vp_offsets": list(self.starting_vp_offsets),
         }
 
     @property
@@ -4455,6 +4492,7 @@ class GaiaState:
                 info.knowledge / 15.0,
                 info.qic / 10.0,
                 info.vp / 150.0,
+                self.starting_vp_offsets[player] / observation_scale(self.num_players),
                 info.bowl_one / 15.0,
                 info.bowl_two / 15.0,
                 info.bowl_three / 15.0,
@@ -4799,6 +4837,11 @@ class GaiaState:
             "state_hash_version": STATE_HASH_VERSION,
             "state_hash": self.state_hash(),
             "contract": self.contract_metadata(),
+            "compensation_mode": COMPENSATION_MODE,
+            "compensation_version": self.compensation_version,
+            "published_vp_offsets": list(self.published_vp_offsets),
+            "vp_offset_perturbations": list(self.vp_offset_perturbations),
+            "starting_vp_offsets": list(self.starting_vp_offsets),
             "round": max(0, min(self.round_number, MAX_ROUNDS)),
             "max_rounds": MAX_ROUNDS,
             "phase": (
@@ -4971,7 +5014,16 @@ class GaiaState:
             "current_player": None if self.is_terminal else self.player_to_move,
             "first_player": self.first_player,
             "terminal": self.is_terminal,
+            "raw_scores": [
+                score - self.starting_vp_offsets[player]
+                for player, score in enumerate(self.final_scores())
+            ],
             "scores": list(self.final_scores()),
+            "raw_final_vp_targets": [
+                score - self.starting_vp_offsets[player]
+                for player, score in enumerate(self.final_scores())
+            ],
+            "final_vp_targets": list(self.final_scores()),
             "players": [
                 {
                     "id": player,
@@ -4984,6 +5036,7 @@ class GaiaState:
                     "knowledge": info.knowledge,
                     "qic": info.qic,
                     "vp": info.vp,
+                    "starting_vp_offset": self.starting_vp_offsets[player],
                     "power": [info.bowl_one, info.bowl_two, info.bowl_three],
                     "gaia_power": info.gaia_power,
                     "brainstone_bowl": info.brainstone_bowl,

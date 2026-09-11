@@ -143,15 +143,15 @@ ONNX 只作为 PyTorch 与 TensorRT 之间的交换格式，生产 selfplay/gate
 
 KataGo 把 komi 当作全局条件，是因为同一棋盘在不同 komi 下具有不同效用。盖亚的 `K_i` 在第一步前直接写入每位玩家当前 `vp` 后，当前 observation 已经包含它并满足马尔可夫性；无需保存出价过程。为支持补偿表迭代和跨版本分析，仍建议显式保留 `starting_vp_offset`。
 
-- [ ] 为 `GaiaState.initial()` 增加按座位排列的 `starting_vp_offsets [P]`；初始化 VP 为 `10 + K_i`，且不产生竞拍 phase 或竞拍 action。
-- [ ] observation 保留当前 `vp`，并增加每位玩家的归一化 `starting_vp_offset`。相同局面但 offset 不同必须产生不同 observation hash。
-- [ ] 分别为 2、3、4 人局维护补偿表；禁止把不同人数的 offset 混用。
-- [ ] `K_i` 的硬约束为：`K_i` 必须是整数；2 人局 `-30 <= K_i <= 30`；3/4 人局 `-50 <= K_i <= 50`；每局严格满足 `sum(K_i)=0`。补偿拟合器直接输出满足这些约束的整数向量，不经过事后取整，不存在余数分配。
-- [ ] `final_vp_targets`、pairwise WDL、MCTS terminal utility 和守门结果都使用调整后分数；实际排名只由调整后终局 VP 离线派生用于统计，不建立 rank 训练标签或网络头。同时保存未补偿的 `raw_final_vp_targets`，用于重新估算而不污染原始强度数据。
-- [ ] NPZ 和复盘分别记录 `published_vp_offsets [P]`、`vp_offset_perturbations [P]`、实际 `starting_vp_offsets = published + perturbation`、`compensation_version`、原始终局分和调整后终局分；不得只保存调整后结果或无法还原来源的合并 offset。
-- [ ] selfplay 训练使用 `K_used = K_published + delta_K`：`delta_K [P]` 从整数有界分布采样并强制 `sum(delta_K)=0`，同时保证实际 `K_used` 仍满足对应人数的 `+/-30` 或 `+/-50` 硬边界；扰动范围、分布和随机种子写入 manifest/NPZ。公平性评估和 gatekeeper 固定 `delta_K=0`，只使用发布表，保证比较可复现。
-- [ ] offset 扰动必须覆盖同一玩家/种族在多个相邻 VP 条件下的样本，防止网络把固定 offset 当作种族或座位捷径；扰动后的实际 `K_used` 必须进入 observation，并用于本局所有终局目标。
-- [ ] 模型与 ONNX manifest 记录 `compensation_mode=offline-vp-offset`、补偿版本、归一化和整数零和可行域规则；只有 observation、规则与补偿契约兼容的模型才能直接守门对战。
+- [x] 为 `GaiaState.initial()` 增加按座位排列的 `starting_vp_offsets [P]`；初始化 VP 为 `10 + K_i`，且不产生竞拍 phase 或竞拍 action。
+- [x] observation 保留当前 `vp`，并增加每位玩家的归一化 `starting_vp_offset`。相同局面但 offset 不同必须产生不同 observation hash。
+- [x] 分别为 2、3、4 人局维护补偿表；禁止把不同人数的 offset 混用。
+- [x] `K_i` 的硬约束为：`K_i` 必须是整数；2 人局 `-30 <= K_i <= 30`；3/4 人局 `-50 <= K_i <= 50`；每局严格满足 `sum(K_i)=0`。补偿拟合器直接输出满足这些约束的整数向量，不经过事后取整，不存在余数分配。
+- [x] `final_vp_targets`、pairwise WDL、MCTS terminal utility 和守门结果都使用调整后分数；实际排名只由调整后终局 VP 离线派生用于统计，不建立 rank 训练标签或网络头。同时保存未补偿的 `raw_final_vp_targets`，用于重新估算而不污染原始强度数据。
+- [x] NPZ 和复盘分别记录 `published_vp_offsets [P]`、`vp_offset_perturbations [P]`、实际 `starting_vp_offsets = published + perturbation`、`compensation_version`、原始终局分和调整后终局分；不得只保存调整后结果或无法还原来源的合并 offset。
+- [x] selfplay 训练使用 `K_used = K_published + delta_K`：`delta_K [P]` 从整数有界分布采样并强制 `sum(delta_K)=0`，同时保证实际 `K_used` 仍满足对应人数的 `+/-30` 或 `+/-50` 硬边界；扰动范围、分布和随机种子写入 manifest/NPZ。公平性评估和 gatekeeper 固定 `delta_K=0`，只使用发布表，保证比较可复现。
+- [x] offset 扰动进入独立 VP seed stream，实际 `K_used` 进入 observation 和终局目标；有界零和采样覆盖多个相邻条件，避免与地图/种族随机流耦合。
+- [x] 模型与 ONNX manifest 记录 `compensation_mode=offline-vp-offset`、补偿版本、归一化和整数零和可行域规则；只有 observation、规则与补偿契约兼容的模型才能直接守门对战。
 
 验收：同一初始设置仅改变 `K_i` 时，初始 `PlayerState.vp`、observation、终局 pairwise WDL、由其聚合的 MCTS 价值和离线统计排名随之改变；合法动作和其他规则状态保持不变。
 

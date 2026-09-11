@@ -63,6 +63,12 @@ from gaiazero.model import (
 from gaiazero.replay import ReplayBuffer, TrainingExample
 from gaiazero.selfplay import SelfPlayConfig, play_self_game
 from gaiazero.training import AlphaZeroTrainer, TrainerConfig
+from gaiazero.vp_offset import (
+    perturbation_rng,
+    sample_zero_sum_perturbation,
+    validate_offsets,
+    zero_offsets,
+)
 from gaiazero.telemetry import publish_pipeline_telemetry
 
 
@@ -100,6 +106,11 @@ class PipelineConfig:
     training_config_path: str | None = None
     training_config_hash: str | None = None
     network_config_id: str = "legacy-runtime"
+    compensation_mode: str = "offline-vp-offset"
+    compensation_version: str = "offsets-v0"
+    published_vp_offsets: tuple[int, ...] = ()
+    vp_offset_perturbation_enabled: bool = False
+    vp_offset_perturbation_max_abs: int = 4
 
     @classmethod
     def from_training_config(
@@ -151,6 +162,16 @@ class PipelineConfig:
             raise ValueError("seed_stream_version must be non-empty and may not contain '|'")
         if self.training_config_path is not None and not self.training_config_path:
             raise ValueError("training_config_path must not be empty")
+        if self.compensation_mode != "offline-vp-offset":
+            raise ValueError("compensation_mode must be offline-vp-offset")
+        if self.published_vp_offsets and len(self.published_vp_offsets) != self.players:
+            raise ValueError("published_vp_offsets must match players")
+        if self.published_vp_offsets:
+            from gaiazero.vp_offset import validate_offsets
+
+            validate_offsets(self.players, self.published_vp_offsets, name="published_vp_offsets")
+        if self.vp_offset_perturbation_max_abs < 0:
+            raise ValueError("vp_offset_perturbation_max_abs must be non-negative")
 
     def json_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -347,6 +368,35 @@ def write_npz_shard(
             raise ValueError("trajectory terminal row must not contain an action")
         if not terminal.get("state_hash") or not terminal.get("state_json"):
             raise ValueError("trajectory terminal row must contain state and state_hash")
+        initial_snapshot = trace[0].get("state")
+        if isinstance(initial_snapshot, dict):
+            if "player_count" not in metadata_payload:
+                snapshot_players = initial_snapshot.get("players")
+                if isinstance(snapshot_players, list) and snapshot_players:
+                    metadata_payload["player_count"] = len(snapshot_players)
+            metadata_payload.setdefault("compensation_mode", initial_snapshot.get("compensation_mode", "offline-vp-offset"))
+            metadata_payload.setdefault("compensation_version", initial_snapshot.get("compensation_version", "offsets-v0"))
+            for key in ("published_vp_offsets", "vp_offset_perturbations", "starting_vp_offsets"):
+                if key in initial_snapshot:
+                    metadata_payload.setdefault(key, initial_snapshot[key])
+        terminal_snapshot = terminal.get("state")
+        if isinstance(terminal_snapshot, dict):
+            if "raw_scores" in terminal_snapshot:
+                metadata_payload.setdefault("raw_final_vp_targets", terminal_snapshot["raw_scores"])
+                metadata_payload.setdefault("raw_final_vp", terminal_snapshot["raw_scores"])
+            if "scores" in terminal_snapshot:
+                metadata_payload.setdefault("final_vp_targets", terminal_snapshot["scores"])
+                metadata_payload.setdefault("final_vp", terminal_snapshot["scores"])
+        metadata_payload.setdefault("published_vp_offsets", [0] * int(metadata_payload.get("player_count", 0)))
+        metadata_payload.setdefault("vp_offset_perturbations", [0] * len(metadata_payload["published_vp_offsets"]))
+        metadata_payload.setdefault("starting_vp_offsets", [
+            int(published) + int(delta)
+            for published, delta in zip(
+                metadata_payload["published_vp_offsets"],
+                metadata_payload["vp_offset_perturbations"],
+                strict=True,
+            )
+        ])
         state_json = [str(step.get("state_json", "")) for step in trace]
         state_snapshot_json = [
             canonical_json(step.get("state") or {}) for step in trace
@@ -487,6 +537,8 @@ def write_npz_shard(
     metadata_payload.setdefault("action_representation", "parameterized_action_tuple")
     metadata_payload.setdefault("action_schema_version", ACTION_TUPLE_SCHEMA_VERSION)
     metadata_payload.setdefault("state_hash_version", STATE_HASH_VERSION)
+    metadata_payload.setdefault("compensation_mode", "offline-vp-offset")
+    metadata_payload.setdefault("compensation_version", "offsets-v0")
     fields["metadata"] = np.asarray(
         json.dumps(metadata_payload, ensure_ascii=False), dtype=np.str_
     )
@@ -594,6 +646,25 @@ def read_npz_trajectory(path: Path) -> dict[str, Any]:
             raise ValueError("trajectory action schema is incompatible")
         if metadata.get("state_hash_version") != STATE_HASH_VERSION:
             raise ValueError("trajectory state hash schema is incompatible")
+        if metadata.get("compensation_mode") == "offline-vp-offset":
+            player_count = int(metadata.get("player_count", metadata.get("players", 0)))
+            published = validate_offsets(
+                player_count,
+                metadata.get("published_vp_offsets", []),
+                name="published_vp_offsets",
+            )
+            perturbation = validate_offsets(
+                player_count,
+                metadata.get("vp_offset_perturbations", []),
+                name="vp_offset_perturbations",
+            )
+            actual = validate_offsets(
+                player_count,
+                metadata.get("starting_vp_offsets", []),
+                name="starting_vp_offsets",
+            )
+            if tuple(published[index] + perturbation[index] for index in range(player_count)) != actual:
+                raise ValueError("trajectory VP offset metadata is not published + perturbation")
         state_trace = np.asarray(values["state_trace_json"], dtype=np.str_)
         state_snapshots = np.asarray(values["state_snapshot_json"], dtype=np.str_)
         state_hashes = np.asarray(values["state_hashes"], dtype=np.str_)
@@ -745,10 +816,33 @@ def run_selfplay(config: PipelineConfig, *, once: bool = False) -> int:
                 seed=seed,
                 weight=source[0],
             )
+            published_offsets = (
+                tuple(config.published_vp_offsets)
+                if config.published_vp_offsets
+                else zero_offsets(config.players)
+            )
+            perturbations = (
+                sample_zero_sum_perturbation(
+                    config.players,
+                    perturbation_rng(seed, config.compensation_version),
+                    max_abs_per_player=config.vp_offset_perturbation_max_abs,
+                    base_offsets=published_offsets,
+                )
+                if config.vp_offset_perturbation_enabled
+                else zero_offsets(config.players)
+            )
+            starting_offsets = tuple(
+                published_offsets[index] + perturbations[index]
+                for index in range(config.players)
+            )
             initial = state_type.initial(
                 config.players,
                 seed,
                 seed_stream_version=config.seed_stream_version,
+                published_vp_offsets=published_offsets,
+                vp_offset_perturbations=perturbations,
+                starting_vp_offsets=starting_offsets,
+                compensation_version=config.compensation_version,
             )
             trace_started = time.perf_counter()
             trace_steps: list[dict[str, Any]] = [{
@@ -837,6 +931,21 @@ def run_selfplay(config: PipelineConfig, *, once: bool = False) -> int:
                     "network_config_id": config.network_config_id,
                     "training_config_path": config.training_config_path,
                     "training_config_hash": config.training_config_hash,
+                    "compensation_mode": config.compensation_mode,
+                    "compensation_version": config.compensation_version,
+                    "published_vp_offsets": list(initial.published_vp_offsets),
+                    "vp_offset_perturbations": list(initial.vp_offset_perturbations),
+                    "starting_vp_offsets": list(initial.starting_vp_offsets),
+                    "raw_final_vp": [
+                        score - initial.starting_vp_offsets[player]
+                        for player, score in enumerate(result.final_state.final_scores())
+                    ],
+                    "final_vp": list(result.final_state.final_scores()),
+                    "raw_final_vp_targets": [
+                        score - initial.starting_vp_offsets[player]
+                        for player, score in enumerate(result.final_state.final_scores())
+                    ],
+                    "final_vp_targets": list(result.final_state.final_scores()),
                     "moves": len(result.actions),
                     "weight": source[0],
                     "history_format": "gaiazero-replay-trace-v1",

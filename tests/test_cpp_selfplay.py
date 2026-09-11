@@ -77,7 +77,7 @@ class CppSelfplayTests(unittest.TestCase):
             self.assertEqual(metadata["schema_version"], "npz-trajectory-v1")
             self.assertEqual(len(trajectory["position_index"]), len(examples) + 1)
             self.assertTrue(trajectory["terminal_valid"])
-            self.assertEqual(examples[0].observation.shape, (4127,))
+            self.assertEqual(examples[0].observation.shape, (4129,))
             self.assertEqual(examples[0].legal_mask.shape, (971,))
             self.assertAlmostEqual(float(np.sum(examples[0].policy_target)), 1.0)
             snapshot = json.loads(status_file.read_text(encoding="utf-8"))

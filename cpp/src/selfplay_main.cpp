@@ -1128,6 +1128,18 @@ std::string metadata_json(const GaiaState& initial, const fs::path& model, std::
     for (int p = 0; p < initial.player_count; ++p) { if (p) out << ','; out << scores[static_cast<std::size_t>(p)]; }
     out << "],\"returns\":[";
     for (int p = 0; p < initial.player_count; ++p) { if (p) out << ','; out << returns[static_cast<std::size_t>(p)]; }
+    out << "],\"compensation_mode\":\"offline-vp-offset\",\"compensation_version\":\"" << initial.compensation_version << "\",\"published_vp_offsets\":[";
+    for (int p = 0; p < initial.player_count; ++p) { if (p) out << ','; out << initial.published_vp_offsets[static_cast<std::size_t>(p)]; }
+    out << "],\"vp_offset_perturbations\":[";
+    for (int p = 0; p < initial.player_count; ++p) { if (p) out << ','; out << initial.vp_offset_perturbations[static_cast<std::size_t>(p)]; }
+    out << "],\"starting_vp_offsets\":[";
+    for (int p = 0; p < initial.player_count; ++p) { if (p) out << ','; out << initial.starting_vp_offsets[static_cast<std::size_t>(p)]; }
+    out << "],\"raw_scores\":[";
+    for (int p = 0; p < initial.player_count; ++p) { if (p) out << ','; out << scores[static_cast<std::size_t>(p)] - initial.starting_vp_offsets[static_cast<std::size_t>(p)]; }
+    out << "],\"raw_final_vp_targets\":[";
+    for (int p = 0; p < initial.player_count; ++p) { if (p) out << ','; out << scores[static_cast<std::size_t>(p)] - initial.starting_vp_offsets[static_cast<std::size_t>(p)]; }
+    out << "],\"final_vp_targets\":[";
+    for (int p = 0; p < initial.player_count; ++p) { if (p) out << ','; out << scores[static_cast<std::size_t>(p)]; }
     out << "]}";
     return out.str();
 }
@@ -1167,8 +1179,20 @@ std::string snapshot_json(const GaiaState& state) {
         << json_quote(state.is_starting_placement() ? "starting_placement" : state.is_booster_selection() ? "booster_selection" : state.is_terminal() ? "terminal" : "round")
         << ",\"current_player\":" << (state.is_terminal() ? -1 : state.player_to_move)
         << ",\"first_player\":" << state.first_player << ",\"terminal\":" << (state.is_terminal() ? "true" : "false")
-        << ",\"scores\":[";
+        << ",\"compensation_mode\":\"offline-vp-offset\",\"compensation_version\":\"" << state.compensation_version << "\",\"published_vp_offsets\":[";
+    for (int p = 0; p < state.player_count; ++p) { if (p) out << ','; out << state.published_vp_offsets[static_cast<std::size_t>(p)]; }
+    out << "],\"vp_offset_perturbations\":[";
+    for (int p = 0; p < state.player_count; ++p) { if (p) out << ','; out << state.vp_offset_perturbations[static_cast<std::size_t>(p)]; }
+    out << "],\"starting_vp_offsets\":[";
+    for (int p = 0; p < state.player_count; ++p) { if (p) out << ','; out << state.starting_vp_offsets[static_cast<std::size_t>(p)]; }
+    out << "],\"scores\":[";
     const auto scores = state.final_scores();
+    for (int p = 0; p < state.player_count; ++p) { if (p) out << ','; out << scores[static_cast<std::size_t>(p)]; }
+    out << "],\"raw_scores\":[";
+    for (int p = 0; p < state.player_count; ++p) { if (p) out << ','; out << scores[static_cast<std::size_t>(p)] - state.starting_vp_offsets[static_cast<std::size_t>(p)]; }
+    out << "],\"raw_final_vp_targets\":[";
+    for (int p = 0; p < state.player_count; ++p) { if (p) out << ','; out << scores[static_cast<std::size_t>(p)] - state.starting_vp_offsets[static_cast<std::size_t>(p)]; }
+    out << "],\"final_vp_targets\":[";
     for (int p = 0; p < state.player_count; ++p) { if (p) out << ','; out << scores[static_cast<std::size_t>(p)]; }
     out << "],\"players\":[";
     for (int p = 0; p < state.player_count; ++p) {
@@ -1178,7 +1202,7 @@ std::string snapshot_json(const GaiaState& state) {
         out << "{\"id\":" << p << ",\"faction_id\":" << faction << ",\"faction\":"
             << json_quote(faction >= 0 && faction < static_cast<int>(faction_names.size()) ? faction_names[static_cast<std::size_t>(faction)] : "Unknown")
             << ",\"credits\":" << info.credits << ",\"ore\":" << info.ore << ",\"knowledge\":" << info.knowledge
-            << ",\"qic\":" << info.qic << ",\"vp\":" << info.vp << ",\"power\":[" << info.bowl_one << ',' << info.bowl_two << ',' << info.bowl_three
+            << ",\"qic\":" << info.qic << ",\"vp\":" << info.vp << ",\"starting_vp_offset\":" << state.starting_vp_offsets[static_cast<std::size_t>(p)] << ",\"power\":[" << info.bowl_one << ',' << info.bowl_two << ',' << info.bowl_three
             << "],\"gaia_power\":" << info.gaia_power << ",\"brainstone_bowl\":" << info.brainstone_bowl
             << ",\"tracks\":[";
         for (int track = 0; track < 6; ++track) { if (track) out << ','; out << info.tracks[static_cast<std::size_t>(track)]; }

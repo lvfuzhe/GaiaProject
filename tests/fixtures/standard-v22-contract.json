@@ -11,11 +11,16 @@
   },
   "observation": {
     "dtype": "float32",
+    "starting_vp_offset": {
+      "placement": "per_player_after_vp",
+      "normalization_by_player_count": {"2": 30, "3": 50, "4": 50},
+      "integer_zero_sum": true
+    },
     "player_order": "absolute_seat_order",
     "shape_by_player_count": {
-      "2": [4127],
-      "3": [4839],
-      "4": [5551]
+      "2": [4129],
+      "3": [4842],
+      "4": [5555]
     },
     "graph_inputs": {
       "nodes": ["float32", [1, 128, 16]],

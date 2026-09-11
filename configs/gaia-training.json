@@ -447,6 +447,18 @@
   },
   "vp_offset": {
     "mode": "offline_integer_zero_sum",
+    "compensation_mode": "offline-vp-offset",
+    "compensation_version": "offsets-v0",
+    "observation_scale_by_player_count": {
+      "2": 30,
+      "3": 50,
+      "4": 50
+    },
+    "published_tables": {
+      "2": [0, 0],
+      "3": [0, 0, 0],
+      "4": [0, 0, 0, 0]
+    },
     "training_perturbation": {
       "enabled": true,
       "distribution": "uniform_integer_zero_sum",

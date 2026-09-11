@@ -16,7 +16,7 @@ inline constexpr std::size_t kMaxActionArguments = 8;
 // Stable compatibility dimension of the standard-v22 flat observation.  The
 // graph encoder is used by the production network, while raw self-play NPZ
 // keeps this vector for the existing PyTorch shuffle/train boundary.
-inline constexpr std::size_t kObservationSize = 4127;
+inline constexpr std::size_t kObservationSize = 4129;
 inline constexpr std::size_t kActionSize = 971;
 
 // The order is a stable audit key only. Inference uses parameterized action

@@ -72,6 +72,10 @@ struct GaiaState {
     std::string setup_seed_stream_version{"setup-seed-stream-v1"};
     std::vector<std::pair<std::string, std::uint64_t>> setup_seed_streams;
     std::string setup_hash;
+    std::array<std::int32_t, kMaxPlayers> published_vp_offsets{};
+    std::array<std::int32_t, kMaxPlayers> vp_offset_perturbations{};
+    std::array<std::int32_t, kMaxPlayers> starting_vp_offsets{};
+    std::string compensation_version{"offsets-v0"};
     std::int32_t round_number{0};
     std::int32_t player_to_move{0};
     std::int32_t first_player{0};
@@ -142,6 +146,10 @@ struct GaiaState {
     std::int32_t terraforming_federation_tile{-1};
 
     static GaiaState initial(std::int32_t players = 2, std::int64_t seed = 0);
+    static GaiaState initial(
+        std::int32_t players,
+        std::int64_t seed,
+        std::array<std::int32_t, kMaxPlayers> starting_vp_offsets);
     [[nodiscard]] bool is_terminal() const noexcept;
     [[nodiscard]] bool is_starting_placement() const noexcept;
     [[nodiscard]] bool is_booster_selection() const noexcept;
@@ -150,7 +158,7 @@ struct GaiaState {
     [[nodiscard]] std::vector<float> observation() const;
     [[nodiscard]] std::size_t observation_size() const noexcept {
         return kObservationSize +
-               static_cast<std::size_t>(std::max(0, player_count - 2)) * 712U;
+               static_cast<std::size_t>(std::max(0, player_count - 2)) * 713U;
     }
     [[nodiscard]] std::size_t action_size() const noexcept { return kActionSize; }
     [[nodiscard]] std::vector<ActionTuple> legal_action_tuples() const;

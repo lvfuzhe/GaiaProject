@@ -17,6 +17,7 @@ from typing import Any, Mapping
 
 from gaiazero.contracts import ACTION_TUPLE_SCHEMA_VERSION, RULES_VERSION
 from gaiazero.game.gaia_setup import SETUP_SEED_STREAM_VERSION
+from gaiazero.vp_offset import COMPENSATION_MODE, offset_limit, validate_offsets
 
 
 CONFIG_VERSION = 2
@@ -67,6 +68,7 @@ class GaiaTrainingConfig:
         setup = _required_mapping(data, "setup_distribution")
         network = _required_mapping(data, "network")
         runtime = _required_mapping(data, "training_runtime")
+        vp_offset = _required_mapping(data, "vp_offset")
         if "pipeline" in data and not isinstance(data["pipeline"], Mapping):
             raise ValueError("gaia-training config section 'pipeline' must be an object")
         if observation.get("version") != RULES_VERSION:
@@ -86,6 +88,19 @@ class GaiaTrainingConfig:
             )
         if runtime.get("mode") != "single_gpu":
             raise ValueError("only single_gpu training_runtime is supported")
+        if vp_offset.get("compensation_mode") != COMPENSATION_MODE:
+            raise ValueError("vp_offset.compensation_mode must be offline-vp-offset")
+        tables = vp_offset.get("published_tables")
+        if not isinstance(tables, Mapping):
+            raise ValueError("vp_offset.published_tables must be an object")
+        for players in (2, 3, 4):
+            values = tables.get(str(players))
+            if not isinstance(values, list):
+                raise ValueError(f"vp_offset.published_tables missing {players}-player table")
+            validate_offsets(players, values, name=f"published_tables[{players}]")
+        scales = vp_offset.get("observation_scale_by_player_count")
+        if not isinstance(scales, Mapping) or any(float(scales.get(str(players), 0)) <= 0 for players in (2, 3, 4)):
+            raise ValueError("vp_offset.observation_scale_by_player_count must define positive 2/3/4-player scales")
         stream = _required_mapping(setup, "seed_stream")
         stream_names = stream.get("independent_streams")
         if not isinstance(stream_names, list) or not stream_names or len(set(stream_names)) != len(stream_names):
@@ -130,6 +145,14 @@ class GaiaTrainingConfig:
         """Keyword arguments shared by every ``GaiaState.initial`` call."""
 
         return {"seed_stream_version": self.seed_stream_version}
+
+    @property
+    def vp_offset_settings(self) -> dict[str, Any]:
+        return dict(self.data["vp_offset"])
+
+    def published_vp_offsets(self, players: int) -> tuple[int, ...]:
+        values = self.vp_offset_settings["published_tables"][str(int(players))]
+        return validate_offsets(int(players), values, name="published_vp_offsets")
 
     @property
     def search_settings(self) -> dict[str, Any]:
@@ -240,9 +263,13 @@ class GaiaTrainingConfig:
             "seed_stream_version": self.seed_stream_version,
             "seed_stream_names": list(self.seed_stream_names),
             "architecture_family": self.data.get("architecture_family"),
+            "compensation_mode": self.vp_offset_settings.get("compensation_mode", "offline-vp-offset"),
+            "compensation_version": self.vp_offset_settings.get("compensation_version", "offsets-v0"),
+            "vp_offset_observation_scales": dict(self.vp_offset_settings.get("observation_scale_by_player_count", {})),
         }
         if players is not None:
             payload["network"] = self.network_settings(players)
+            payload["published_vp_offsets"] = list(self.published_vp_offsets(players))
         return payload
 
     def profile(self, players: int) -> dict[str, Any]:
@@ -332,6 +359,11 @@ class GaiaTrainingConfig:
             "training_config_path": str(self.path),
             "training_config_hash": self.config_hash,
             "network_config_id": str(profile.get("network_id", self.network_id)),
+            "compensation_mode": str(self.vp_offset_settings.get("compensation_mode", "offline-vp-offset")),
+            "compensation_version": str(self.vp_offset_settings.get("compensation_version", "offsets-v0")),
+            "published_vp_offsets": self.published_vp_offsets(players),
+            "vp_offset_perturbation_enabled": bool(self.vp_offset_settings.get("training_perturbation", {}).get("enabled", False)),
+            "vp_offset_perturbation_max_abs": int(self.vp_offset_settings.get("training_perturbation", {}).get("max_abs_per_player", 4)),
         }
         if overrides:
             for key, value in overrides.items():

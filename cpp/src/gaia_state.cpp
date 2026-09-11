@@ -108,6 +108,29 @@ void append_key(std::ostringstream& out, std::string_view key) {
     out << ':';
 }
 
+int vp_offset_limit(int players) {
+    if (players == 2) return 30;
+    if (players == 3 || players == 4) return 50;
+    throw std::invalid_argument("player_count must be two to four");
+}
+
+void validate_vp_offsets(int players, const std::array<std::int32_t, kMaxPlayers>& offsets,
+                         std::string_view name) {
+    const int limit = vp_offset_limit(players);
+    int sum = 0;
+    for (int player = 0; player < players; ++player) {
+        const int value = offsets[static_cast<std::size_t>(player)];
+        if (std::abs(value) > limit)
+            throw std::invalid_argument(std::string(name) + " value outside player-count bound");
+        sum += value;
+    }
+    for (int player = players; player < kMaxPlayers; ++player) {
+        if (offsets[static_cast<std::size_t>(player)] != 0)
+            throw std::invalid_argument(std::string(name) + " contains values beyond player_count");
+    }
+    if (sum != 0) throw std::invalid_argument(std::string(name) + " must sum to zero");
+}
+
 struct FactionDefaults {
     Terrain home;
     std::array<int, 3> power;
@@ -1312,8 +1335,16 @@ void advance_after_action(GaiaState& state) {
 } // namespace
 
 GaiaState GaiaState::initial(std::int32_t players_count, std::int64_t seed) {
+    return initial(players_count, seed, {});
+}
+
+GaiaState GaiaState::initial(
+    std::int32_t players_count,
+    std::int64_t seed,
+    std::array<std::int32_t, kMaxPlayers> starting_offsets) {
     if (players_count < 2 || players_count > kMaxPlayers) throw std::invalid_argument("GaiaState supports two to four players");
     if (seed < 0) throw std::invalid_argument("setup seed must be non-negative");
+    validate_vp_offsets(players_count, starting_offsets, "starting_vp_offsets");
     const auto setup = generate_gaia_setup(players_count, seed);
     GaiaState state;
     state.player_count = players_count;
@@ -1321,6 +1352,8 @@ GaiaState GaiaState::initial(std::int32_t players_count, std::int64_t seed) {
     state.setup_seed_stream_version = setup.seed_stream_version;
     state.setup_seed_streams = setup.seed_streams;
     state.setup_hash = setup.setup_hash;
+    state.starting_vp_offsets = starting_offsets;
+    state.published_vp_offsets = starting_offsets;
     state.first_player = setup.first_player;
     state.owners.fill(-1);
     state.buildings.fill(static_cast<int>(Building::empty));
@@ -1348,6 +1381,7 @@ GaiaState GaiaState::initial(std::int32_t players_count, std::int64_t seed) {
         const auto& f = kFactions[static_cast<std::size_t>(faction)];
         p.faction = faction;
         p.credits = f.credits; p.ore = f.ore; p.knowledge = f.knowledge; p.qic = f.qic;
+        p.vp = 10 + starting_offsets[static_cast<std::size_t>(player)];
         p.bowl_one = f.power[0]; p.bowl_two = f.power[1]; p.bowl_three = f.power[2];
         if (f.brainstone) { p.brainstone_bowl = 1; ++p.bowl_one; }
         if (f.start_track >= 0) advance_research(state, player, f.start_track, false);
@@ -1464,6 +1498,8 @@ std::vector<float> GaiaState::observation() const {
         add(static_cast<float>(info.knowledge) / 15.0F);
         add(static_cast<float>(info.qic) / 10.0F);
         add(static_cast<float>(info.vp) / 150.0F);
+        const float offset_scale = player_count == 2 ? 30.0F : 50.0F;
+        add(static_cast<float>(starting_vp_offsets[static_cast<std::size_t>(p)]) / offset_scale);
         add(static_cast<float>(info.bowl_one) / 15.0F);
         add(static_cast<float>(info.bowl_two) / 15.0F);
         add(static_cast<float>(info.bowl_three) / 15.0F);
@@ -1536,6 +1572,7 @@ std::string GaiaState::canonical_json() const {
     append_key(out, "buildings"); append_array(out, buildings); out << ',';
     append_key(out, "coexisting_mine_federated"); append_array(out, coexisting_mine_federated); out << ',';
     append_key(out, "coexisting_mine_owner"); append_array(out, coexisting_mine_owner); out << ',';
+    append_key(out, "compensation_version"); append_json_string(out, compensation_version); out << ',';
     append_key(out, "federated"); append_array(out, federated); out << ',';
     append_key(out, "federation_tile_supply"); append_array(out, federation_tile_supply); out << ',';
     append_key(out, "final_scoring_tiles"); append_array(out, final_scoring_tiles); out << ',';
@@ -1578,6 +1615,7 @@ std::string GaiaState::canonical_json() const {
     append_key(out, "player_count"); out << player_count << ',';
     append_key(out, "player_to_move"); out << player_to_move << ',';
     append_key(out, "players"); out << '['; for (int i = 0; i < player_count; ++i) { if (i) out << ','; append_player(out, players[static_cast<std::size_t>(i)]); } out << "],";
+    append_key(out, "published_vp_offsets"); out << '['; for (int player = 0; player < player_count; ++player) { if (player) out << ','; out << published_vp_offsets[static_cast<std::size_t>(player)]; } out << "],";
     append_key(out, "round_number"); out << round_number << ',';
     append_key(out, "round_scoring_tiles"); append_array(out, round_scoring_tiles); out << ',';
     append_key(out, "satellite_owners"); append_array(out, satellite_owners); out << ',';
@@ -1592,10 +1630,13 @@ std::string GaiaState::canonical_json() const {
     append_key(out, "space_station_owner"); append_array(out, space_station_owner); out << ',';
     append_key(out, "standard_tech_tiles"); append_array(out, standard_tech_tiles); out << ',';
     append_key(out, "starting_planets"); out << '['; for (int player = 0; player < player_count; ++player) { if (player) out << ','; out << '['; for (int i = 0; i < starting_planet_count[static_cast<std::size_t>(player)]; ++i) { if (i) out << ','; out << starting_planets[static_cast<std::size_t>(player)][static_cast<std::size_t>(i)]; } out << ']'; } out << "],";
+    append_key(out, "starting_vp_offsets"); out << '['; for (int player = 0; player < player_count; ++player) { if (player) out << ','; out << starting_vp_offsets[static_cast<std::size_t>(player)]; } out << "],";
     append_key(out, "terraforming_federation_tile"); out << terraforming_federation_tile << ',';
     append_key(out, "terrains"); append_array(out, terrains); out << ',';
     append_key(out, "used_power_actions"); out << used_power_actions << ',';
-    append_key(out, "used_qic_actions"); out << used_qic_actions << '}';
+    append_key(out, "used_qic_actions"); out << used_qic_actions << ',';
+    append_key(out, "vp_offset_perturbations"); out << '['; for (int player = 0; player < player_count; ++player) { if (player) out << ','; out << vp_offset_perturbations[static_cast<std::size_t>(player)]; } out << ']';
+    out << '}';
     return out.str();
 }
 
